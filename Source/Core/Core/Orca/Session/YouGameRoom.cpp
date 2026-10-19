@@ -693,6 +693,8 @@ std::string RefusalCode(const std::string& connect_error)
     return "match-over";
   if (connect_error.find("(HTTP 409)") != std::string::npos)
     return "room_full";
+  if (connect_error.find("(HTTP 4") != std::string::npos)
+    return "refused";
   return "network";
 }
 
@@ -720,6 +722,8 @@ std::string RefusalReason(const std::string& connect_error)
     return "That room is full";
   if (connect_error.find("(HTTP 401)") != std::string::npos)
     return "The invite expired; press Play again";
+  if (connect_error.find("(HTTP 410)") != std::string::npos)
+    return "Your friend isn't in that game any more";
   if (connect_error.find("(HTTP 4") != std::string::npos)
     return "The room refused to let you in";
   return "Could not reach YouGame's rooms";
@@ -2487,6 +2491,8 @@ struct YouGameRoom::Impl
   std::string RoomRefusalReason(const std::string& error) const
   {
     std::string sentence = RefusalReason(error);
+    if (error.find("(HTTP 410)") != std::string::npos)
+      return sentence;
     bool queue_room;
     {
       std::lock_guard lock(mutex);

@@ -2300,6 +2300,10 @@ TEST(OrcaRoom, RefusalsSayWhy)
   EXPECT_EQ(RefusalReason("WebSocket connect failed: ... (HTTP 409)"), "That room is full");
   EXPECT_NE(RefusalReason("WebSocket connect failed: ... (HTTP 401)").find("expired"),
             std::string::npos);
+  EXPECT_EQ(RefusalReason("WebSocket connect failed: ... (HTTP 410)"),
+            "Your friend isn't in that game any more");
+  EXPECT_EQ(RefusalReason("WebSocket connect failed: ... (HTTP 404)"),
+            "The room refused to let you in");
   EXPECT_EQ(RefusalReason("WebSocket connect failed: Couldn't connect to server (HTTP 0)"),
             "Could not reach YouGame's rooms");
 }
@@ -2337,6 +2341,9 @@ TEST(OrcaRoom, RefusalsHaveAppCodes)
 {
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 403)"), "room_mismatch");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 409)"), "room_full");
+  EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 410)"), "refused");
+  EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 404)"), "refused");
+  EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 401)"), "refused");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 0)"), "network");
 }
 
@@ -2775,7 +2782,7 @@ TEST(OrcaRoomResilience, ServerCloseRefusalsRetryForTenSecondsWithoutExtendingTh
     for (size_t i = 0; i + 1 < trace.size(); ++i)
       EXPECT_NE(trace[i].state, RoomState::Ended) << i;
     EXPECT_EQ(trace.back().state, RoomState::Ended);
-    EXPECT_EQ(trace.back().error_code, "network");
+    EXPECT_EQ(trace.back().error_code, "refused");
     // A welcome inside that window keeps the session and resets only the outage.
     steps.resize(13);
     steps.push_back({RK::Message, 10000, RosterMessage("welcome")});
@@ -3297,14 +3304,37 @@ TEST_F(OrcaRoomRuntime, RealRestartRefusalBodiesRecoverAfterAServerClose)
   }
 }
 
-TEST_F(OrcaRoomRuntime, RealExpiredTicketBodyKeepsTheKnownNetworkCode)
+TEST_F(OrcaRoomRuntime, RealExpiredTicketBodyReportsRefused)
 {
   auto room = Open("expired401",
                    R"({"refuse":{"error":"Bad or expired ticket"},"refuse_status":401})");
   ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
-  EXPECT_EQ(room->ErrorCode(), "network");
+  EXPECT_EQ(room->ErrorCode(), "refused");
   EXPECT_EQ(room->Status(), "The invite expired; press Play again");
   EXPECT_EQ(Connections("expired401"), 1);
+}
+
+TEST_F(OrcaRoomRuntime, GoneFriendJoinExplainsTheRefusalInEveryRoom)
+{
+  for (const bool friends : {false, true})
+  {
+    for (const int http : {410, 403, 404})
+    {
+      const std::string code = fmt::format("refused{}{}", http, friends ? 1 : 0);
+      auto room = Open(code, fmt::format(
+          R"({{"refuse":{{"error":"Your friend isn't in that game any more","code":"host_gone"}},"refuse_status":{},"queue":"{}"}})",
+          http, friends ? "private" : "casual"), true, friends);
+      ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+      std::string sentence = http == 410 ? "Your friend isn't in that game any more" :
+          http == 403 ? RefusalReason("WebSocket connect failed: ... (HTTP 403)") :
+                        "The room refused to let you in";
+      if (!friends && http == 403)
+        sentence.replace(sentence.find("your friend"), 11, "the other player");
+      EXPECT_EQ(room->Status(), sentence);
+      EXPECT_EQ(room->ErrorCode(), http == 403 ? "room_mismatch" : "refused");
+      EXPECT_EQ(Connections(code), 1);
+    }
+  }
 }
 
 TEST_F(OrcaRoomRuntime, VersionRefusalBodiesKeepTheSiteCodeAndExplainWhichFriendMustUpdate)
