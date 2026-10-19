@@ -132,6 +132,9 @@ struct Arrival
   std::vector<u8> queue;
   bool recovering = false;
   bool doubles = false;
+  Clock::time_point arrived_at = Clock::now();
+  u64 arrived_boundary = 0;
+  int next_keyframe_notice = 15;
 };
 
 struct Match
@@ -166,6 +169,7 @@ struct Match
   // Players waiting for a keyframe, and seats the session took in (until the room says they left).
   std::map<int, Arrival> waiting;
   std::map<int, Arrival> menu_waiting;
+  u64 host_boundaries = 0;
   std::set<int> seated;
   // Seats taken in but not plugged in yet; the app hears "friend-joined" once all have.
   std::set<int> plugging;
@@ -620,6 +624,8 @@ Orca::Net::Config SessionConfig()
 void StartKeyframe(Core::System& system, Match& match, int frame,
                     std::optional<u64> final_hash = std::nullopt)
 {
+  for (auto& [seat, arrival] : match.waiting)
+    arrival.next_keyframe_notice = 0;
   const auto capture_start = Clock::now();
   auto job = std::make_unique<KeyframeJob>();
   job->frame = frame;
@@ -1326,6 +1332,7 @@ void EndQueueForFriend(Match& match, bool arrived, bool invited)
 void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test_room = nullptr,
                 std::optional<bool> test_menus = std::nullopt)
 {
+  ++match.host_boundaries;
   match.doubles = test_room ? test_room->Doubles() : Orca::Online::RoomDoubles();
   const bool on_menus = test_menus.value_or(Orca::UX::Game().Read().OnTheMenus());
   if (on_menus)
@@ -1376,7 +1383,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
       auto& arrivals = match.doubles && !on_menus && !event.recovering ?
                           match.menu_waiting : match.waiting;
       arrivals[event.seat] = {event.name, event.controls, event.queue, event.recovering,
-                              event.doubles};
+                              event.doubles, Clock::now(), match.host_boundaries};
       if (event.recovering)
       {
         if (match.doubles && match.session)
@@ -1439,6 +1446,24 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   EndQueueForFriend(match, arrived, invited);
   // Refresh the wanted header: the room's welcome may have come after this boundary's hook.
   UpdateWanted(match);
+
+  // Diagnose an arrival that never gets as far as capture, including joins held for the menus.
+  const auto now = Clock::now();
+  for (auto& [seat, arrival] : match.waiting)
+  {
+    if (match.job)
+      arrival.next_keyframe_notice = 0;
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - arrival.arrived_at);
+    if (!arrival.next_keyframe_notice || elapsed.count() < arrival.next_keyframe_notice)
+      continue;
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Drop-in: no keyframe yet {} s after {} arrived (wanted={}, header in place={}, "
+                   "running frame {}, boundaries since arrival {})",
+                   elapsed.count(), arrival.name, match.keyframe_wanted,
+                   Orca::UX::Game().Header().HeaderInPlace(), match.running,
+                   match.host_boundaries - arrival.arrived_boundary);
+    arrival.next_keyframe_notice = arrival.next_keyframe_notice == 15 ? 45 : 0;
+  }
 
   // A finished keyframe: offer it to whoever waits, and drop the solo log before it.
   if (match.job && match.job->done)
