@@ -2799,6 +2799,13 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.55
+
+- Public casual and ranked matches can ride through a dropped connection: when the server supports
+  it, YG Dolphin keeps the match, shows "Reconnecting…" with a countdown, and rejoins by itself.
+  If a player doesn't come back in time, today's rules decide the result.
+- Fixes the game window sometimes not starting on Windows 10 with the YouGame app.
+
 ### 0.3.54
 
 - Groundwork for public casual and ranked matches to ride through a dropped connection, the way
