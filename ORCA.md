@@ -2553,7 +2553,6 @@ ring every 1.2 s.
 | `orca feedback <filename>.png` | Cap `hostui`: a completed screenshot in the run's user directory, ready for the app's feedback UI. |
 | `error <sentence>` | Something failed. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Orca/Status.h`). Forward every line that starts with `orca `. |
-| `orca error refused <sentence>` | The room refused a join. Pages that don't know `refused` handle it like `network`. |
 | `orca menu ...`, `orca result ...`, `orca queue ...` | See [Online menu](#online-menu) and [Matchmaking](#matchmaking-and-results). |
 | `orca controls <hex>` | The player's own controls: changed in the game, or loaded from Orca's file at boot. The page keeps them. |
 | `orca active <interval_s> <active_s> <inputs> <mode> <pads>` | How much the player played: every 60 s while the game runs, and once more when it stops ([Activity lines](#activity-lines)). |
@@ -2803,7 +2802,6 @@ What each release changed for players, in plain words.
 ### 0.3.56
 
 - Returning to a public match after the reconnect time runs out now says why you couldn't rejoin.
-- Joining a friend who has left now says that your friend isn't in that game any more.
 - On a Mac, YG Dolphin inside the YouGame app is much lighter on macOS's window system and never takes
   keyboard focus from the app. This follows a Mac that froze when a game started in full screen.
 

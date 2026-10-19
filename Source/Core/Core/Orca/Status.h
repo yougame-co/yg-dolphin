@@ -27,15 +27,14 @@
 //     "k":"win" every 15 s of running time, "k":"auto" when the run switched its graphics to
 //     Performance; embedded only, each line at most 300 bytes (Orca/Perf.h)
 // Error codes: boot, low_memory, cancelled, disc_missing, disc_unreadable, disc_revision, profile,
-// settings, room_mismatch, room_full, refused, kicked, network, peer_left, desync, signed_out (the
-// keyframe store refused a signed-out player's game; the host says "friend-left signed_out"),
-// internal, gpu_lost (the graphics device was lost and the run stops: Orca/GpuLost.h). Only the first error is
+// settings, room_mismatch, room_full, kicked, network, peer_left, desync, signed_out (the keyframe store
+// refused a signed-out player's game; the host says "friend-left signed_out"), internal, gpu_lost
+// (the graphics device was lost and the run stops: Orca/GpuLost.h). Only the first error is
 // printed, since it explains the exit. Outside a session nothing is printed.
-// The page's ROOM_ERRORS on both supported web branches understands:
+// Room failures must use a code in the page's ROOM_ERRORS on both supported web branches:
 // room_mismatch, mismatch, room_full, kicked, network, peer_left, desync, host_gone, signed_out.
-// Refused joins use refused; pages that don't know it handle it like network.
 // Internal room reasons (e.g. taken and match-over) are mapped or reported as state events;
-// see ORCA.md's stdout table for the wire error codes.
+// never add a wire error code for a more specific room sentence.
 namespace Orca::Status
 {
 void State(std::string_view state);
