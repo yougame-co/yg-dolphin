@@ -2364,6 +2364,25 @@ struct YouGameRoom::Impl
   void PollReconnect()
   {
     const auto now = Now();
+    // A removed public room can refuse the upgrade after our hold ran out. Handle the
+    // completed refusal before the ordinary expiry path loses that distinction.
+    if (QueueRecovery() && reconnect_job && reconnect_job->done && !reconnect_job->socket &&
+        (reconnect_job->error.find("(HTTP 404)") != std::string::npos ||
+         reconnect_job->error.find("(HTTP 410)") != std::string::npos))
+    {
+      bool expired;
+      {
+        std::lock_guard lock(mutex);
+        expired = set_done || set_over ||
+                  (public_self_hold_until && !PublicHoldAliveLocked(public_self_hold_until, now));
+      }
+      if (expired)
+      {
+        OnSocketClose(CLOSE_MATCH_OVER, reconnect_job->error);
+        reconnect_job.reset();
+        return;
+      }
+    }
     if (QueueRecovery() && reconnect_job && reconnect_job->done && reconnect_job->socket)
     {
       std::lock_guard lock(mutex);

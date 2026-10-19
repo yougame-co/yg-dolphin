@@ -358,6 +358,92 @@ TEST(OrcaRoomRecovery, RefusedPublicRejoinEndsWithNetworkSentence)
   }
 }
 
+TEST(OrcaRoomRecovery, MissingPublicRoomAfterOwnHoldUsesRejoinRefusalEnding)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const int http : {404, 410})
+    {
+      for (const bool reachable : {false, true})
+      {
+        for (const bool expired : {false, true})
+        {
+          SCOPED_TRACE(fmt::format("{} HTTP {} reachable={} expired={}", queue, http, reachable, expired));
+          const int deadline = reachable ? 101000 : 91000;
+          std::vector<RoomTestStep> steps{
+              {RK::Message, 0, QueueRoster("welcome", queue)}, {RK::SocketClose, 1000}};
+          if (reachable)
+            steps.push_back({RK::SocketConnected, 2000});
+          steps.push_back({RK::ConnectFailure, deadline - (expired ? 0 : 1),
+                           fmt::format("WebSocket connect failed: upgrade refused (HTTP {})", http)});
+          steps.push_back({RK::PollReconnect, deadline + 1000});
+          const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+          for (size_t i = trace.size() - 2; i < trace.size(); ++i)
+          {
+            EXPECT_EQ(trace[i].state, RoomState::Ended);
+            EXPECT_EQ(trace[i].error_code, "network");
+            EXPECT_EQ(trace[i].status, expired ?
+                "You couldn't rejoin the match (the time to reconnect ran out)." :
+                "Lost the connection to the match. Press Play to look for a new one.");
+            EXPECT_FALSE(trace[i].reconnecting);
+            EXPECT_FALSE(trace[i].reconnect_at);
+            EXPECT_EQ(trace[i].reconnect_attempts, 0u);
+            EXPECT_FALSE(trace[i].public_deadline);
+            EXPECT_TRUE(trace[i].results.empty());
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(OrcaRoomRecovery, MissingRoomPreservesLegacyAndFriendsEndings)
+{
+  for (const char* queue : {"casual", "ranked", "private"})
+  {
+    for (const int http : {404, 410})
+    {
+      auto options = QueueTraceOptions();
+      options.friends_room = std::string(queue) == "private";
+      const auto trace = TraceRoomForTest(options, {
+          {RK::Message, 0, QueueRoster("welcome", queue, "false")},
+          {RK::SocketClose, 1000},
+          {RK::ConnectFailure, 92000,
+           fmt::format("WebSocket connect failed: upgrade refused (HTTP {})", http)},
+      });
+      EXPECT_EQ(trace.back().state, RoomState::Ended);
+      EXPECT_EQ(trace.back().error_code, "network");
+      EXPECT_EQ(trace.back().status, options.friends_room ?
+          "Lost the connection to the room (hold-expired)" : trace[1].status);
+      EXPECT_NE(trace.back().status,
+                "You couldn't rejoin the match (the time to reconnect ran out).");
+    }
+  }
+}
+
+TEST(OrcaRoomRecovery, AuthoritativeVerdictWinsOverMissingPublicRoom)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const int http : {404, 410})
+    {
+      const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+          {RK::Message, 0, QueueRoster("welcome", queue)}, {RK::SocketClose, 1000},
+          {RK::Message, 2000, R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"],"reason":"The server ended this match."})"},
+          {RK::ConnectFailure, 2001,
+           fmt::format("WebSocket connect failed: upgrade refused (HTTP {})", http)},
+      });
+      ASSERT_EQ(trace[2].results.size(), 1u);
+      EXPECT_NE(trace[2].results[0].find("won"), std::string::npos);
+      EXPECT_EQ(trace.back().state, RoomState::Ended);
+      EXPECT_EQ(trace.back().error_code, "match-over");
+      EXPECT_EQ(trace.back().status, "The server ended this match.");
+      EXPECT_FALSE(trace.back().reconnecting);
+      EXPECT_TRUE(trace.back().results.empty());
+    }
+  }
+}
+
 TEST(OrcaRoomRecovery, ServerVerdictsEndPublicHoldsWithoutLocalForfeits)
 {
   for (const char* queue : {"casual", "ranked"})
