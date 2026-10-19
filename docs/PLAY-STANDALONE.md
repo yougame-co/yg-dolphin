@@ -201,15 +201,8 @@ even with two identical packs. It offers no results, locks or queue2 capabilitie
 submit rated games. Its compatibility identity also differs from ordinary pack sessions.
 Signed community packs with `mod.sig` must still open through YouGame.
 
-For existing 0.3.58 users: `ORCA_MOD_DIR` already loads unsigned **format-1 tree bundles** in
-release builds without YouGame. That older developer path is not an offline-only switch: with
-YouGame's online services, matching pack compatibility identities can meet, and a supported
-builtin can offer `results`, `locks`, `queue2` and the Casual/Ranked pick capabilities once its
-checks pass. A results-only builtin offers only `results`, and requires `rankedRules`; a pack
-without a builtin offers none of those game capabilities. Normal engine capabilities, including
-`join`, `host` and `direct`, still exist. Format-2 flat bundles through that older path require
-signing and YouGame. Use `--pack`
-when you want the explicit offline-only behavior.
+Only run local packs you trust. A local pack runs outside the YouGame app's sandbox, like any
+mod you load into a plain emulator.
 
 ## Limits and bug reports
 
