@@ -3870,6 +3870,86 @@ TEST(OrcaUXYgOrb, LinesStayAsLongAsThePagesTheNewestThree)
   EXPECT_EQ(lines.back().at, 4004);
 }
 
+TEST(OrcaUXYgOrb, HostControlHitTestsFollowBothDiscsAtEveryScale)
+{
+  using namespace Orca::UX::YgOrb;
+  for (const float k : {0.5f, 1.0f, 2.0f, 3.0f})
+  {
+    SCOPED_TRACE(k);
+    const Place p{32, 24, 40 * k};
+    const auto hit = [&](float x, float y, bool menu = false) {
+      return ControlAt(p, menu, p.x + x * k, p.y + y * k);
+    };
+    EXPECT_EQ(hit(20, 20), 0);
+    EXPECT_EQ(hit(0, 20), 0);
+    EXPECT_EQ(hit(40, 20), 0);
+    EXPECT_EQ(hit(44, 20), -1);  // The eight-unit gap belongs to neither control.
+    EXPECT_EQ(hit(68, 20), 1);
+    EXPECT_EQ(hit(48, 20), 1);
+    EXPECT_EQ(hit(88, 20), 1);
+    EXPECT_EQ(hit(68, 0), 1);
+    EXPECT_EQ(hit(68, 40), 1);
+    EXPECT_EQ(hit(68, -0.1f), -1);
+    EXPECT_EQ(hit(88.1f, 20), -1);
+    for (const float x : {48.0f, 88.0f})
+      for (const float y : {0.0f, 40.0f})
+        EXPECT_EQ(hit(x, y), -1);  // Old square corners now pass through.
+    EXPECT_EQ(hit(1, 1), -1);
+    EXPECT_EQ(hit(20, 44, true), -1);
+    EXPECT_EQ(hit(20, 48), -1);
+    EXPECT_EQ(hit(20, 48, true), 2);
+    EXPECT_EQ(hit(20, 80, true), 3);
+    EXPECT_EQ(hit(20, 48 + HOST_ROWS * 32, true), -1);
+  }
+  EXPECT_EQ(ControlAt({}, true, 0, 0), -1);
+}
+
+TEST(OrcaUXYgOrb, NativeHoverAndPressBelongToOnlyTheirOriginalControl)
+{
+  using namespace Orca::UX::YgOrb;
+  Model m;
+  m.Apply(*ParseOrb("orb 16 16 40 0 0 0"), 0);
+  m.Apply(*ParseOrb("orb blink"), 100);
+  const auto before = m.At(450);
+  m.SetPointer(1, false);
+  auto v = m.At(450);
+  EXPECT_TRUE(v.feedback.hovered);
+  EXPECT_FALSE(v.feedback.pressed);
+  EXPECT_FALSE(v.orb.hovered);
+  EXPECT_FALSE(v.orb.pressed);
+  EXPECT_EQ(v.place.lit, before.place.lit);
+  EXPECT_EQ(v.ring, before.ring);
+  EXPECT_EQ(v.listening, before.listening);
+  m.SetPointer(1, true);
+  EXPECT_TRUE(m.At(450).feedback.pressed);
+  EXPECT_FALSE(m.At(450).orb.pressed);
+  m.SetPointer(0, true);  // Dragging a held delta press cannot press the orb.
+  EXPECT_TRUE(m.At(450).orb.hovered);
+  EXPECT_FALSE(m.At(450).orb.pressed);
+  EXPECT_FALSE(m.At(450).feedback.pressed);
+  m.SetPointer(0, false);
+  m.SetPointer(0, true);
+  EXPECT_TRUE(m.At(450).orb.pressed);
+  EXPECT_FALSE(m.At(450).feedback.hovered);
+  EXPECT_FALSE(m.At(450).feedback.pressed);
+  m.SetPointer(1, true);
+  EXPECT_FALSE(m.At(450).feedback.pressed);
+  m.SetPointer(-1, false);
+  m.SetPointer(-1, true);
+  m.SetPointer(1, true);  // A press begun in the game cannot press either control.
+  EXPECT_FALSE(m.At(450).feedback.pressed);
+  m.SetPointer(1, false);
+  m.SetTalk({Talk::Phase::Listen, "Ada", "Listening"}, 3000);
+  const auto listening = m.At(3300);
+  ASSERT_TRUE(listening.listening);
+  m.SetPointer(1, true);
+  EXPECT_EQ(m.At(3300).ring, listening.ring);
+  EXPECT_TRUE(m.At(3300).listening);
+  m.Apply({}, 3400);
+  EXPECT_FALSE(m.At(3400).feedback.hovered);
+  EXPECT_FALSE(m.At(3400).feedback.pressed);
+}
+
 TEST(OrcaUXYgOrb, TheButtonShowsBlinksAndTakesPressesOnItsDisc)
 {
   using namespace Orca::UX::YgOrb;
@@ -4671,6 +4751,136 @@ TEST_F(OrcaUXHostUI, AgreementEnablesTheNativeMenuAndHostActions)
   EXPECT_EQ(m_lines->Take(), "");  // Native shortcut consumes its whole press.
   EXPECT_EQ(Pad(PAD_BUTTON_B), PAD_BUTTON_B);
   EXPECT_FALSE(Menu().At().open);
+}
+
+TEST_F(OrcaUXHostUI, NativeDeltaDoesNotLightBlinkOrOpenTheOrb)
+{
+  using namespace YgOrb;
+  Orca::Status::SetAppCaps("yougame talk hostui");
+  ASSERT_TRUE(HostEnabled());
+  Current().Apply(*ParseOrb("orb 16 16 40 1 0 0"), NowMs());
+  UpdateControlsPointer(84, 36, false);
+  auto view = HostView(NowMs());
+  EXPECT_TRUE(view.feedback.hovered);
+  EXPECT_FALSE(view.orb.hovered);
+  EXPECT_FALSE(view.orb.pressed);
+  EXPECT_FALSE(view.place.lit);  // A stale DOM hover cannot light the native orb.
+  EXPECT_LT(view.ring, 0);
+  UpdateControlsPointer(84, 36, true);
+  EXPECT_TRUE(HostView(NowMs()).feedback.pressed);
+  // Rejecting the capture still exercises feedback routing without a renderer or a window.
+  ScreenshotRequests().SetRenderer(nullptr);
+  Menu().FeedbackFinished(NowMs() - 5001);
+  EXPECT_TRUE(ClickControls(84, 36));
+  EXPECT_FALSE(Menu().At().open);
+  EXPECT_FALSE(Menu().FeedbackDue(NowMs()));  // Delta reached the feedback request/cooldown.
+  EXPECT_EQ(m_lines->Take(), "");
+  UpdateControlsPointer(84, 36, false);
+  UpdateControlsPointer(36, 36, false);
+  view = HostView(NowMs());
+  EXPECT_TRUE(view.orb.hovered);
+  EXPECT_TRUE(view.place.lit);
+  EXPECT_FALSE(view.feedback.hovered);
+  EXPECT_FALSE(view.feedback.pressed);
+  UpdateControlsPointer(36, 36, true);
+  EXPECT_TRUE(HostView(NowMs()).orb.pressed);
+  Menu().FeedbackFinished(NowMs() - 5001);
+  EXPECT_TRUE(ClickControls(36, 36));
+  EXPECT_TRUE(Menu().At().open);
+  EXPECT_TRUE(Menu().FeedbackDue(NowMs()));  // Orb clicks leave feedback ready.
+  Menu().FeedbackFinished(NowMs() - 5001);
+  EXPECT_EQ(m_lines->Take(), "");
+  UpdateControlsPointer(36, 36, false);
+  // A delta click also leaves an already-open orb menu untouched.
+  EXPECT_TRUE(ClickControls(84, 36));
+  EXPECT_TRUE(Menu().At().open);
+  EXPECT_FALSE(Menu().FeedbackDue(NowMs()));
+  EXPECT_TRUE(ClickControls(36, 36));
+  EXPECT_FALSE(Menu().At().open);
+  EXPECT_FALSE(HitControls(64, 16));
+  EXPECT_FALSE(HitControls(60, 36));
+  Orca::Status::SetAppCaps("talk");
+  UpdateControlsPointer(84, 36, true);
+  EXPECT_FALSE(Current().At(NowMs()).feedback.pressed);
+  Menu().FeedbackFinished(-5000);
+}
+
+TEST_F(OrcaUXHostUI, DeltaDrawsARedDiscAndWhiteOutlineWithIndependentAlphaAndPressScale)
+{
+  using namespace YgOrb;
+  Orca::Status::SetAppCaps("yougame hostui");
+  // Inspect the real ImGui mesh at normal and Retina sizes; no native window is created.
+  for (const float k : {1.0f, 2.0f})
+  {
+    Current().Apply({Command::Type::Place, {16, 16, 40 * k, true, false, 0}}, NowMs());
+    for (const int target : {-1, 0, 1})
+    {
+      for (const bool down : {false, true})
+      {
+        Current().SetPointer(-1, false);
+        Current().SetPointer(target, down);
+        ASSERT_GT(HostVertices(), 0);
+        const int expected_alpha = target == 1 ? 255 : 153;
+        const float scale = target == 1 && down ? 0.94f : 1.0f;
+        const ImVec2 centre(16 + 68 * k, 16 + 20 * k);
+        int red = 0, white = 0;
+        float left = centre.x, right = centre.x;
+        for (const ImDrawList* list : ImGui::GetDrawData()->CmdLists)
+        {
+          for (const ImDrawVert& v : list->VtxBuffer)
+          {
+            if ((v.col >> IM_COL32_A_SHIFT) == 0)
+              continue;  // The anti-aliased fringe.
+            const ImU32 rgb = v.col & ~IM_COL32_A_MASK;
+            EXPECT_TRUE(rgb == (IM_COL32(255, 0, 0, 0)) ||
+                        rgb == (IM_COL32_WHITE & ~IM_COL32_A_MASK));
+            EXPECT_EQ(static_cast<int>(v.col >> IM_COL32_A_SHIFT), expected_alpha);
+            if (rgb == IM_COL32(255, 0, 0, 0))
+            {
+              ++red;
+              left = std::min(left, v.pos.x);
+              right = std::max(right, v.pos.x);
+            }
+            else
+            {
+              ++white;
+              EXPECT_LE(std::abs(v.pos.x - centre.x), 11.0f * k * scale);
+              EXPECT_LE(std::abs(v.pos.y - centre.y), 11.0f * k * scale);
+            }
+          }
+        }
+        EXPECT_GT(red, 0);
+        EXPECT_GT(white, 0);
+        EXPECT_NEAR(left, centre.x - 20 * k * scale, 1.0f);
+        EXPECT_NEAR(right, centre.x + 20 * k * scale, 1.0f);
+        const auto white_at = [](ImVec2 point) {
+          const auto cross = [](ImVec2 a, ImVec2 b, ImVec2 c) {
+            return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+          };
+          for (const ImDrawList* list : ImGui::GetDrawData()->CmdLists)
+          {
+            for (int i = 0; i + 2 < list->IdxBuffer.Size; i += 3)
+            {
+              const auto& a = list->VtxBuffer[list->IdxBuffer[i]];
+              const auto& b = list->VtxBuffer[list->IdxBuffer[i + 1]];
+              const auto& c = list->VtxBuffer[list->IdxBuffer[i + 2]];
+              if ((a.col & ~IM_COL32_A_MASK) != (IM_COL32_WHITE & ~IM_COL32_A_MASK) ||
+                  std::abs(cross(a.pos, b.pos, c.pos)) < 0.0001f)
+                continue;
+              const float ab = cross(a.pos, b.pos, point), bc = cross(b.pos, c.pos, point),
+                          ca = cross(c.pos, a.pos, point);
+              if ((ab >= 0 && bc >= 0 && ca >= 0) || (ab <= 0 && bc <= 0 && ca <= 0))
+                return true;
+            }
+          }
+          return false;
+        };
+        EXPECT_FALSE(white_at(centre));  // Hollow triangle, not a filled glyph.
+        EXPECT_TRUE(white_at(ImVec2(centre.x, centre.y - 8.4f * k * scale)));
+        EXPECT_TRUE(white_at(ImVec2(centre.x, centre.y + 7.6f * k * scale)));
+      }
+    }
+  }
 }
 
 TEST_F(OrcaUXHostUI, LaterCapsReplaceTheAgreementIncludingDuringAShortcutPress)

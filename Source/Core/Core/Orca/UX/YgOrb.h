@@ -56,6 +56,12 @@ struct Place
   int badge = 0;
 };
 
+struct ControlState
+{
+  bool hovered = false;
+  bool pressed = false;
+};
+
 struct Command
 {
   enum class Type
@@ -157,6 +163,8 @@ public:
     bool showing = false;
     // View width in device pixels from the last `rect`, or 0.
     float view_width = 0;
+    ControlState orb;
+    ControlState feedback;
   };
 
   void Apply(const Command& command, double now_ms);
@@ -173,6 +181,9 @@ public:
   std::uint64_t TalkRow(std::uint64_t generation, TalkEntry* out) const;
   // Whether (x, y), in view pixels, is on the button's disc.
   bool Hit(float x, float y) const;
+  // Native pointer target: 0 orb, 1 feedback, 2+ menu rows, -1 outside. A held press
+  // belongs to the control where it started, even when the pointer moves to its neighbour.
+  void SetPointer(int control, bool down);
 
 private:
   mutable std::mutex m_lock;
@@ -185,6 +196,9 @@ private:
   std::uint64_t m_talk_generation = 0;
   double m_listen_at = 0;  // when the mic opened: the pulse runs on through the live words
   int m_view_width = 0;
+  int m_hovered = -1;
+  int m_pressed = -1;
+  bool m_pointer_down = false;
 };
 
 // Host controls require agreed cap "hostui" and never write a pad or guest memory.
@@ -235,6 +249,9 @@ bool HostEnabled();
 HostMenu& Menu();
 // The app's placement, or a visible default with agreed hostui before its first orb line.
 Model::View HostView(double now_ms);
+// Circular controls and menu rows, in the placement's device pixels.
+int ControlAt(const Place& place, bool menu_open, float x, float y);
+void UpdateControlsPointer(float x, float y, bool down);
 // View pixels, matching the platform's input coordinates. Includes the feedback button and menu.
 bool HitControls(float x, float y);
 bool ClickControls(float x, float y);

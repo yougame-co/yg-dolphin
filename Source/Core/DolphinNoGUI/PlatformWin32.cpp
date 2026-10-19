@@ -401,6 +401,13 @@ void PlatformWin32::UpdateEmbedFocus()
 
 void PlatformWin32::ProcessEvents()
 {
+  POINT point;
+  const bool down = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
+  if (GetCursorPos(&point) && WindowFromPoint(point) == m_hwnd && ScreenToClient(m_hwnd, &point))
+    Orca::UX::YgOrb::UpdateControlsPointer(static_cast<float>(point.x), static_cast<float>(point.y),
+                                           down);
+  else
+    Orca::UX::YgOrb::UpdateControlsPointer(-1, -1, down);
   MSG msg;
   while (PeekMessage(&msg, m_hwnd, 0, 0, PM_REMOVE))
   {
@@ -535,9 +542,17 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
   // decides whether to give the game focus. A left click on the YouGame button Orca draws
   // (UX/YgOrb.h) is reported as "orca orb". No CS_DBLCLKS, so a double click arrives as two
   // presses.
+  case WM_LBUTTONUP:
+    Orca::UX::YgOrb::UpdateControlsPointer(static_cast<float>(GET_X_LPARAM(lParam)),
+                                           static_cast<float>(GET_Y_LPARAM(lParam)), false);
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+
   case WM_LBUTTONDOWN:
   case WM_RBUTTONDOWN:
   case WM_MBUTTONDOWN:
+    if (msg == WM_LBUTTONDOWN)
+      Orca::UX::YgOrb::UpdateControlsPointer(static_cast<float>(GET_X_LPARAM(lParam)),
+                                             static_cast<float>(GET_Y_LPARAM(lParam)), true);
     if (msg == WM_LBUTTONDOWN &&
         Orca::UX::YgOrb::ClickControls(static_cast<float>(GET_X_LPARAM(lParam)),
                                       static_cast<float>(GET_Y_LPARAM(lParam))))

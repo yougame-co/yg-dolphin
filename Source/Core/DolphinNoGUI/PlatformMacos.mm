@@ -670,23 +670,25 @@ void PlatformMacOS::ProcessEvents()
 {
   @autoreleasepool
   {
-    // Intercept only our host buttons; the rest of an embedded view keeps passing through.
-    if (IsEmbedded())
+    // Track each native control separately. The union below only controls event passthrough.
     {
       NSView* view = [m_window contentView];
       const NSPoint point = [view convertPoint:[m_window mouseLocationOutsideOfEventStream]
                                       fromView:nil];
       const NSPoint pixel = [view convertPointToBacking:point];
       const NSRect bounds = [view convertRectToBacking:[view bounds]];
+      Orca::UX::YgOrb::UpdateControlsPointer(pixel.x, bounds.size.height - pixel.y,
+                                             ([NSEvent pressedMouseButtons] & 1) != 0);
       const bool hit = Orca::UX::YgOrb::HitControls(pixel.x, bounds.size.height - pixel.y);
-      if (hit != m_embed_controls_hit)
+      if (IsEmbedded() && hit != m_embed_controls_hit)
       {
         m_embed_controls_hit = hit;
         [m_window setIgnoresMouseEvents:!hit];
       }
     }
     // The game renders on its own thread; this loop only follows the host window.
-    NSDate* expiration = [NSDate dateWithTimeIntervalSinceNow:IsEmbedded() ? 1.0 / 60 : 1];
+    NSDate* expiration = [NSDate
+        dateWithTimeIntervalSinceNow:IsEmbedded() || Orca::UX::YgOrb::HostEnabled() ? 1.0 / 60 : 1];
     NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
                                         untilDate:expiration
                                            inMode:NSDefaultRunLoopMode
@@ -696,13 +698,16 @@ void PlatformMacOS::ProcessEvents()
     if (event && [event window] == m_window)
     {
       namespace Orb = Orca::UX::YgOrb;
-      if ([event type] == NSEventTypeLeftMouseDown)
+      if ([event type] == NSEventTypeLeftMouseDown || [event type] == NSEventTypeLeftMouseUp)
       {
         NSView* view = [m_window contentView];
         const NSPoint point = [view convertPoint:[event locationInWindow] fromView:nil];
         const NSPoint pixel = [view convertPointToBacking:point];
         const NSRect bounds = [view convertRectToBacking:[view bounds]];
-        handled = Orb::ClickControls(pixel.x, bounds.size.height - pixel.y);
+        const bool down = [event type] == NSEventTypeLeftMouseDown;
+        Orb::UpdateControlsPointer(pixel.x, bounds.size.height - pixel.y, down);
+        handled = down ? Orb::ClickControls(pixel.x, bounds.size.height - pixel.y) :
+                         Orb::HitControls(pixel.x, bounds.size.height - pixel.y);
       }
       // The embedded app owns keyboard focus and relays feedback / host-menu on stdin.
       else if (!IsEmbedded() && [event type] == NSEventTypeKeyDown && ![event isARepeat])

@@ -240,6 +240,8 @@ void Model::Apply(const Command& command, double now_ms)
     // The lines hide with the button.
     m_on = false;
     m_blink_at = -1;
+    m_hovered = m_pressed = -1;
+    m_pointer_down = false;
     if (!m_lines.empty())
     {
       m_lines.clear();
@@ -294,6 +296,8 @@ Model::View Model::At(double now_ms) const
   View v;
   v.on = m_on;
   v.place = m_place;
+  v.orb = {m_hovered == 0, m_hovered == 0 && m_pressed == 0};
+  v.feedback = {m_hovered == 1, m_hovered == 1 && m_pressed == 1};
   if (m_on && m_blink_at >= 0)
   {
     const double age = now_ms - m_blink_at;
@@ -347,6 +351,17 @@ bool Model::Hit(float x, float y) const
   const float r = m_place.size / 2;
   const float dx = x - (m_place.x + r), dy = y - (m_place.y + r);
   return dx * dx + dy * dy <= r * r;
+}
+
+void Model::SetPointer(int control, bool down)
+{
+  std::lock_guard lock(m_lock);
+  m_hovered = control;
+  if (down && !m_pointer_down)
+    m_pressed = control;
+  else if (!down)
+    m_pressed = -1;
+  m_pointer_down = down;
 }
 
 Model& Current()
@@ -523,45 +538,58 @@ HostMenu& Menu()
 Model::View HostView(double now_ms)
 {
   Model::View view = Current().At(now_ms);
-  if (HostEnabled() && !view.on)
+  if (HostEnabled())
   {
-    view.on = true;
-    view.place = {16, 16, 40, true, false, 0};
+    if (!view.on)
+    {
+      view.on = true;
+      view.place = {16, 16, 40, false, false, 0};
+    }
+    // The page's lit bit includes DOM hover, which can be stale while the native window
+    // intercepts either control. Hostui owns pointer feedback; notices and pulses still light
+    // the orb independently of the feedback button.
+    view.place.lit =
+        view.orb.hovered || view.orb.pressed || Menu().At().open || view.ring >= 0 || view.showing;
   }
   return view;
 }
 
-namespace
-{
 // Input hit boxes use view pixels; drawing applies the same Retina scale as the orb.
-int ControlAt(float x, float y)
+int ControlAt(const Place& p, bool menu_open, float x, float y)
 {
-  const Place p = HostView(NowMs()).place;
   if (p.size <= 0)
     return -1;
   const float k = p.size / 40;
-  if (x >= p.x + 48 * k && x < p.x + 88 * k && y >= p.y && y < p.y + p.size)
+  const float fx = x - (p.x + 68 * k), fy = y - (p.y + p.size / 2);
+  if (fx * fx + fy * fy <= p.size * p.size / 4)
     return 1;  // feedback
-  const HostMenu::View menu = Menu().At();
   const float top = p.y + 48 * k;
-  if (menu.open && x >= p.x && x < p.x + 240 * k && y >= top &&
-      y < top + HOST_ROWS * 32 * k)
+  if (menu_open && x >= p.x && x < p.x + 240 * k && y >= top && y < top + HOST_ROWS * 32 * k)
     return 2 + static_cast<int>((y - top) / (32 * k));
   const float dx = x - p.x - p.size / 2, dy = y - p.y - p.size / 2;
   return dx * dx + dy * dy <= p.size * p.size / 4 ? 0 : -1;
 }
-}  // namespace
+
+void UpdateControlsPointer(float x, float y, bool down)
+{
+  if (!HostEnabled())
+  {
+    Current().SetPointer(-1, false);
+    return;
+  }
+  Current().SetPointer(ControlAt(HostView(NowMs()).place, Menu().At().open, x, y), down);
+}
 
 bool HitControls(float x, float y)
 {
-  return HostEnabled() && ControlAt(x, y) >= 0;
+  return HostEnabled() && ControlAt(HostView(NowMs()).place, Menu().At().open, x, y) >= 0;
 }
 
 bool ClickControls(float x, float y)
 {
   if (!HostEnabled())
     return false;
-  const int hit = ControlAt(x, y);
+  const int hit = ControlAt(HostView(NowMs()).place, Menu().At().open, x, y);
   if (hit == 0)
     Menu().Toggle();
   else if (hit == 1)
