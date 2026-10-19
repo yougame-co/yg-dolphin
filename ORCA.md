@@ -2799,6 +2799,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.56
+
+- On a Mac, YG Dolphin inside the YouGame app is much lighter on macOS's window system and never takes
+  keyboard focus from the app. This follows a Mac that froze when a game started in full screen.
+
 ### 0.3.55
 
 - Public casual and ranked matches can ride through a dropped connection: when the server supports
