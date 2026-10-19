@@ -530,3 +530,67 @@ the artifact directory (with a local `Tools` symlink for the wrapper), so genera
 Final `git diff --check`: PASS. All requested gates pass; no local work remains
 blocked. One local commit only; no version change, dependency install, external
 service request, push, PR, release, signing or deployment.
+
+
+## inputhold-0355: pending input recovery on rejoin
+
+Required pre-edit checks:
+
+```text
+dc068dddcd Refresh public recovery state on rejoin
+BASE-OK
+```
+
+`git merge-base --is-ancestor dc068dddcd HEAD` passed on `recovery-0355`;
+the starting worktree was clean. Changes are confined to `YouGameRoom.cpp`, its
+test trace snapshot in `YouGameRoom.h`, `RoomTest.cpp`, and this appended record.
+
+This supersedes the preceding section's cancellation of a present peer's input
+hold. A present, non-away peer on self rejoin clears stale presence state but
+retains pending input recovery. An expired or missing peer deadline is restored
+to receipt-time now plus the local 90 seconds; public/input deadlines and host
+mirrors are reconciled under the mutex. A live retained deadline is preserved.
+Input silence first observed while self is offline is remembered for rejoin.
+The caller keeps its original continuous-stall timestamp. Contiguous input
+receipt clears pending recovery and the host countdown; authoritative verdicts
+and real departures still release it. Friends and non-opted public policy is
+unchanged.
+
+Fake-clock coverage includes peer away/input stall at t=0, self loss at t=85,
+missed peer back at t=86, and present-peer WELCOME at t=111, with valid and
+missing self `hold_ms`, using the original t=0 silence timestamp. It also covers
+a still-live retained deadline, a missing deadline for a stall observed offline,
+server verdict/departure, and the same sequence without recovery opt-in. The
+existing public-WELCOME runtime case now keeps one real session across rejoin,
+uses a silence timestamp older than 90 seconds, waits past its local timeout,
+and resumes on contiguous inputs, checking recovery/countdown release.
+
+Validation artifacts and exact commands: `build-recovery/inputhold-0355/`.
+The gate driver checks uptime every 60 seconds and waits until one-minute load
+is below 16 before each command, including a second check after acquiring the
+shared build lock; load waits are capped at 45 minutes. Each heavy command uses
+`flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10`, with
+`CCACHE_DIR=/Volumes/YGWorktrees/ccache`, two build workers and one test process.
+Gameplay commands reuse the preceding run's private delayed-selection input
+controls and the checked-in events. They run two headless/Null peers at a time,
+with isolated users, ORCA_NO_LOCAL_INPUT=1 and all six SDL disabling variables.
+Only the supplied read-only Brawl path is used, without copying it.
+
+Validation is **BLOCKED / NOT RUN** on this attempt. The driver exhausted its
+45-minute load-wait allowance before submitting the build: 46 recorded
+one-minute load checks ranged from 22.08 to 49.62, all above
+the required <16 start threshold. The final check was 32.68. No build
+lock job was submitted; the runner exited and no owned build/test/fixture process
+remains. See `build-recovery/inputhold-0355/gates.log`.
+
+Counts for this attempt: **0 unit tests and 0 gameplay fixtures run**. The
+`tests` + `dolphin-nogui` build, both touched translation units' `-Werror` checks,
+focused recovery/resilience/public-WELCOME/SetEnd tests, full test binary, fixture
+self-test, and casual/legacy/ranked/crossed gameplay runs all remain outstanding.
+The existing binaries have not been rebuilt for this change. Earlier PASS records
+in this note belong to the preceding commits and do not validate this change.
+
+Final source whitespace check: PASS. The requested single private local commit
+records the implementation and regression coverage with validation explicitly
+incomplete. No dependency install, external-service request, push, PR, release,
+signing or deployment was performed.

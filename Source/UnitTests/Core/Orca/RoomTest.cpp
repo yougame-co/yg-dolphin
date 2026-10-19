@@ -764,7 +764,7 @@ TEST(OrcaRoomRecovery, PeerAwayMissedDuringSelfDropGetsAnIndependentFallback)
   EXPECT_EQ(trace.back().error_code, "match-over");
 }
 
-TEST(OrcaRoomRecovery, SelfReconnectUsesOwnHoldAndRosterCancelsMissedPeerBack)
+TEST(OrcaRoomRecovery, SelfReconnectUsesOwnHoldAndRosterClearsOnlyPeerPresence)
 {
   const auto trace = TraceRoomForTest(QueueTraceOptions(), {
       {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
@@ -777,11 +777,106 @@ TEST(OrcaRoomRecovery, SelfReconnectUsesOwnHoldAndRosterCancelsMissedPeerBack)
   ASSERT_TRUE(trace[4].public_deadline);
   EXPECT_EQ(*trace[4].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::seconds(175));
   EXPECT_FALSE(trace[5].reconnecting);
-  EXPECT_FALSE(trace[5].public_deadline);
+  EXPECT_EQ(trace[5].public_deadline,
+            std::chrono::steady_clock::time_point{} + std::chrono::seconds(200));
   EXPECT_FALSE(trace[5].host_away_until);
-  EXPECT_FALSE(trace[5].session_recovering);
+  EXPECT_TRUE(trace[5].session_recovering);
   EXPECT_EQ(trace.back().state, RoomState::Waiting);
   EXPECT_TRUE(trace.back().results.empty());
+}
+
+TEST(OrcaRoomRecovery, PresentPeerRejoinKeepsTheOriginalInputStall)
+{
+  for (const bool self_remaining : {false, true})
+  {
+    for (const int rejoin : {89000, 111000})
+    {
+      SCOPED_TRACE(fmt::format("self remaining: {}, rejoin: {}", self_remaining, rejoin));
+      const auto welcome = QueueRoster("welcome", "ranked");
+      std::vector<RoomTestStep> steps{
+          {RK::Message, 0, welcome}, {RK::Message, 0, PeerHello()},
+          {RK::Message, 0, WithHold(QueueRoster("away", "ranked"), "90000")},
+          {RK::InputSilence, 0, "", 0}, {RK::SocketClose, 85000},
+          // Peer returns at t=86 while self is offline; WELCOME sees it present before inputs.
+          {RK::Message, rejoin, self_remaining ? WithHold(welcome, "64000") : welcome},
+          {RK::InputSilence, rejoin + 1, "", 0}, {RK::Tick, rejoin + 3},
+      };
+      const auto pending = TraceRoomForTest(QueueTraceOptions(), steps);
+      const auto deadline = std::chrono::steady_clock::time_point{} +
+          std::chrono::milliseconds(rejoin < 90000 ? 90000 : rejoin + 90000);
+      for (size_t i = 5; i < pending.size(); ++i)
+      {
+        EXPECT_EQ(pending[i].state, RoomState::Waiting);
+        EXPECT_EQ(pending[i].public_deadline, deadline);
+        EXPECT_FALSE(pending[i].host_away_until);
+        EXPECT_TRUE(pending[i].session_recovering);
+        EXPECT_TRUE(pending[i].events.empty());
+      }
+      ASSERT_TRUE(pending[6].input_held.has_value());
+      EXPECT_TRUE(*pending[6].input_held);  // Original silence timestamp, not rejoin time.
+      for (const bool verdict : {false, true})
+      {
+        auto ended = steps;
+        ended.push_back({RK::Message, rejoin + 5000, verdict ?
+            R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"],"disposition":"forfeit"})" :
+            RosterMessage("leave", true, false)});
+        ended.push_back({RK::InputSilence, rejoin + 5001, "", 0});
+        const auto trace = TraceRoomForTest(QueueTraceOptions(), ended);
+        ASSERT_TRUE(trace.back().input_held.has_value());
+        EXPECT_FALSE(*trace.back().input_held);
+        EXPECT_FALSE(trace.back().session_recovering);
+        if (verdict)
+        {
+          EXPECT_EQ(trace.back().state, RoomState::Ended);
+          EXPECT_EQ(trace.back().error_code, "match-over");
+          ASSERT_EQ(trace[8].results.size(), 1u);
+        }
+        else
+        {
+          ASSERT_EQ(trace[8].events.size(), 1u);
+          EXPECT_EQ(trace[8].events[0].kind, PeerEvent::Kind::Left);
+        }
+      }
+    }
+  }
+}
+
+TEST(OrcaRoomRecovery, RejoinRestoresAnInputHoldFirstObservedOffline)
+{
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+      {RK::SocketClose, 85000}, {RK::InputSilence, 110000, "", 0},
+      {RK::Message, 111000, QueueRoster("welcome", "ranked")},
+      {RK::InputSilence, 111001, "", 0}, {RK::Tick, 111003},
+  });
+  EXPECT_EQ(trace[4].public_deadline,
+            std::chrono::steady_clock::time_point{} + std::chrono::seconds(201));
+  ASSERT_TRUE(trace[5].input_held.has_value());
+  EXPECT_TRUE(*trace[5].input_held);
+  EXPECT_TRUE(trace.back().session_recovering);
+  EXPECT_EQ(trace.back().state, RoomState::Waiting);
+}
+
+TEST(OrcaRoomRecovery, PresentPeerRejoinWithoutOptInKeepsLegacyEnding)
+{
+  for (const bool self_remaining : {false, true})
+  {
+    const auto welcome = QueueRoster("welcome", "ranked", "false");
+    const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+        {RK::Message, 0, welcome}, {RK::Message, 0, PeerHello()},
+        {RK::Message, 0, QueueRoster("away", "ranked", "false")},
+        {RK::InputSilence, 0, "", 0}, {RK::SocketClose, 85000},
+        {RK::Message, 111000, self_remaining ? WithHold(welcome, "64000") : welcome},
+        {RK::InputSilence, 111001, "", 0},
+    });
+    EXPECT_EQ(trace[4].state, RoomState::Ended);
+    EXPECT_FALSE(trace[4].reconnect_started);
+    EXPECT_EQ(trace.back().state, RoomState::Ended);
+    ASSERT_TRUE(trace.back().input_held.has_value());
+    EXPECT_FALSE(*trace.back().input_held);
+    EXPECT_FALSE(trace.back().public_deadline);
+    EXPECT_FALSE(trace.back().session_recovering);
+  }
 }
 
 TEST(OrcaRoomRecovery, PeerAwayAfterRejoinUpdatesOnlyThatPeersHold)
@@ -3906,8 +4001,20 @@ TEST_F(OrcaRoomRuntime, PublicWelcomeOptInSharesInputHoldsAndRejoinsTheSocket)
     ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; })) << room->Status();
     ASSERT_TRUE(room->RoomRecovery());
     room->TakePeerEvents();
+    RoomHashGame game;
+    Session session(RoomSessionConfig(), game, *room);
+    int completed = -1;
+    ASSERT_TRUE(Wait([&] {
+      const auto step = session.OnBoundary(completed, Pad{});
+      if (step.kind == StepKind::Run)
+        completed = game.Run();
+      return step.kind == StepKind::Stall;
+    }));
     const auto now = RoomClock::now();
-    EXPECT_TRUE(room->HoldInputSilence(now, now));
+    const auto since = now - 111s;
+    Action(code, fmt::format(R"({{"message":{}}})", QueueRoster("away", queue.c_str())));
+    ASSERT_TRUE(Wait([&] { return room->RoomRecovering(RoomClock::now()); }));
+    EXPECT_TRUE(room->HoldInputSilence(since, now));
     EXPECT_TRUE(room->RoomRecovering(now));
     u32 before;
     room->RoundTripMs(&before);
@@ -3920,11 +4027,30 @@ TEST_F(OrcaRoomRuntime, PublicWelcomeOptInSharesInputHoldsAndRejoinsTheSocket)
     EXPECT_EQ(room->GetState(), RoomState::Waiting);
     EXPECT_EQ(room->Code(), code);
     EXPECT_TRUE(room->ErrorCode().empty());
-    EXPECT_FALSE(room->RoomRecovering(RoomClock::now()));
-    EXPECT_FALSE(room->HostAwayDeadline());
+    EXPECT_TRUE(room->RoomRecovering(RoomClock::now()));
+    EXPECT_TRUE(room->HostAwayDeadline());
     const auto rejoined = RoomClock::now();
-    EXPECT_TRUE(room->HoldInputSilence(rejoined, rejoined));
+    EXPECT_TRUE(room->HoldInputSilence(since, rejoined));
     EXPECT_TRUE(room->RoomRecovering(rejoined));
+    std::thread restore([&] {
+      std::this_thread::sleep_for(50ms);
+      Action(code, InjectPacket(NeutralFrames(0, 40)));
+    });
+    bool gave_up = false;
+    int holds = 0;
+    const auto step = Rollback::StepSession(session, game, completed, [] { return Pad{}; },
+        [&] { return room->HostLeftPending() || RoomClock::now() > rejoined + 3s; },
+        1ms, 1ms, &gave_up, nullptr, [&](RoomClock::time_point poll) {
+          ++holds;
+          return room->HoldInputSilence(since, poll);
+        });
+    restore.join();
+    EXPECT_EQ(step.kind, StepKind::Run) << session.Error();
+    EXPECT_FALSE(gave_up);
+    EXPECT_GT(holds, 0);
+    EXPECT_TRUE(session.Error().empty());
+    EXPECT_TRUE(Wait([&] { return !room->RoomRecovering(RoomClock::now()); }));
+    EXPECT_FALSE(room->HostAwayDeadline());
     EXPECT_FALSE(Sent(code, "leave"));
     EXPECT_FALSE(Sent(code, "msg", "bye"));
     const auto messages = Request("/state/" + code).get("messages");

@@ -467,6 +467,7 @@ struct RoomTestSnapshot
   std::vector<std::string> results;
   std::optional<std::chrono::steady_clock::time_point> public_deadline;
   bool session_recovering = false;
+  std::optional<bool> input_held;
 };
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                              const std::vector<RoomTestStep>& steps);

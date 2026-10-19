@@ -2130,8 +2130,14 @@ struct YouGameRoom::Impl
         std::lock_guard lock(mutex);
         std::erase_if(public_peer_holds, [&](const auto& hold) {
           const auto peer = peers.find(hold.first);
-          return !input_holds.contains(hold.first) &&
-                 (peer == peers.end() || !peer->second.presence.away_since);
+          const bool recovered = !input_holds.contains(hold.first) &&
+                                 (peer == peers.end() || !peer->second.presence.away_since);
+          if (recovered && hold.first == host)
+          {
+            host_away_until.reset();
+            host_hold_until.reset();
+          }
+          return recovered;
         });
         if (state != RoomState::Ended)
           deadline = WaitingDeadlineLocked();
@@ -4554,12 +4560,24 @@ struct YouGameRoom::Impl
           if (QueueRecovery())
           {
             std::lock_guard lock(mutex);
-            public_peer_holds.erase(p->first);
-            input_holds.erase(p->first);
+            // Presence returning does not mean the stalled session's buffered inputs arrived.
+            const auto input = input_holds.find(p->first);
+            if (present && input != input_holds.end() && !set_done && !set_over)
+            {
+              auto [hold, inserted] = public_peer_holds.try_emplace(p->first, input->second);
+              if (Now() >= hold->second)
+                hold->second = Now() + ROOM_HOLD;
+              input->second = hold->second;
+            }
+            else
+            {
+              public_peer_holds.erase(p->first);
+              input_holds.erase(p->first);
+            }
             if (p->first == host)
             {
               host_away_until.reset();
-              host_hold_until.reset();
+              host_hold_until = PeerDeadlineLocked(p->first);
             }
             peer.presence.away_since.reset();
             peer.presence.suspended = false;
@@ -5174,6 +5192,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
   {
     room.test_now = Clock::time_point{} + std::chrono::milliseconds(step.milliseconds);
     bool reconnect_started = false;
+    std::optional<bool> input_held;
     switch (step.kind)
     {
     case RoomTestStep::Kind::Message:
@@ -5192,8 +5211,8 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
       break;
     }
     case RoomTestStep::Kind::InputSilence:
-      owner.HoldInputSilence(Clock::time_point{} + std::chrono::milliseconds(step.close_code),
-                             *room.test_now);
+      input_held = owner.HoldInputSilence(
+          Clock::time_point{} + std::chrono::milliseconds(step.close_code), *room.test_now);
       break;
     case RoomTestStep::Kind::SocketConnected:
       room.public_socket_reachable = true;
@@ -5246,7 +5265,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                      room.reconnect.next_attempt, std::exchange(room.test_notices, {}), room.status,
                      room.error_code, room.RoomRecovery(), room.known_games,
                      std::exchange(room.test_results, {}), room.WaitingDeadlineLocked(),
-                     owner.RoomRecovering(*room.test_now)});
+                     owner.RoomRecovering(*room.test_now), input_held});
     room.inbox_from.clear();
   }
   return trace;
@@ -5353,8 +5372,11 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
       {
         if (!m_impl->PublicHoldAliveLocked(m_impl->public_self_hold_until, now))
           return false;
+        // Remember a stall first observed offline so WELCOME can retain its input recovery.
+        m_impl->input_holds.try_emplace(id, since + ROOM_HOLD);
         continue;
       }
+      // An active peer recovery can outlive the caller's original continuous-stall timestamp.
       if (!m_impl->public_peer_holds.contains(id) && now >= since + ROOM_HOLD)
         return false;
       const auto [hold, inserted] = m_impl->public_peer_holds.try_emplace(id, since + ROOM_HOLD);
