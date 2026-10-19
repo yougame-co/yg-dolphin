@@ -194,6 +194,7 @@ private:
   bool m_embed_placed = false;
   bool m_embed_on_screen = false;   // Ordered in, over the parent.
   bool m_embed_controls_hit = false;
+  bool m_left_down = false;  // From this window's left mouse down/up events.
   Embed::Mac::QueryTimer m_parent_query{Embed::Mac::PARENT_QUERY_INTERVAL};
   Embed::Mac::QueryTimer m_above_query{Embed::Mac::ABOVE_QUERY_INTERVAL};
   bool m_parent_exists = false;
@@ -671,14 +672,16 @@ void PlatformMacOS::ProcessEvents()
   @autoreleasepool
   {
     // Track each native control separately. The union below only controls event passthrough.
+    // The press state comes from this window's own mouse events (m_left_down), not
+    // +[NSEvent pressedMouseButtons]: that asks WindowServer on every pass (0.3.56's budget).
+    if (IsEmbedded() || Orca::UX::YgOrb::HostEnabled())
     {
       NSView* view = [m_window contentView];
       const NSPoint point = [view convertPoint:[m_window mouseLocationOutsideOfEventStream]
                                       fromView:nil];
       const NSPoint pixel = [view convertPointToBacking:point];
       const NSRect bounds = [view convertRectToBacking:[view bounds]];
-      Orca::UX::YgOrb::UpdateControlsPointer(pixel.x, bounds.size.height - pixel.y,
-                                             ([NSEvent pressedMouseButtons] & 1) != 0);
+      Orca::UX::YgOrb::UpdateControlsPointer(pixel.x, bounds.size.height - pixel.y, m_left_down);
       const bool hit = Orca::UX::YgOrb::HitControls(pixel.x, bounds.size.height - pixel.y);
       if (IsEmbedded() && hit != m_embed_controls_hit)
       {
@@ -705,6 +708,7 @@ void PlatformMacOS::ProcessEvents()
         const NSPoint pixel = [view convertPointToBacking:point];
         const NSRect bounds = [view convertRectToBacking:[view bounds]];
         const bool down = [event type] == NSEventTypeLeftMouseDown;
+        m_left_down = down;
         Orb::UpdateControlsPointer(pixel.x, bounds.size.height - pixel.y, down);
         handled = down ? Orb::ClickControls(pixel.x, bounds.size.height - pixel.y) :
                          Orb::HitControls(pixel.x, bounds.size.height - pixel.y);
