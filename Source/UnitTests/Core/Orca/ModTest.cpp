@@ -2305,6 +2305,7 @@ TEST(OrcaMod, ResultsOnlyAdmitsRankedWithoutRulesetGates)
   };
   run("muMenuMain", 40);
   run("scSelctCharacter", 2);
+  const int fight_start = frame;
   run("scMelee", 2);
   run("scVsResult", 2);
   for (u32 address = free_begin; address < free_end; ++address)
@@ -2312,12 +2313,14 @@ TEST(OrcaMod, ResultsOnlyAdmitsRankedWithoutRulesetGates)
   EXPECT_FALSE(module.Header().TakeMismatch());
   EXPECT_TRUE(module.Header().HeaderInPlace());
   // The results come from the vanilla result info, not from the header's (empty) ranked set.
-  auto results = module.Results().Confirm(frame, -1);
+  std::vector<int> starts;
+  auto results = module.Results().Confirm(frame, -1, &starts);
   ASSERT_EQ(results.size(), 1u);
   EXPECT_EQ(results[0].kind, Orca::UX::GameResult::Kind::Win);
   EXPECT_EQ(results[0].winner_port, 0);
   EXPECT_TRUE(results[0].why.empty());
-  EXPECT_EQ(results[0].start, -1);
+  EXPECT_EQ(results[0].start, fight_start);
+  EXPECT_EQ(starts, std::vector<int>{fight_start});
 
   // rankedRules reaches the reader from mod.json: the same match under items Medium is not rated.
   Bundle rules_bundle =
