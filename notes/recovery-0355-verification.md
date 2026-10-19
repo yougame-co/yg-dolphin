@@ -323,3 +323,116 @@ WELCOME's self remainder and still-away roster; `crossed-events.json` schedules
 independent socket losses and a delayed peer away announcement after WELCOME.
 
 Validation and final gates are recorded below after completion.
+
+## fix-0355: ranked receipt reconciliation
+
+Final acknowledgement removes the final and retained starts for that match only.
+Unacknowledged game entries retain their original bytes and match identity and
+continue retrying after the final. A retained authoritative ranked final waits
+for those receipts before emitting its final score. The result panel accepts the
+server outcome immediately and shows "Score pending" while receipts reconcile.
+Late game receipts use the existing match/game dedupe, preserve game numbers,
+and cannot send another finish after an authoritative final. A replayed start
+cannot reset a pending final's tally. A settled set releases transport holds while
+its receipt reconciliation finishes, then performs any deferred terminal ending.
+
+Two fake-clock regressions cover a missing earlier receipt, later game plus final,
+resend after final/start replay, unrelated/duplicate receipts, exact final tally,
+and reconciliation when a final crosses a room hold and set-over. The gameplay
+fixture's `--expect-ranked-reconciliation` withholds the first ranked game receipt
+until the final has been delivered, serves the recorded receipt on the next report
+retry, and checks exactly two game results plus one complete final on each peer.
+`ranked-receipt-input.txt` uses the existing ranked stage/menu controls and repeated
+walk-offs to produce two real game reports.
+
+The first focused run passed 62/63 tests and exposed an existing runtime assertion:
+a self rejoin must preserve a still-valid silent-input hold. The WELCOME cleanup
+was corrected to retain it; an expired presence hold can retain an independent
+input fallback after a missed peer back. The corrected build passes for both
+`tests` and `dolphin-nogui`; both touched C++ translation units pass
+`-Werror -fsyntax-only`, and the focused rerun passes **63/63, zero failures**.
+The seven new fake-clock regressions and both public-WELCOME runtime cases are
+included. Evidence: `build-recovery/fix-0355/{build,werror,focused}.log` and
+`focused.xml`; the original failure is retained in
+`focused-before-input-retention.{log,xml}`. Lock/load history is retained in
+`build-recovery/fix-0355-gates.log` and `fix-0355-gates-retry.log`.
+
+The initial ranked-expiry gameplay run exposed an unsettled-game ordering: a
+local game report was submitted while the opponent's socket was absent, then
+the server forfeited the set without an agreed game verdict. The authoritative
+outcome must appear immediately while that game remains retryable. The panel
+now shows the server outcome/rating with "Score pending" and emits no incomplete
+final score; receipt reconciliation still publishes the complete final exactly
+once. A pure panel regression covers pending and completed scores (including
+zero wins) for both ordinary and forfeit verdicts. The forfeit verifier requires
+that actual server outcome in the UX log, continued identical game-report retries,
+and no falsely completed final score when the game's receipt is still unsettled.
+The initial attempt is retained at `ranked-before-pending-score{.log,/}`.
+The final gate rerun includes all touched UI translation units with `-Werror`.
+
+### Final source and gameplay gates
+
+Final build `tests` + `dolphin-nogui`: PASS. Final strict syntax checks: PASS for
+all four touched C++ translation units (`YouGameRoom.cpp`, `SetEnd.cpp`,
+`RoomTest.cpp`, `SetEndTest.cpp`), with no diagnostics. The existing duplicate
+library/deployment-target linker warnings remain as previously documented.
+Final focused recovery/resilience/public-WELCOME/result-panel suite: **87/87 PASS**.
+The post-final input-silence regression uses a fresh timestamp to verify that a
+settled set cannot restart a transport hold while receipts reconcile. Its test
+binary was rebuilt, warning-checked, and rerun: **87/87 PASS (0.943 s)**.
+Evidence: `build-recovery/fix-0355/{build,werror,focused}.log`,
+`tests-refresh-{build,werror,focused}.log`, and the adjacent focused XML files.
+Fixture self-test: PASS on final Python source.
+
+All five existing gameplay runs and both new runs pass on the final engine:
+
+| Run | Result / retained evidence in `build-recovery/fix-0355/` |
+| --- | --- |
+| `casual` | PASS: 16-second outage, same-seat return, confirmed hashes through frame 11,580; zero desyncs. |
+| `legacy` | PASS: expected legacy network sentence without recovery; 33 matching pre-ending samples through frame 5,160; zero desyncs. |
+| `ranked` | PASS: 96-second outage, absent player's network expiry, authoritative forfeit displayed with score pending while an unsettled game report continues retrying; 99 matching samples through frame 9,120; zero desyncs. |
+| `outbox` | PASS: two lost receipt broadcasts, identical report replay, original seat, exactly one result per peer; 51 matching samples through frame 6,480; zero desyncs. |
+| `deadline` | PASS: 3-second authoritative hold and verdict two seconds after it; 99 matching samples through frame 9,120; zero desyncs. |
+| `crossed` | PASS: self returns after 85.987 seconds with only 4,012 ms on its WELCOME, while the away peer still has 83,950 ms. Delayed peer away refresh and authoritative forfeit accepted without early departure; 99 matching samples through frame 9,120; zero desyncs. |
+| `ranked-receipt` | PASS: the earlier game receipt follows the later game and final; exactly two game results and one complete final per peer, scores `[2,0]` / `[0,2]`; 329 matching samples through frame 22,920; zero desyncs. |
+
+Each row has its named `.log`, retained peer logs/stdout and `diagnostics.json`.
+The two new gameplay fixtures each ran once. Fake-clock cases cover the exact
+0/85/89-second orderings; the gameplay crossed ordering includes normal reconnect
+backoff. The returning player's 4,012 ms never becomes the peer's hold deadline.
+
+Reproduce the new runs with the common headless loopback command and authorized
+disc documented above, room `recovery355`, scratch `build-recovery`, and controls
+under `Tools/orca/fixtures/recovery-0355/`:
+
+- Crossed: `--queue ranked --seconds 330 --input <controls>/ranked-input.txt
+  --events <controls>/crossed-events.json --hold-ms 90000 --verdict-delay 2
+  --expect-queue-ending forfeit --expect-crossed-holds`.
+- Lost ranked receipt: `--queue ranked --seconds 330
+  --input <controls>/ranked-receipt-input.txt --expect-ranked-reconciliation`.
+
+Exact commands, load readings and exit statuses are retained by
+`build-recovery/fix-0355-gates.py`, `fix-0355-gates-final.log`, and
+`fix-0355-refresh-tests.{py,log}`. Every heavy command is wrapped separately in
+the shared flock with nice 10 and the requested CCACHE_DIR. Build workers are six;
+syntax checks are sequential and each test suite uses one process. Load is checked
+before each job, with 60-second waits above 20 until below 18. All Dolphin runs use
+two headless/Null peers, isolated users, ORCA_NO_LOCAL_INPUT=1 and the six SDL
+variables. Only the supplied read-only disc path is used, without copying it.
+
+Full final binary: **PASS, 2,280 tests, 2,257 passed, 23 existing
+optional skips, zero failures/errors (608.794 s)**. Evidence:
+`build-recovery/fix-0355/tests.log` and `tests.xml`. The existing loopback wrapper
+supplies a minimal environment without live-service or disc-test opt-ins.
+
+```text
+CCACHE_DIR=/Volumes/YGWorktrees/ccache flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 Tools/orca/room-fix-tests.py build-recovery/Binaries/Tests/tests --gtest_brief=1 --gtest_output=xml:build-recovery/fix-0355/tests.xml
+```
+
+`fix-0355-gates-final.log` ends with `ALL GATES PASS`; the separate refreshed-test
+driver ends with `TEST REFRESH PASS`. Final diff whitespace check: PASS.
+Generated `imgui.ini` is retained as `build-recovery/fix-0355/imgui-tests.ini`.
+All requested local gates pass. The rooms team owns alignment with the updated
+per-player contract above, and the release team owns release-kit/shipping work.
+No local gate remains blocked. Local commits only; no version change, dependency
+install, external-service request, push, release, signing or deployment.

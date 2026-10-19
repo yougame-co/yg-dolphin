@@ -1146,7 +1146,7 @@ struct YouGameRoom::Impl
   void ReconcilePublicHold(const picojson::object& message, const std::string& peer = {})
   {
     std::lock_guard lock(mutex);
-    if (!QueueRecoveryLocked())
+    if (!QueueRecoveryLocked() || set_done || set_over)
       return;
     const auto ms = Int(message, "hold_ms", 0, std::numeric_limits<int>::max());
     if (peer.empty())
@@ -1306,6 +1306,9 @@ struct YouGameRoom::Impl
     std::optional<Clock::time_point> retry;
   };
   std::vector<PendingReport> report_outbox;
+  // A final acknowledges only itself. Its score waits for all submitted game receipts.
+  std::optional<picojson::object> pending_ranked_final;
+  bool pending_ranked_final_held = false;
 
   // Direct links to the other Orcas, unless ORCA_DIRECT=0. The pointer never changes after
   // construction; the link thread starts with the welcome.
@@ -3257,7 +3260,15 @@ struct YouGameRoom::Impl
   void AckMatchReport(const std::string& match, const std::string& id)
   {
     std::erase_if(report_outbox, [&](const PendingReport& entry) {
-      return entry.match == match && (id == "$final" || entry.id == id);
+      return entry.match == match &&
+             (entry.id == id || (id == "$final" && entry.id.starts_with("start:")));
+    });
+  }
+
+  bool MissingGameReceipts(const std::string& match) const
+  {
+    return std::ranges::any_of(report_outbox, [&](const PendingReport& entry) {
+      return entry.match == match && entry.id != "$final" && !entry.id.starts_with("start:");
     });
   }
 
@@ -3617,7 +3628,11 @@ struct YouGameRoom::Impl
       current_match = match_id;
     }
     const std::string id = Str(m, "id"), match = Str(m, "matchId");
-    if (current_match.empty() || match != current_match || id.size() > 64 ||
+    const bool pending = pending_ranked_final && Str(*pending_ranked_final, "matchId") == match &&
+        std::ranges::any_of(report_outbox, [&](const PendingReport& entry) {
+          return entry.match == match && entry.id == id;
+        });
+    if ((!pending && (current_match.empty() || match != current_match)) || id.size() > 64 ||
         !verdicts_seen.insert(match + "/" + id).second)
     {
       return;
@@ -3652,8 +3667,18 @@ struct YouGameRoom::Impl
     // No "Game N": the set's dots show which game it was.
     Orca::UX::ShowToast(Orca::UX::RankedSet::ResultToast(v.out, mine, theirs));
     NOTICE_LOG_FMT(NETPLAY, "Orca room: game {} {} for this player, set {}", id, v.out, score);
-    if (end && !finish_sent)
+    if (end && !finish_sent && !verdicts_seen.contains(match + "/$final"))
       SendFinish(current_match, end->winner, end->why);
+    if (pending_ranked_final && !MissingGameReceipts(match))
+    {
+      const auto final = std::exchange(pending_ranked_final, std::nullopt);
+      PublishRankedFinal(*final);
+      if (std::exchange(pending_ranked_final_held, false))
+      {
+        const auto sentence = CleanLabel(Str(*final, "reason"), 180);
+        End(sentence.empty() ? "The match is over" : sentence, "match-over");
+      }
+    }
   }
 
   // All recovery queue holds yield immediately to the server's final verdict.
@@ -3674,6 +3699,59 @@ struct YouGameRoom::Impl
     if (test_now)
       test_results.push_back(line);
     Orca::Status::Result(line);
+  }
+
+  void PublishRankedFinal(const picojson::object& m, bool score_pending = false)
+  {
+    const Verdict v = ReadVerdict(m, "$final");
+    const bool forfeit = Str(m, "disposition") == "forfeit";
+    std::string extra;
+    const std::string my_id = MyId();
+    int rating_before = -1, rating_after = -1;
+    if (const auto r = m.find("ratings"); r != m.end() && r->second.is<picojson::object>() &&
+                                          r->second.get<picojson::object>().count(my_id))
+    {
+      const picojson::value& mine = r->second.get<picojson::object>().at(my_id);
+      if (mine.is<picojson::object>())
+      {
+        const auto& o = mine.get<picojson::object>();
+        const auto before = ClampedInt(o, "before", 0, 1 << 20);
+        const auto after = ClampedInt(o, "after", 0, 1 << 20);
+        rating_before = before.value_or(-1);
+        rating_after = after.value_or(-1);
+        if (before && after)
+          extra += fmt::format(",\"r\":[{},{}]", *before, *after);
+        if (const auto rank = o.find("rank");
+            rank != o.end() && rank->second.is<picojson::object>())
+        {
+          const std::string label =
+              CleanLabel(Str(rank->second.get<picojson::object>(), "label"), 24);
+          if (!label.empty())
+            extra += fmt::format(",\"rank\":\"{}\"", label);
+        }
+      }
+    }
+    if (!score_pending)
+    {
+      ResultLine(fmt::format(
+          "{{\"q\":\"ranked\",\"k\":\"set\",\"out\":\"{}\",\"by\":\"{}\"{},\"score\":{}{}}}", v.out,
+          forfeit ? "forfeit" : "games", v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
+          Score(), extra));
+    }
+    const int mine = score_pending ? -1 : tally.Wins(my_id);
+    const int theirs = score_pending ? -1 : tally.Wins(TheirId());
+    // On screen: VICTORY or DEFEAT with the rating change, or "<name> forfeited" first
+    // (UX/SetEnd.h).
+    Orca::UX::SetEnd::Current().SetVerdict(
+        OutcomeOf(v.out), forfeit, mine, theirs, rating_before, rating_after,
+        Orca::UX::QueueApp::OwnRating(), Orca::UX::SetEnd::NowMs());
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: the set: {} {} ({})", v.out,
+                   score_pending ? "score pending" : Score(), Str(m, "disposition"));
+    if (score_pending)
+      return;
+    std::lock_guard lock(mutex);
+    set_done = true;
+    match_id.clear();
   }
 
   // "result": a ranked set's verdict, or a casual game's.
@@ -3698,49 +3776,25 @@ struct YouGameRoom::Impl
     AckMatchReport(match, "$final");
     if (room_queue == "ranked")
     {
-      const Verdict v = ReadVerdict(m, "$final");
-      const bool forfeit = Str(m, "disposition") == "forfeit";
-      std::string extra;
-      const std::string my_id = MyId();
-      int rating_before = -1, rating_after = -1;
-      if (const auto r = m.find("ratings"); r != m.end() && r->second.is<picojson::object>() &&
-                                            r->second.get<picojson::object>().count(my_id))
+      if (QueueRecovery() && MissingGameReceipts(match))
       {
-        const picojson::value& mine = r->second.get<picojson::object>().at(my_id);
-        if (mine.is<picojson::object>())
-        {
-          const auto& o = mine.get<picojson::object>();
-          const auto before = ClampedInt(o, "before", 0, 1 << 20);
-          const auto after = ClampedInt(o, "after", 0, 1 << 20);
-          rating_before = before.value_or(-1);
-          rating_after = after.value_or(-1);
-          if (before && after)
-            extra += fmt::format(",\"r\":[{},{}]", *before, *after);
-          if (const auto rank = o.find("rank");
-              rank != o.end() && rank->second.is<picojson::object>())
-          {
-            const std::string label =
-                CleanLabel(Str(rank->second.get<picojson::object>(), "label"), 24);
-            if (!label.empty())
-              extra += fmt::format(",\"rank\":\"{}\"", label);
-          }
-        }
+        pending_ranked_final = m;
+        pending_ranked_final_held = QueueHold();
+        PublishRankedFinal(m, true);
+        std::lock_guard lock(mutex);
+        set_done = true;
+        match_id.clear();
+        // The server has settled the set. Keep the socket/outbox alive solely to
+        // reconcile receipts, without letting a previous hold end that work.
+        reconnect = {};
+        public_self_hold_until.reset();
+        public_peer_holds.clear();
+        input_holds.clear();
+        host_away_until.reset();
+        host_hold_until.reset();
+        return false;
       }
-      ResultLine(fmt::format(
-          "{{\"q\":\"ranked\",\"k\":\"set\",\"out\":\"{}\",\"by\":\"{}\"{},\"score\":{}{}}}", v.out,
-          forfeit ? "forfeit" : "games", v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
-          Score(), extra));
-      const int mine = tally.Wins(my_id), theirs = tally.Wins(TheirId());
-      // On screen: VICTORY or DEFEAT with the rating change, or "<name> forfeited" first
-      // (UX/SetEnd.h).
-      Orca::UX::SetEnd::Current().SetVerdict(
-          OutcomeOf(v.out), forfeit, mine, theirs, rating_before, rating_after,
-          Orca::UX::QueueApp::OwnRating(), Orca::UX::SetEnd::NowMs());
-      NOTICE_LOG_FMT(NETPLAY, "Orca room: the set: {} {} ({})", v.out, Score(),
-                     Str(m, "disposition"));
-      std::lock_guard lock(mutex);
-      set_done = true;
-      match_id.clear();
+      PublishRankedFinal(m);
       return true;
     }
     // Casual: each game is its own room match.
@@ -3781,7 +3835,8 @@ struct YouGameRoom::Impl
     if (QueueRecovery())
     {
       std::lock_guard lock(mutex);
-      if (!match_id.empty() && Str(m, "matchId") == match_id && !match_participants.empty())
+      if (pending_ranked_final ||
+          (!match_id.empty() && Str(m, "matchId") == match_id && !match_participants.empty()))
         return;
     }
     last_finish.clear();
@@ -4723,6 +4778,8 @@ struct YouGameRoom::Impl
     }
     else if (t == "start")
     {
+      if (pending_ranked_final && Str(m, "matchId") != Str(*pending_ranked_final, "matchId"))
+        return;
       OnStart(m);
       Roster(m);
     }
@@ -4755,7 +4812,7 @@ struct YouGameRoom::Impl
                               "({} s at most)",
                      ms / 1000);
       Orca::UX::SetEnd::Current().SetOver(Orca::UX::SetEnd::NowMs());
-      if (QueueHold())
+      if (QueueHold() && !pending_ranked_final)
         End("The match is over", "match-over");
     }
     else if (t == "command-error")
@@ -5285,6 +5342,8 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
       return false;
     if (m_impl->QueueRecoveryLocked())
     {
+      if (m_impl->set_done || m_impl->set_over)
+        return false;
       // While our room socket is away, input silence waits on our own reconnect hold.
       // A separately announced peer hold remains untouched throughout that reconnect.
       if (m_impl->public_self_hold_until)
@@ -5329,7 +5388,8 @@ bool YouGameRoom::RoomRecovering(Clock::time_point now) const
   if (!m_impl->RoomRecoveryLocked() || m_impl->state != RoomState::Waiting)
     return false;
   if (m_impl->QueueRecoveryLocked())
-    return m_impl->PublicHoldAliveLocked(m_impl->WaitingDeadlineLocked(), now);
+    return !m_impl->set_done && !m_impl->set_over &&
+           m_impl->PublicHoldAliveLocked(m_impl->WaitingDeadlineLocked(), now);
   return now < m_impl->room_recovery_until ||
          std::ranges::any_of(m_impl->input_holds,
                              [&](const auto& hold) { return now < hold.second; });

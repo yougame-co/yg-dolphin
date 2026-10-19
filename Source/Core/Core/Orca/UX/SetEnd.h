@@ -157,6 +157,7 @@ public:
   // panel opens once; `rating_before` is this player's rating going in (-1: none).
   void BlockSetOver(u32 key, bool won, int mine, int theirs, int rating_before, double now);
   // The room's verdict on a ranked set, with the ratings it carries (-1: none).
+  // Negative game counts show "Score pending" until all game receipts reconcile.
   void SetVerdict(Outcome out, bool forfeit, int mine, int theirs, int before, int after,
                   int rating_before, double now);
   // A casual game's verdict and the score against this opponent so far.

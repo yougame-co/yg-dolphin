@@ -134,6 +134,9 @@ class Rooms:
         self.receipts = {}
         self.drop_receipts = 0
         self.lost_receipts = []
+        self.lose_ranked_game_receipt = False
+        self.missing_ranked_game = None
+        self.final_delivered = set()
         self.commands = []
         self.drops = []
         self.verdicts = []
@@ -330,11 +333,21 @@ class Rooms:
         self.deliver_receipt(room, verdict)
 
     def deliver_receipt(self, room, verdict):
+        if self.lose_ranked_game_receipt and verdict["t"] == "game-result":
+            key = (verdict["matchId"], verdict["id"])
+            if self.missing_ranked_game is None:
+                self.missing_ranked_game = key
+            if key == self.missing_ranked_game and verdict["matchId"] not in self.final_delivered:
+                if verdict not in self.lost_receipts:
+                    self.lost_receipts.append(verdict)
+                return
         if self.drop_receipts:
             self.drop_receipts -= 1
             self.lost_receipts.append(verdict)
             return
         self.verdicts.append(verdict)
+        if verdict["t"] == "result":
+            self.final_delivered.add(verdict["matchId"])
         for (code, _), connection in list(self.sockets.items()):
             if code == room:
                 self.send(connection, verdict)
@@ -1013,12 +1026,37 @@ def verify_gameplay(work, masks):
 
 def verify_queue_run(args, work, diagnostics, errors):
     drops = [drop for drop in diagnostics["drops"] if drop["room"] == args.room]
-    if not drops or min(drop["seconds"] for drop in drops) < 15:
+    if not args.expect_ranked_reconciliation and (not drops or min(drop["seconds"] for drop in drops) < 15):
         raise RuntimeError("queue check needs a scheduled room drop of at least 15 seconds")
     if not any(command["t"] == "begin" for command in diagnostics["commands"]):
         raise RuntimeError("queue match never began")
     logs = [(Path(work) / f"peer-{role}.stdout.log").read_text() for role in (0, 1)]
-    if args.expect_queue_ending == "network":
+    if args.expect_ranked_reconciliation:
+        if errors or args.queue != "ranked" or len(diagnostics["lost_receipts"]) != 1:
+            raise RuntimeError("ranked reconciliation requires one missing game receipt and no error")
+        lost = diagnostics["lost_receipts"][0]
+        verdicts = diagnostics["verdicts"]
+        final_index = next(i for i, v in enumerate(verdicts) if v["t"] == "result")
+        earlier_index = next(i for i, v in enumerate(verdicts)
+                             if v.get("id") == lost["id"] and v["t"] == "game-result")
+        if not 0 < final_index < earlier_index:
+            raise RuntimeError("ranked receipts did not cross the final in the required order")
+        for role, log in enumerate(logs):
+            results = [json.loads(line[len("orca result "):])
+                       for line in log.splitlines() if line.startswith("orca result ")]
+            games = [r for r in results if r.get("k") == "game"]
+            finals = [r for r in results if r.get("k") == "set"]
+            if len(games) != 2 or {r["n"] for r in games} != {1, 2} or len(finals) != 1:
+                raise RuntimeError("ranked game/final receipts were missing or applied more than once")
+            if results[-1] != finals[0] or finals[0]["score"] != ([2, 0] if role == 0 else [0, 2]):
+                raise RuntimeError("ranked final published before the full tally was reconciled")
+        for player in ("Doubles0", "Doubles1"):
+            reports = [c for c in diagnostics["commands"]
+                       if c["player"] == player and c["t"] == "game-report" and c["id"] == lost["id"]]
+            if len(reports) < 2 or any(report != reports[0] for report in reports):
+                raise RuntimeError("missing ranked game did not resend its original identity/payload")
+        print("PASS: earlier ranked game receipt follows later game and final; two games once, full final tally", flush=True)
+    elif args.expect_queue_ending == "network":
         if not args.no_recovery or not errors:
             raise RuntimeError("legacy queue did not produce its network ending")
         if any("room-away self" in log or "room-back self" in log for log in logs):
@@ -1037,7 +1075,19 @@ def verify_queue_run(args, work, diagnostics, errors):
         results = [json.loads(line[len("orca result "):])
                    for line in logs[1 - dropped].splitlines() if line.startswith("orca result ")]
         if not any(result.get("by") == "forfeit" and result.get("out") == "won" for result in results):
-            raise RuntimeError("server's winning forfeit verdict never reached the other player")
+            # A forfeit can close before an unmatched game has any game verdict. The
+            # authoritative outcome must show while that report remains retryable;
+            # its unknown score must not be published as a completed tally.
+            winner = 1 - dropped
+            ui_log = (Path(work) / f"peer-{winner}.log").read_text()
+            if "Set end: the room's verdict: won by forfeit score pending" not in ui_log:
+                raise RuntimeError("server's winning forfeit verdict never reached the other player")
+            reports = [c for c in diagnostics["commands"] if c["player"] == f"Doubles{winner}" and c["t"] == "game-report"]
+            if len(reports) < 2 or any(c != reports[0] for c in reports):
+                raise RuntimeError("unsettled game did not retain and resend its original report")
+            if any(result.get("k") == "set" for result in results):
+                raise RuntimeError("forfeit published an unreconciled score")
+            print("PASS: authoritative forfeit shown with score pending; unsettled game report remains retryable", flush=True)
         if any(command["t"] == "finish" and "winner" in command for command in diagnostics["commands"]):
             raise RuntimeError("engine claimed the set during recovery")
     else:
@@ -1080,7 +1130,8 @@ def verify_queue_run(args, work, diagnostics, errors):
             if len(results) != 1:
                 raise RuntimeError(f"report replay applied {len(results)} local results instead of one")
         print("PASS: engine report replay after lost receipt and rejoin; stable payload, one result per peer", flush=True)
-    print(f"PASS: {args.queue} queue {args.expect_queue_ending or 'same-seat recovery'}; "
+    check = "receipt reconciliation" if args.expect_ranked_reconciliation else args.expect_queue_ending or "same-seat recovery"
+    print(f"PASS: {args.queue} queue {check}; "
           f"room drops {[(d['player'], d['seconds']) for d in drops]}", flush=True)
 
 
@@ -1365,7 +1416,7 @@ def run(args):
                                          if name not in {f"Doubles{role}" for role in refused}]
             if args.queue:
                 verify_queue_run(args, work, diagnostics, queue_errors)
-            if args.expect_queue_ending or args.expect_report_replay:
+            if args.expect_queue_ending or args.expect_report_replay or args.expect_ranked_reconciliation:
                 samples = list(diagnostics["hashes"].values())
                 common = set.intersection(*(set(sample) for sample in samples)) if len(samples) == args.expected else set()
                 if not common:
@@ -1451,6 +1502,7 @@ def main():
     parser.add_argument("--verdict-delay", type=float, default=0, help="deliver the server verdict this many seconds after its hold")
     parser.add_argument("--expect-crossed-holds", action="store_true", help="verify small self WELCOME remainder while a peer retains its later hold")
     parser.add_argument("--expect-report-replay", action="store_true", help="require lost receipt, stable report replay after rejoin, and one local result per peer")
+    parser.add_argument("--expect-ranked-reconciliation", action="store_true", help="lose the first ranked game receipt until after the final; verify both games once and final score")
     parser.add_argument("--drop-report-receipts", type=int, default=0, help="lose this many report receipt broadcasts; retained receipts replay on retry")
     parser.add_argument("--no-recovery", action="store_true", help="omit recovery from the queue welcome (legacy policy)")
     parser.add_argument("--expect-queue-ending", choices=("network", "forfeit"),
@@ -1497,6 +1549,7 @@ def main():
         server.rooms.verdict_delay = args.verdict_delay
         server.rooms.peer_away_after_rejoin = 20 if args.expect_crossed_holds else None
         server.rooms.drop_receipts = args.drop_report_receipts
+        server.rooms.lose_ranked_game_receipt = args.expect_ranked_reconciliation
         print(f"Dev friends-room fixture listening on port {server.server_port}", flush=True)
         try:
             server.serve_forever()
@@ -1515,6 +1568,7 @@ def main():
                 server.rooms.verdict_delay = args.verdict_delay
                 server.rooms.peer_away_after_rejoin = 20 if args.expect_crossed_holds else None
                 server.rooms.drop_receipts = args.drop_report_receipts
+                server.rooms.lose_ranked_game_receipt = args.expect_ranked_reconciliation
                 threading.Thread(target=server.serve_forever, daemon=True).start()
                 args.site = f"http://127.0.0.1:{server.server_port}"
             run(args)

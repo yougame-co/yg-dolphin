@@ -824,6 +824,69 @@ TEST(OrcaRoomRecovery, RankedFinalRetriesAndReplaysUntilItsReceipt)
   EXPECT_EQ(results, 3u);  // Two games, one final.
 }
 
+TEST(OrcaRoomRecovery, RankedMissingEarlierReceiptReconcilesBeforeFinalScore)
+{
+  const auto first = R"({"t":"game-result","matchId":"queue-recovery-match","id":"g120","ranking":["me","peer"]})";
+  const auto final = R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"]})";
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+      {RK::Message, 0, QueueRoster("start", "ranked")},
+      {RK::GameStart, 1, "", 120}, {RK::ReportGame, 2, "1", 120}, {RK::Tick, 3},
+      {RK::GameStart, 4, "", 360}, {RK::ReportGame, 5, "2", 360}, {RK::Tick, 6},
+      {RK::Message, 7, R"({"t":"game-result","matchId":"queue-recovery-match","id":"g360","ranking":["me","peer"]})"},
+      {RK::Message, 8, final}, {RK::Message, 9, QueueRoster("start", "ranked")},
+      {RK::Message, 10, final}, {RK::Tick, 3000},
+      {RK::Message, 3001, R"({"t":"game-result","matchId":"another-match","id":"g120","ranking":["me","peer"]})"},
+      {RK::Message, 3002, first}, {RK::Message, 3003, first}, {RK::Message, 3004, final},
+      {RK::Tick, 6000},
+  });
+  ASSERT_EQ(trace[9].results.size(), 1u);
+  EXPECT_TRUE(trace[10].results.empty());
+  EXPECT_TRUE(trace[12].results.empty());
+  std::vector<std::string> retried;
+  for (const auto& wire : trace[13].sent)
+    if (wire.find("game-report") != std::string::npos)
+      retried.push_back(wire);
+  ASSERT_EQ(retried.size(), 1u);
+  EXPECT_NE(retried[0].find("g120"), std::string::npos);
+  EXPECT_NE(retried[0].find("queue-recovery-match"), std::string::npos);
+  EXPECT_TRUE(trace[14].results.empty());
+  ASSERT_EQ(trace[15].results.size(), 2u);
+  EXPECT_NE(trace[15].results[0].find("\"k\":\"game\""), std::string::npos);
+  EXPECT_NE(trace[15].results[1].find("\"k\":\"set\""), std::string::npos);
+  EXPECT_NE(trace[15].results[1].find("\"score\":[2,0]"), std::string::npos);
+  size_t results = 0;
+  for (const auto& step : trace)
+    results += step.results.size();
+  EXPECT_EQ(results, 3u);
+  for (const auto& wire : trace.back().sent)
+  {
+    EXPECT_EQ(wire.find("game-report"), std::string::npos);
+    EXPECT_EQ(wire.find("finish"), std::string::npos);
+  }
+}
+
+TEST(OrcaRoomRecovery, HeldRankedFinalKeepsMissingReceiptsUntilReconciled)
+{
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+      {RK::Message, 0, QueueRoster("start", "ranked")},
+      {RK::GameStart, 1, "", 120}, {RK::ReportGame, 2, "1", 120}, {RK::Tick, 3},
+      {RK::SocketClose, 4}, {RK::SocketConnected, 5},
+      {RK::Message, 6, R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"],"disposition":"forfeit"})"},
+      {RK::Message, 7, R"({"t":"set-over","ms":300000})"},
+      {RK::InputSilence, 100000, "", 100000}, {RK::Tick, 100001},
+      {RK::Message, 100002, R"({"t":"game-result","matchId":"queue-recovery-match","id":"g120","ranking":["me","peer"]})"},
+  });
+  EXPECT_TRUE(trace[8].results.empty());
+  EXPECT_FALSE(trace[10].public_deadline);
+  EXPECT_FALSE(trace[10].session_recovering);
+  EXPECT_EQ(trace[11].state, RoomState::Waiting);
+  ASSERT_EQ(trace[12].results.size(), 2u);
+  EXPECT_EQ(trace.back().state, RoomState::Ended);
+  EXPECT_EQ(trace.back().error_code, "match-over");
+}
+
 TEST(OrcaRoomRecovery, FalseRecoveringWelcomeDoesNotCreateAHold)
 {
   picojson::value welcome;

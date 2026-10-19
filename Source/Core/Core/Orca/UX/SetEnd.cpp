@@ -270,8 +270,9 @@ void Model::SetVerdict(Outcome out, bool forfeit, int mine, int theirs, int befo
   m_left_at.reset();
   m_stall_at.reset();
   m_dropped = false;
-  NOTICE_LOG_FMT(ROLLBACK, "Set end: the room's verdict: {}{} {}–{}{}{}", OutcomeName(out),
-                 forfeit ? " by forfeit" : "", mine, theirs,
+  NOTICE_LOG_FMT(ROLLBACK, "Set end: the room's verdict: {}{} {}{}{}", OutcomeName(out),
+                 forfeit ? " by forfeit" : "",
+                 mine < 0 || theirs < 0 ? "score pending" : fmt::format("{}–{}", mine, theirs),
                  after >= 0 ? fmt::format(", rating {} -> {}", before, after) : std::string(),
                  was_gone ? " (the opponent was gone)" : "");
   if (out == Outcome::Void || out == Outcome::Draw)
@@ -298,7 +299,7 @@ void Model::SetVerdict(Outcome out, bool forfeit, int mine, int theirs, int befo
   {
     // The match block already opened the panel. The room's score and outcome take precedence.
     m_out = out;
-    if (mine + theirs > 0)
+    if (mine < 0 || theirs < 0 || m_mine < 0 || m_theirs < 0 || mine + theirs > 0)
     {
       m_mine = mine;
       m_theirs = theirs;
@@ -622,7 +623,8 @@ std::optional<Panel> Model::PanelAt(double now) const
     p.title = m_out == Outcome::Won ? "VICTORY" : "DEFEAT";
   else
     p.title = m_out == Outcome::Won ? "YOU WON" : m_out == Outcome::Lost ? "YOU LOST" : "DRAW";
-  p.score = fmt::format("{}–{}", m_mine, m_theirs);
+  p.score = m_mine < 0 || m_theirs < 0 ? "Score pending" :
+                                       fmt::format("{}–{}", m_mine, m_theirs);
   const std::string vs = m_opponent.empty() ? std::string() : "vs " + m_opponent;
   p.detail = m_by_forfeit ? (vs.empty() ? std::string("by forfeit") : vs + " · by forfeit") : vs;
   if (m_panel_ranked)
