@@ -2799,6 +2799,13 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.58
+
+- The feedback button inside a game is the same red triangle as everywhere else on YouGame, and it
+  and the YouGame button no longer react to each other.
+- After a lost match, YG Dolphin opens a fresh room of its own and says the match ended, instead of
+  retrying the old room and blaming a version or disc mismatch.
+
 ### 0.3.57
 
 - A tournament opponent can now join the host's game at character select: in rooms the page opens
