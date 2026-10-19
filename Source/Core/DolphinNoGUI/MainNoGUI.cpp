@@ -43,6 +43,7 @@
 #include "Core/Orca/BootMemory.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/Bridge.h"
+#include "Core/Orca/Bundle.h"
 #include "Core/Orca/CrashNote.h"
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/DiscVerify.h"
@@ -398,6 +399,10 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
 
   const auto parser =
       CommandLineParse::CreateParser(CommandLineParse::ParserOptions::OmitGUIOptions);
+  parser->add_option("--pack")
+      .action("store")
+      .metavar("<folder>")
+      .help("Play an unsigned local pack offline (tree format 1 or flat format 2)");
   parser->add_option("-p", "--platform")
       .action("store")
       .help("Window platform to use [%choices]")
@@ -420,12 +425,39 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
 #endif
       });
 
+  // Reject a missing pack folder before optparse, whose error path throws through code built
+  // without exception support.
+  for (int i = 1; i < argc; ++i)
+  {
+    const std::string_view arg(argv[i]);
+    if (arg == "--")
+      break;
+    if (arg == "--pack=" ||
+        (arg == "--pack" &&
+         (i + 1 == argc || argv[i + 1][0] == '\0' || argv[i + 1][0] == '-')))
+    {
+      fmt::print(stderr, "orca error profile --pack needs a pack folder\n");
+      return 1;
+    }
+  }
   optparse::Values& options = CommandLineParse::ParseArguments(parser.get(), argc, argv);
   std::vector<std::string> args = parser->args();
 
   // Register before reading the boot file, so an embedded alert never becomes a message box hidden
   // behind the app's window.
   Common::RegisterMsgAlertHandler(MsgAlertHandler);
+
+  if (options.is_set("pack"))
+  {
+    const std::string folder = static_cast<const char*>(options.get("pack"));
+    if (folder.empty())
+    {
+      fmt::print(stderr, "orca error profile --pack needs a pack folder\n");
+      return 1;
+    }
+    Orca::Mod::SetLocalPack(folder);
+    Orca::SetSeedSessionSave(false);
+  }
 
   std::optional<std::string> save_state_path;
   if (options.is_set("save_state"))

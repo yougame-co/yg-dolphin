@@ -101,7 +101,7 @@ struct Profile
 std::string GetEnv(const char* name);
 
 // True when this process runs an Orca rollback session: ORCA_SESSION=1, which Orca.app sets for
-// itself unless the environment already sets it (ORCA_SESSION=0 turns it off).
+// itself unless the environment already sets it (ORCA_SESSION=0 turns it off), or --pack is selected.
 bool SessionActive();
 
 // Gives the calling thread, which is on the input path, interactive scheduling so a busy machine

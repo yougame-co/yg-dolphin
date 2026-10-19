@@ -40,6 +40,7 @@
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/Sram.h"
 #include "Core/HW/Wiimote.h"
+#include "Core/Orca/Bundle.h"
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/Session/Session.h"
 #include "Core/PowerPC/MMU.h"
@@ -338,7 +339,7 @@ std::string GetEnv(const char* name)
 
 bool SessionActive()
 {
-  return EnvIs("ORCA_SESSION", "1");
+  return Mod::LocalPackRequested() || EnvIs("ORCA_SESSION", "1");
 }
 
 bool HarnessInputActive()

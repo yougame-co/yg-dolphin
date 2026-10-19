@@ -29,6 +29,7 @@
 #include "Core/Core.h"
 #include "Core/Config/SessionSettings.h"
 #include "Core/Orca/Bridge.h"
+#include "Core/Orca/Bundle.h"
 #include "Core/Orca/Engine/Module.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
@@ -63,6 +64,8 @@ std::shared_ptr<Net::YouGameRoom> Room()
 
 bool Enabled()
 {
+  if (Mod::LocalPackRequested())
+    return false;
   if (!SessionActive())
     return false;
   // Replay boots use the same four-port profile and boundary dispatcher as online matches,
@@ -148,6 +151,8 @@ std::string ModKeyParts(const Profile& profile)
                          location.key, value);
   parts += UniversalKeyParts();
   parts += RunningUxKeyPart();
+  if (Mod::LocalPackRequested())
+    parts += "|pack=local-offline";
   return parts;
 }
 }  // namespace
@@ -253,6 +258,12 @@ namespace
 {
 void StartLocked(Net::RoomOptions options)
 {
+  if (Mod::LocalPackRequested())
+  {
+    NOTICE_LOG_FMT(NETPLAY, "Orca: local packs are offline only; room refused");
+    Status::Line("orca pack refused online (local packs are offline only)");
+    return;
+  }
   if (Rollback::ReplayStream::ProductMode())
     return;
   options.compatibility = CompatibilityKey();

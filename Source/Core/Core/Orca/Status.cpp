@@ -16,6 +16,7 @@
 
 #include "Core/Orca/Activity.h"
 #include "Core/Orca/BootMemory.h"
+#include "Core/Orca/Bundle.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
@@ -156,7 +157,7 @@ std::string OfferedCaps()
   std::istringstream base{CAPS};
   for (std::string cap; base >> cap;)
   {
-    if ((s_online_withdrawn || Rollback::ReplayStream::ProductMode()) &&
+    if ((s_online_withdrawn || Rollback::ReplayStream::ProductMode() || Mod::LocalPackRequested()) &&
         (cap == "join" || cap == "host" || cap == "direct"))
       continue;
     if (!caps.empty())

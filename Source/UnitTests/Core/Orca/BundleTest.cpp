@@ -22,6 +22,7 @@
 
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
+#include "Common/ScopeGuard.h"
 #include "Common/Version.h"
 #include "Core/Boot/Boot.h"
 #include "Core/Boot/ElfReader.h"
@@ -1041,6 +1042,150 @@ TEST(OrcaBundle, PackSessionsOfferTheEngineCaps)
     Orca::SetActiveProfile(std::nullopt);
   }
   File::DeleteDirRecursively(root);
+}
+
+TEST(OrcaBundle, LocalTreeLoadsOfflineAndHasItsOwnKey)
+{
+  const ScopedEnv no_session("ORCA_SESSION", "0");
+  const ScopedEnv no_dir("ORCA_MOD_DIR", "");
+  SConfig::Init();
+  const std::string root = TempDir();
+  const Common::ScopeGuard done([&] {
+    Orca::SetActiveProfile(std::nullopt);
+    Orca::Mod::SetLocalPack({});
+    SConfig::Shutdown();
+    File::DeleteDirRecursively(root);
+  });
+  picojson::value manifest;
+  ASSERT_TRUE(picojson::parse(manifest, BRAWL_FLAT).empty());
+  auto& fields = manifest.get<picojson::object>();
+  fields["format"] = picojson::value(1.0);
+  for (const char* field : {"listing", "serial", "patches", "jitwarm"})
+    fields.erase(field);
+  const auto write_tree = [&] {
+    const std::string json = manifest.serialize();
+    ASSERT_TRUE(File::WriteStringToFile(root + "mod.json", json));
+    const std::vector<Orca::Mod::TreeFile> files{
+        {"mod.json", Orca::Mod::Sha256Hex(json), json.size()}};
+    ASSERT_TRUE(File::WriteStringToFile(
+        root + "tree.json",
+        fmt::format(R"({{"tree":"{}","files":[{{"path":"mod.json","sha256":"{}","bytes":{}}}]}})",
+                    Orca::Mod::TreeHash(files), files[0].sha256, json.size())));
+  };
+  write_tree();
+  Orca::Mod::SetLocalPack(root);
+  EXPECT_TRUE(Orca::SessionActive());
+  EXPECT_TRUE(Orca::Mod::Requested());
+  Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+  ASSERT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Tree)
+      << Orca::Mod::ResolvedError();
+  std::string error;
+  auto profile = Orca::LoadModProfile(Orca::Mod::Dir(), &error);
+  ASSERT_TRUE(profile) << error;
+  Orca::SetActiveProfile(profile);
+  Orca::Mod::NoteGuards(true, 2);
+  for (const char* cap : {"results", "locks", "queue2"})
+    EXPECT_FALSE(Orca::Mod::Offers(cap));
+  const std::string local_key = Orca::Online::CompatibilityKey();
+  const std::string parts = Orca::Online::CompatibilityKeyParts();
+  EXPECT_NE(parts.find("|tree=" + profile->mod->tree.hash + "|"), std::string::npos);
+  EXPECT_TRUE(parts.ends_with("|pack=local-offline"));
+  Orca::Mod::SetLocalPack({});
+  const std::string tree_key = Orca::Online::CompatibilityKey();
+  EXPECT_NE(local_key, tree_key);
+  // The original unsigned tree path remains available in a release session.
+  {
+    const ScopedEnv session("ORCA_SESSION", "1");
+    const ScopedEnv dir("ORCA_MOD_DIR", root);
+    Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Tree);
+    EXPECT_TRUE(Orca::Mod::Offers("results"));
+  }
+  Orca::Mod::SetLocalPack(root);
+  EXPECT_EQ(Orca::Online::CompatibilityKey(), local_key);
+  fields["title"] = picojson::value(std::string("Changed pack"));
+  write_tree();
+  profile = Orca::LoadModProfile(root, &error);
+  ASSERT_TRUE(profile) << error;
+  Orca::SetActiveProfile(profile);
+  EXPECT_NE(Orca::Online::CompatibilityKey(), local_key);
+}
+
+TEST(OrcaBundle, LocalPackRefusesPublicQueueAndFriendsRooms)
+{
+  // Even an online-enabled caller cannot create a transport, request a ticket or report a result.
+  const ScopedEnv dev_game("ORCA_TEST_DEV_GAME", "local-fixture");
+  Orca::Mod::SetLocalPack("local-pack");
+  const Common::ScopeGuard done([] { Orca::Mod::SetLocalPack({}); });
+  ASSERT_EQ(Orca::Online::Transport(), nullptr);
+  EXPECT_FALSE(Orca::Online::Enabled());
+  Orca::Online::Start();
+  EXPECT_EQ(Orca::Online::Transport(), nullptr);
+  for (bool joining : {false, true})
+  {
+    // StartRoom(..., false) is the matched public queue path; friends use true.
+    for (bool friends_room : {false, true})
+    {
+      Orca::Online::StartRoom("queue123", joining, friends_room);
+      EXPECT_EQ(Orca::Online::Transport(), nullptr);
+      EXPECT_EQ(Orca::Online::RoomGeneration(), 0u);
+    }
+  }
+  EXPECT_EQ(Orca::Online::RoomQueue(), "private");
+  const std::string caps = " " + Orca::Status::OfferedCaps() + " ";
+  for (const char* cap : {" join ", " host ", " direct "})
+    EXPECT_EQ(caps.find(cap), std::string::npos);
+}
+
+TEST(OrcaBundle, UnsignedLocalFlatLoadsAndSignedLoaderStaysStrict)
+{
+  const std::string root = TempDir();
+  const Common::ScopeGuard done([&] {
+    Orca::Mod::SetLocalPack({});
+    File::DeleteDirRecursively(root);
+  });
+  ASSERT_TRUE(File::WriteStringToFile(root + "mod.json", BRAWL_FLAT));
+  ASSERT_TRUE(File::WriteStringToFile(root + "RSBE01.patches", PATCHES));
+  ASSERT_TRUE(File::WriteStringToFile(root + "RSBE01.jitwarm", "warm"));
+  Orca::Mod::SetLocalPack(root);
+  Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+  ASSERT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Flat)
+      << Orca::Mod::ResolvedError();
+  ASSERT_NE(Orca::Mod::ResolvedFlat(), nullptr);
+  std::string error;
+  EXPECT_TRUE(Orca::LoadFlatProfile(*Orca::Mod::ResolvedFlat(), &error)) << error;
+  const PublicKey key{};
+  EXPECT_FALSE(Orca::Mod::LoadFlatBundle(root, std::span(&key, 1), &error));
+  EXPECT_EQ(error, "mod.sig is missing");
+  ASSERT_TRUE(File::WriteStringToFile(root + "mod.sig", "invalid"));
+  Orca::Mod::ResetResolvedBundle();
+  Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Refused);
+  EXPECT_NE(Orca::Mod::ResolvedError().find("--pack takes unsigned local packs"), std::string::npos);
+}
+
+TEST(OrcaBundle, MalformedLocalPacksHaveAReason)
+{
+  const std::string root = TempDir();
+  const Common::ScopeGuard done([&] {
+    Orca::Mod::SetLocalPack({});
+    File::DeleteDirRecursively(root);
+  });
+  Orca::Mod::SetLocalPack(root);
+  const auto refused = [&](std::string_view reason) {
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Refused);
+    EXPECT_NE(Orca::Mod::ResolvedError().find(reason), std::string::npos)
+        << Orca::Mod::ResolvedError();
+  };
+  refused("neither tree.json nor mod.json");
+  ASSERT_TRUE(File::WriteStringToFile(root + "mod.json", "{"));
+  refused("mod.json");
+  ASSERT_TRUE(File::WriteStringToFile(root + "mod.json", BRAWL_FLAT));
+  refused("missing");
+  ASSERT_TRUE(File::WriteStringToFile(root + "tree.json", "{}"));
+  refused("tree.json");
 }
 
 TEST(OrcaBundle, FindsItsFolder)

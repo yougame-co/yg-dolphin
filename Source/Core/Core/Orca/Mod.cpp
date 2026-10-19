@@ -1038,7 +1038,7 @@ bool Requested()
     return false;
   if (const std::optional<BundleKind> kind = ResolvedKind())
     return *kind != BundleKind::None;
-  return !GetEnv("ORCA_MOD_DIR").empty();
+  return LocalPackRequested() || !GetEnv("ORCA_MOD_DIR").empty();
 }
 
 std::string Dir()
@@ -1458,8 +1458,8 @@ bool Offers(std::string_view cap)
 {
   const ModInfo* mod = ActiveMod();
   // Only the builtin's supported caps, once its guards have held and never after failure.
-  return mod && mod->manifest.builtin != Builtin::None && s_held_once && !s_guards_failed &&
-         (mod->manifest.builtin != Builtin::BrawlRev2Results ||
+  return !LocalPackRequested() && mod && mod->manifest.builtin != Builtin::None && s_held_once &&
+         !s_guards_failed && (mod->manifest.builtin != Builtin::BrawlRev2Results ||
           (cap == "results" && mod->manifest.ranked_rules)) &&
          std::ranges::find(mod->manifest.offers, cap) != mod->manifest.offers.end();
 }
