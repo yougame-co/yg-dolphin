@@ -1334,6 +1334,13 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
 {
   ++match.host_boundaries;
   match.doubles = test_room ? test_room->Doubles() : Orca::Online::RoomDoubles();
+  const bool in_room = test_room ? test_room->Connected() : Orca::Online::InRoom();
+  const bool in_queue_room = test_room ? QueueMode(test_room->Queue()) != Orca::Engine::Mode::None :
+                                         InQueueRoom();
+  // `host` also opens private/tournament rooms. Only a confirmed welcome can disarm the queue
+  // start: before it, "private" is also the default for a queue room still connecting.
+  if (match.fresh_queue_armed && in_room && !in_queue_room)
+    match.fresh_queue_armed = false;
   const bool on_menus = test_menus.value_or(Orca::UX::Game().Read().OnTheMenus());
   if (on_menus)
   {
@@ -1456,12 +1463,32 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
     const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - arrival.arrived_at);
     if (!arrival.next_keyframe_notice || elapsed.count() < arrival.next_keyframe_notice)
       continue;
+    const int next = match.running + 1;
+    const bool in_place = Orca::UX::Game().Header().HeaderInPlace();
+    int waited = match.header_waited;
+    const bool header_ready = HeaderWaitAt(&waited, InTail(match), Unseen(match), in_place,
+                                           true, in_queue_room) == HeaderWait::Ready;
+    const auto capture = ChooseJoinCapture(match.session.get(), match.doubles, next,
+        std::max(match.replay.first_frame + 1, match.recovery_keyframe_from));
+    const char* fresh_reason = !match.fresh ? "none" :
+        InTail(match) ? "tail" : match.fresh->phase == Match::Fresh::Phase::Hold ?
+        "queue header hold" : "restoring own pick";
     NOTICE_LOG_FMT(ROLLBACK,
                    "Drop-in: no keyframe yet {} s after {} arrived (wanted={}, header in place={}, "
-                   "running frame {}, boundaries since arrival {})",
-                   elapsed.count(), arrival.name, match.keyframe_wanted,
-                   Orca::UX::Game().Header().HeaderInPlace(), match.running,
-                   match.host_boundaries - arrival.arrived_boundary);
+                   "running frame {}, boundaries since arrival {}, store={}, job={}, header ready={}, "
+                   "next={}, first keyframe frame={} (reached={}), recovery_keyframe_from={} "
+                   "(reached={}), origin ready={}, replay.first_frame={} (past={}), fresh={} "
+                   "(reason={}), capture present={}, fresh pending={}, queue fresh armed={}, "
+                   "room ready={}, queue room={}, room queue={}, holding={})",
+                   elapsed.count(), arrival.name, match.keyframe_wanted, in_place, match.running,
+                   match.host_boundaries - arrival.arrived_boundary, match.store != nullptr,
+                   match.job != nullptr, header_ready, next, FirstKeyframeFrame(),
+                   next >= FirstKeyframeFrame(), match.recovery_keyframe_from,
+                   next >= match.recovery_keyframe_from, OriginReady(match), match.replay.first_frame,
+                   next > match.replay.first_frame, match.fresh.has_value(), fresh_reason,
+                   capture.has_value(), match.fresh_pending.has_value(), match.fresh_queue_armed,
+                   in_room, in_queue_room,
+                   test_room ? test_room->Queue() : Orca::Online::RoomQueue(), match.holding);
     arrival.next_keyframe_notice = arrival.next_keyframe_notice == 15 ? 45 : 0;
   }
 
@@ -1559,7 +1586,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   start.seated_or_plugging = !match.seated.empty() || !match.plugging.empty();
   start.busy = InTail(match) || match.job != nullptr || match.fresh_pending.has_value();
   start.queue_armed = match.fresh_queue_armed;
-  start.in_queue_room = InQueueRoom();
+  start.in_queue_room = in_queue_room;
   start.waiting = !match.waiting.empty();
   start.in_place = match.friends_in_place ||
                    (!start.in_queue_room && std::ranges::any_of(match.waiting, [](const auto& entry) {
@@ -1618,7 +1645,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   // A fresh start's tail can't write the header (it runs as a re-run), so its boundaries don't
   // count toward the header's limit; nor do its unseen hold's, which run unthrottled.
   const HeaderWait header = HeaderWaitAt(&match.header_waited, InTail(match), Unseen(match),
-                                         in_place, !match.waiting.empty(), InQueueRoom());
+                                         in_place, !match.waiting.empty(), in_queue_room);
   if (header == HeaderWait::Fail)
   {
     FailHeaderWait(match);
@@ -2698,8 +2725,8 @@ void JoinInPlay(Match& match, const std::string& code)
   Orca::Status::State("joining 0");
 }
 
-// "host <code>": the queue matched this game with an opponent who will drop in. Only while alone:
-// leave this room and host the matched one, on port 1 (Reseat).
+// "host <code>": the page selected a room with an opponent who will drop in. Only while alone:
+// leave this room and host the selected one, on port 1 (Reseat).
 void HostInPlay(Match& match, const std::string& code)
 {
   const bool alone = match.port && !match.session && !match.joining && !match.download &&
@@ -5042,7 +5069,8 @@ static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGa
                                           Orca::Net::Game& game, Orca::Net::ReplayArchive replay,
                                           int current_frame, bool session_alive,
                                           const std::vector<int>& seated, std::optional<bool> menus,
-                                          std::unique_ptr<Orca::Net::KeyframeStore> store)
+                                          std::unique_ptr<Orca::Net::KeyframeStore> store,
+                                          bool host_requested = false)
 {
   // This adapter supplies a headless game's history to the actual HostEvents/StartKeyframe path.
   // The room runs its real I/O thread; packing, encryption and keyframe offers are unchanged.
@@ -5053,6 +5081,8 @@ static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGa
   match.origin_rule = OriginRule::Menu;
   match.running = current_frame - 1;
   match.replay = std::move(replay);
+  // HostInPlay arms a queue fresh start before this room's welcome arrives.
+  match.fresh_queue_armed = host_requested;
   if (!match.replay.frames.empty() && match.replay.frames.back().ports)
   {
     for (const auto& port : *match.replay.frames.back().ports)
@@ -5110,10 +5140,11 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
                                          Orca::Net::Game& game, Orca::Net::ReplayArchive replay,
                                          int current_frame, const std::vector<int>& seated,
                                          bool on_menus,
-                                         std::unique_ptr<Orca::Net::KeyframeStore> store)
+                                         std::unique_ptr<Orca::Net::KeyframeStore> store,
+                                         bool host_requested)
 {
   return PumpHostForTest(system, room, game, std::move(replay), current_frame, !seated.empty(),
-                         seated, on_menus, std::move(store));
+                         seated, on_menus, std::move(store), host_requested);
 }
 
 int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,

@@ -38,6 +38,7 @@
 #include "Core/Orca/Session/RoomResilience.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/Rollback/OnlineMatch.h"
@@ -5275,6 +5276,68 @@ TEST(OrcaDoublesTransport, BroadcastHistoryReachesANewRecipientDuringTheSwitch)
   EXPECT_EQ(addressed[2]->history_first, 40);
   EXPECT_EQ(addressed[2]->history_seat, 2);
   EXPECT_EQ(addressed[2]->history, next.history);
+}
+
+TEST_F(OrcaRoomRuntime, HostCommandCapturesForPrivateRoomsWithoutQueueReady)
+{
+  FriendsHeadlessCore core;
+  // `host <code>` is also used for tournaments: the ticket flag doesn't change WELCOME's queue.
+  // No queue2 pick/ready identity is needed to join the host's current character select.
+  const ScopedEnv session("ORCA_SESSION", "1");
+  Orca::Status::SetAppCaps("join host queue2");
+  Common::ScopeGuard clear_caps([] { Orca::Status::SetAppCaps(""); });
+  Orca::UX::QueueApp::End();
+  ASSERT_FALSE(Orca::UX::QueueApp::OwnIdentity().HasPick());
+  for (bool tournament : {false, true})
+  {
+    SCOPED_TRACE(tournament);
+    // Field trace: origin at 230, character select at 313, first notice at running frame 1178.
+    for (int current : {313, 1179})
+    {
+      const std::string code = fmt::format("host{}{}", tournament ? "t" : "p", current);
+      auto room = Open(code, tournament ? R"({"joining":false,"tourney":1})" :
+                                         R"({"joining":false})", false, false);
+      ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+      ASSERT_EQ(room->Queue(), "private");
+      RoomHashGame game;
+      auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                            std::string* error) {
+        return room->FreshTicket(fresh, ticket, server, error);
+      });
+      const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
+          core.system, *room, game, FriendsReplay(230, current), current, {}, true,
+          std::move(store), true);
+      if (current == 313)
+      {
+        EXPECT_FALSE(result.fresh_start);
+        EXPECT_TRUE(result.seated);
+        EXPECT_EQ(result.keyframe_frame, current);
+      }
+      else
+      {
+        // A long private history follows the existing friends policy, rather than holding forever.
+        EXPECT_TRUE(result.fresh_start);
+      }
+    }
+  }
+}
+
+TEST_F(OrcaRoomRuntime, HostCommandKeepsCasualAndRankedFreshStarts)
+{
+  FriendsHeadlessCore core;
+  for (const std::string queue : {"casual", "ranked"})
+  {
+    SCOPED_TRACE(queue);
+    auto room = Open("host" + queue,
+                     fmt::format(R"({{"joining":false,"queue":"{}"}})", queue), false, false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+    RoomHashGame game;
+    const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
+        core.system, *room, game, FriendsReplay(230, 313), 313, {}, true, nullptr, true);
+    EXPECT_TRUE(result.fresh_start);
+    EXPECT_FALSE(result.keyframe_frame);
+    EXPECT_FALSE(result.seated);
+  }
 }
 
 TEST_F(OrcaRoomRuntime, PrivateTournamentTicketBeginsAndReportsTheMatch)

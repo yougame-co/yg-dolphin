@@ -92,6 +92,7 @@ std::optional<JoinCapture> ChooseJoinCapture(const Orca::Net::Session* session, 
 
 // Headless runtime fixture: pumps the same host event/keyframe path with a real room and a
 // supplied game history. The caller initializes Core::System's memory and owns `game`.
+// `host_requested` supplies the queue fresh-start arm set by HostInPlay before WELCOME.
 struct HostRecoveryResult
 {
   bool fresh_start = false;
@@ -108,7 +109,8 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
                                          Orca::Net::Game& game, Orca::Net::ReplayArchive replay,
                                          int current_frame, const std::vector<int>& seated,
                                          bool on_menus,
-                                         std::unique_ptr<Orca::Net::KeyframeStore> store);
+                                         std::unique_ptr<Orca::Net::KeyframeStore> store,
+                                         bool host_requested = false);
 
 // Runs Boundary's session loop with a supplied host session and short silence window.
 int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,
