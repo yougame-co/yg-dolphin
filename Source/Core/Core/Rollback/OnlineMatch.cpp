@@ -4448,6 +4448,21 @@ static std::optional<int> SessionBoundary(
     if (stopping())
       return rewound_to;
     const std::string error = match.session->Error();
+    if ((!match.joining || Soft()) && Orca::Online::RoomEnded() &&
+        Orca::Online::RoomErrorCode() == "match-over" && !Orca::Online::IsDesync(error))
+    {
+      // A result can end recovery while the session waits at any frame. Both roles take the
+      // normal result path before a stale host-left/silence/session error can report a failure.
+      if (match.joining)
+        BecomeSolo(match, "match over", "host-left match-over", true);
+      else
+      {
+        DropFriends(match, "network", false);
+        GoSolo(match, "match over", nullptr);
+      }
+      RunSolo(match, local_pad);
+      return rewound_to;
+    }
     if (host_left && error.empty() && !match.session->Resimulating())
     {
       // The host left: the joined game is gone (or this player's own leave is complete).
@@ -4478,15 +4493,6 @@ static std::optional<int> SessionBoundary(
       // The host plays on and unplugs whoever stopped answering or broke the session. If the host's
       // own room went away, KeepRoomOpen reports that instead of "your friend left".
       const bool room_gone = Orca::Online::RoomEnded();
-      if (room_gone && Orca::Online::RoomErrorCode() == "match-over" &&
-          !Orca::Online::IsDesync(error))
-      {
-        // Matchmade room closed after its result: KeepRoomOpen tells the app, opens a new room.
-        DropFriends(match, "network", false);
-        GoSolo(match, "match over", nullptr);
-        RunSolo(match, local_pad);
-        return rewound_to;
-      }
       WARN_LOG_FMT(ROLLBACK, "Drop-in: unplugging every friend at frame {}: {}", match.running + 1,
                    peer_silent ? "no word from them" : error);
       // Mid ranked set the screen already counts their forfeit down; after it they're just gone.
@@ -4571,14 +4577,6 @@ static std::optional<int> SessionBoundary(
     const bool survivable = Orca::Online::ReportSessionEnd(error, match.session->ErrorFromPeer());
     if (Orca::Online::IsDesync(error))
       ++s_desyncs;
-    if (Soft() && survivable && match.joining && Orca::Online::RoomErrorCode() == "match-over")
-    {
-      // Matchmade room closed after its result: play on as its own game, on port 1, own room.
-      NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the room closed after its result");
-      BecomeSolo(match, "match over", "host-left match-over", true);
-      RunSolo(match, local_pad);
-      return rewound_to;
-    }
     if (Soft() && survivable && match.joining && Orca::Online::RoomQueue() == "ranked" &&
         Orca::Online::MatchLive() && !Orca::Online::RoomEnded())
     {

@@ -3142,7 +3142,7 @@ struct YouGameRoom::Impl
       // that pending match's identity, so neither reports nor a new begin outrun its outcome.
       const bool held_match = id.empty() && QueueHold();
       std::lock_guard lock(mutex);
-      if (held_match && reconnect.since && !match_id.empty())
+      if (held_match && !match_id.empty())
         rejoin_verdict_pending = true;
       if (!id.empty())
       {
@@ -3164,7 +3164,8 @@ struct YouGameRoom::Impl
       if (!held_match)
         match_id = std::move(id);
     }
-    if (const auto it = m.find("participants"); it != m.end() && it->second.is<picojson::array>())
+    if (const auto it = m.find("participants");
+        !rejoin_verdict_pending && it != m.end() && it->second.is<picojson::array>())
     {
       lobby_participants.clear();
       for (const auto& p : it->second.get<picojson::array>())
@@ -3783,6 +3784,7 @@ struct YouGameRoom::Impl
       return;
     std::lock_guard lock(mutex);
     set_done = true;
+    rejoin_verdict_pending = false;
     match_id.clear();
   }
 
@@ -3815,6 +3817,7 @@ struct YouGameRoom::Impl
         PublishRankedFinal(m, true);
         std::lock_guard lock(mutex);
         set_done = true;
+        rejoin_verdict_pending = false;
         match_id.clear();
         // The server has settled the set. Keep the socket/outbox alive solely to
         // reconcile receipts, without letting a previous hold end that work.
@@ -3856,6 +3859,7 @@ struct YouGameRoom::Impl
     // The room stays: the host begins the next match (TryBegin).
     finish_sent = false;
     std::lock_guard lock(mutex);
+    rejoin_verdict_pending = false;
     match_id.clear();
     return true;
   }
@@ -4356,6 +4360,10 @@ struct YouGameRoom::Impl
   void Roster(const picojson::object& m)
   {
     LobbyFields(m);
+    // Settlement can clear the gameplay roster before its verdict reaches a recovering game.
+    // Keep the match's identities and session until result takes the normal completed path.
+    if (QueueRecovery() && rejoin_verdict_pending)
+      return;
     if (m.count("host"))
       host = Str(m, "host");
     if (const auto players = m.find("players");
@@ -4697,7 +4705,8 @@ struct YouGameRoom::Impl
         reconnect = {};
         {
           std::lock_guard lock(mutex);
-          public_self_hold_until.reset();
+          if (!rejoin_verdict_pending)
+            public_self_hold_until.reset();
         }
         dropped = false;
         initial_seat_retry = false;
@@ -4854,15 +4863,19 @@ struct YouGameRoom::Impl
       // 4004. Nothing more is rated or forfeited, and every lobby command is refused ("The set is
       // over").
       const int ms = Int(m, "ms", 0, 3600000).value_or(0);
+      const bool held = QueueHold();
       {
         std::lock_guard lock(mutex);
         set_over = true;
+        if (held && !set_done && !match_id.empty() &&
+            !verdicts_seen.contains(match_id + "/$final"))
+          rejoin_verdict_pending = true;
       }
       NOTICE_LOG_FMT(NETPLAY, "Orca room: set over: the room stays open until the players leave "
                               "({} s at most)",
                      ms / 1000);
       Orca::UX::SetEnd::Current().SetOver(Orca::UX::SetEnd::NowMs());
-      if (QueueHold() && !pending_ranked_final)
+      if (held && !pending_ranked_final && !rejoin_verdict_pending)
         End("The match is over", "match-over");
     }
     else if (t == "command-error")
@@ -5393,7 +5406,7 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
       return false;
     if (m_impl->QueueRecoveryLocked())
     {
-      if (m_impl->set_done || m_impl->set_over)
+      if (m_impl->set_done || (m_impl->set_over && !m_impl->rejoin_verdict_pending))
         return false;
       // While our room socket is away, input silence waits on our own reconnect hold.
       // A separately announced peer hold remains untouched throughout that reconnect.
@@ -5442,7 +5455,7 @@ bool YouGameRoom::RoomRecovering(Clock::time_point now) const
   if (!m_impl->RoomRecoveryLocked() || m_impl->state != RoomState::Waiting)
     return false;
   if (m_impl->QueueRecoveryLocked())
-    return !m_impl->set_done && !m_impl->set_over &&
+    return !m_impl->set_done && (!m_impl->set_over || m_impl->rejoin_verdict_pending) &&
            m_impl->PublicHoldAliveLocked(m_impl->WaitingDeadlineLocked(), now);
   return now < m_impl->room_recovery_until ||
          std::ranges::any_of(m_impl->input_holds,

@@ -226,10 +226,11 @@ RoomOptions TraceOptions(bool joining = true)
 namespace
 {
 // Public opt-in is room metadata on welcome only; other messages keep the normal roster shape.
-std::string QueueRoster(const char* type, const char* queue, const std::string& recovery = "true")
+std::string QueueRoster(const char* type, const char* queue, const std::string& recovery = "true",
+                        bool joining = true)
 {
   picojson::value value;
-  picojson::parse(value, RosterMessage(type));
+  picojson::parse(value, RosterMessage(type, joining));
   auto& m = value.get<picojson::object>();
   for (auto& participant : m["participants"].get<picojson::array>())
   {
@@ -247,9 +248,9 @@ std::string QueueRoster(const char* type, const char* queue, const std::string& 
   m["room"] = picojson::value(room);
   return value.serialize();
 }
-RoomOptions QueueTraceOptions()
+RoomOptions QueueTraceOptions(bool joining = true)
 {
-  auto options = TraceOptions();
+  auto options = TraceOptions(joining);
   options.friends_room = false;
   return options;
 }
@@ -1269,6 +1270,77 @@ TEST(OrcaRoomRecovery, RecoveryWelcomeCanClearTheMatchBeforeItsFinalVerdict)
     EXPECT_EQ(trace.back().state, RoomState::Ended);
     EXPECT_EQ(trace.back().error_code, "match-over");
     EXPECT_FALSE(trace.back().reconnecting);
+  }
+}
+
+TEST(OrcaRoomRecovery, BothDropAndRejoinAClosingMatchAcceptsCompletedVerdict)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const bool joining : {false, true})
+    {
+      for (const bool closing_on_welcome : {false, true})
+      {
+        SCOPED_TRACE(fmt::format("{} joining={} closing-on-welcome={}", queue, joining,
+                                closing_on_welcome));
+        const std::string initial = QueueRoster("welcome", queue, "true", joining);
+        picojson::value welcome;
+        ASSERT_TRUE(picojson::parse(welcome, initial).empty());
+        auto& closing = welcome.get<picojson::object>();
+        closing["matchId"] = picojson::value();
+        // Settling has cleared the gameplay roster; the original match's verdict follows it.
+        closing["host"] = picojson::value();
+        closing["players"] = picojson::value(picojson::array{});
+        closing["participants"] = picojson::value(picojson::array{});
+        const std::string verdict = fmt::format(
+            R"({{"t":"result","matchId":"queue-recovery-match","ranking":["{}","{}"],"disposition":"completed"}})",
+            joining ? "peer" : "me", joining ? "me" : "peer");
+        std::vector<RoomTestStep> steps{
+            {RK::Message, -3, initial},
+            {RK::Message, -2, QueueRoster("start", queue, "true", joining)},
+            {RK::Message, -1, PeerHello(!joining)},
+            {RK::SocketClose, 0, "both sockets dropped", 1006},
+            {RK::InputSilence, 1, "", 0},
+            {RK::Message, 1700, closing_on_welcome ? welcome.serialize() : initial},
+        };
+        if (std::string(queue) == "ranked")
+          steps.push_back({RK::Message, 1800, R"({"t":"set-over","ms":300000})"});
+        if (!closing_on_welcome)
+        {
+          closing["t"] = picojson::value("lobby");
+          steps.push_back({RK::Message, 1900, welcome.serialize()});
+        }
+        steps.push_back({RK::InputSilence, 2399, "", 0});
+        steps.push_back({RK::Message, 2400, verdict});
+        steps.push_back({RK::Message, 2401, verdict});  // A replay cannot publish it twice.
+        steps.push_back({RK::SocketClose, 2500, "match closed", 4004});
+        const auto trace = TraceRoomForTest(QueueTraceOptions(joining), steps);
+        EXPECT_TRUE(trace[3].reconnect_started);
+        ASSERT_TRUE(trace[trace.size() - 4].input_held.has_value());
+        EXPECT_TRUE(*trace[trace.size() - 4].input_held);
+        for (size_t i = 5; i + 3 < trace.size(); ++i)
+        {
+          EXPECT_EQ(trace[i].state, RoomState::Waiting) << i;
+          EXPECT_TRUE(trace[i].events.empty()) << i;
+        }
+        size_t results = 0;
+        for (const auto& step : trace)
+        {
+          EXPECT_NE(step.error_code, "network");
+          for (const auto& result : step.results)
+          {
+            ++results;
+            EXPECT_NE(result.find(joining ? "lost" : "won"), std::string::npos);
+          }
+          for (const auto& sent : step.sent)
+            EXPECT_EQ(sent.find("\"t\":\"begin\""), std::string::npos);
+        }
+        EXPECT_EQ(results, 1u);
+        EXPECT_EQ(trace.back().state, RoomState::Ended);
+        EXPECT_EQ(trace.back().error_code, "match-over");
+        EXPECT_FALSE(trace.back().reconnecting);
+      }
+    }
   }
 }
 
@@ -4685,6 +4757,43 @@ TEST_F(OrcaRoomRuntime, FriendsReopenJoinsTheFriendWhoReturnedFirst)
   }
   EXPECT_TRUE(room->Connected());
   EXPECT_TRUE(room->ErrorCode().empty());
+}
+
+TEST_F(OrcaRoomRuntime, CompletedRecoveryEndsTheHostSessionAwayFromItsNextFrame)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv session_env("ORCA_SESSION", "1");
+  Orca::Status::SetAppCaps("join");
+  const Common::ScopeGuard cleanup([] {
+    Orca::Online::Shutdown();
+    Orca::Status::SetAppCaps("");
+  });
+  const std::string code = "settled359";
+  Request("/configure/" + code,
+          fmt::format(R"({{"queue":"casual","recovery":true,"joining":false,"compatibility":"{}"}})",
+                      Orca::Online::CompatibilityKey()));
+  Orca::Online::StartRoom(code, false, false);
+  ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
+  auto* room = dynamic_cast<YouGameRoom*>(Orca::Online::Transport());
+  ASSERT_NE(room, nullptr);
+  Action(code, fmt::format(R"({{"message":{}}})",
+                          QueueRoster("start", "casual", "true", false)));
+  ASSERT_TRUE(Wait([&] { return room->MatchLive(); }));
+  ASSERT_TRUE(room->HoldInputSilence(RoomClock::now(), RoomClock::now()));
+  Action(code, R"({"message":{"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"],"disposition":"completed"}})");
+  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+  ASSERT_EQ(room->ErrorCode(), "match-over");
+
+  RoomHashGame game;
+  Orca::Net::Config config;
+  config.local_seat = 0;
+  config.start_frame = 10;
+  auto session = std::make_unique<Session>(config, game, *room);
+  // Rejoin can finish while the session is at a different frame from the emulation boundary.
+  EXPECT_EQ(Rollback::OnlineMatch::PumpFriendsHostBoundaryForTest(
+                session, 10, {1}, [] {}, [] { return std::vector<int>{}; }), 11);
+  EXPECT_EQ(session, nullptr);
+  EXPECT_EQ(room->ErrorCode(), "match-over");
 }
 
 TEST_F(OrcaRoomRuntime, RankedRecordingUsesTheMatchedRoomAndAgreedCapability)
