@@ -39,9 +39,16 @@ void OneLine(Line& line, std::string_view value)
 }
 }  // namespace
 
-bool SampleDue(Clock::time_point now, std::optional<Clock::time_point> last)
+bool SampleDue(Clock::time_point now, std::optional<Clock::time_point> last, bool force)
 {
-  return !last || (now >= *last && now - *last >= std::chrono::seconds(60));
+  return force || !last || (now >= *last && now - *last >= std::chrono::seconds(60));
+}
+
+std::optional<u64> FrameNumber(int frame)
+{
+  if (frame < 0)
+    return std::nullopt;
+  return static_cast<u64>(frame);
 }
 
 size_t FormatMemory(char* out, size_t size, const Memory& m)
@@ -57,7 +64,7 @@ size_t FormatMemory(char* out, size_t size, const Memory& m)
   Number(line, m.working_set, MB);
   line << " MB priv ";
   Number(line, m.private_bytes, MB);
-  line << " MB job ";
+  line << " MB " << (m.process_limit ? "proc " : "job ");
   if (m.job == "yes")
   {
     line << "peak ";
@@ -162,11 +169,11 @@ void Log(const char* line)
                          "Orca/GpuDiagnostics.cpp", 0, line);
 }
 
-void LogMemory()
+void LogMemory(bool force)
 {
   std::lock_guard lock(s_memory_mutex);
   const auto now = Clock::now();
-  if (!SampleDue(now, s_last_memory))
+  if (!SampleDue(now, s_last_memory, force))
     return;
   Memory m;
   PERFORMANCE_INFORMATION perf{};
@@ -195,9 +202,13 @@ void LogMemory()
     if (QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &job, sizeof(job),
                                   nullptr))
     {
-      m.job_peak = job.PeakJobMemoryUsed;
-      m.job_limit = (job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) ?
-                        job.JobMemoryLimit : 0;
+      const DWORD flags = job.BasicLimitInformation.LimitFlags;
+      m.process_limit = !(flags & JOB_OBJECT_LIMIT_JOB_MEMORY) &&
+                        (flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY);
+      m.job_peak = m.process_limit ? job.PeakProcessMemoryUsed : job.PeakJobMemoryUsed;
+      m.job_limit = (flags & JOB_OBJECT_LIMIT_JOB_MEMORY) ? job.JobMemoryLimit :
+                   m.process_limit                     ? job.ProcessMemoryLimit :
+                                                         0;
     }
   }
   char text[384];
@@ -259,7 +270,7 @@ void NoteScene(std::string_view scene, int frame)
   const size_t size = std::min(scene.size(), s_scene.size() - 1);
   std::copy_n(scene.data(), size, s_scene.begin());
   s_scene[size] = '\0';
-  s_scene_frame = static_cast<u64>(frame);
+  s_scene_frame = FrameNumber(frame);
 }
 
 void ShaderCreated(bool pixel, bool uber)

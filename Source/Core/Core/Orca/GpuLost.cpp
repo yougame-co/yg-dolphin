@@ -81,7 +81,7 @@ bool Report(std::string_view backend, u32 reason, std::string_view where)
     return false;
 
 #ifdef _WIN32
-  GpuDiagnostics::LogMemory();
+  GpuDiagnostics::LogMemory(true);
 #endif
   char text[LINE_SIZE];
   const size_t length = FormatLine(text, sizeof(text), backend, reason, where);

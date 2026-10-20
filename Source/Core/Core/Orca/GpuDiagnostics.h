@@ -13,15 +13,17 @@
 namespace Orca::GpuDiagnostics
 {
 using Clock = std::chrono::steady_clock;
-// Pure decision; callers serialize and update last only when taking a sample. Loss and boot
-// use the same gate as periodic memory samples, including across successive boots.
-bool SampleDue(Clock::time_point now, std::optional<Clock::time_point> last);
+// Callers serialize and update last only when taking a sample. Boot, error and loss samples
+// force a snapshot; periodic samples share a sixty-second limit across successive boots.
+bool SampleDue(Clock::time_point now, std::optional<Clock::time_point> last, bool force = false);
+std::optional<u64> FrameNumber(int frame);
 
 struct Memory
 {
   std::optional<u64> commit, limit, available, working_set, private_bytes;
   std::string_view job = "none";  // none, yes, or unknown
   std::optional<u64> job_peak, job_limit;
+  bool process_limit = false;
 };
 struct Segment
 {
@@ -52,7 +54,7 @@ size_t FormatTdr(char* out, size_t size, const std::string_view (&values)[3]);
 
 #ifdef _WIN32
 void Log(const char* line);
-void LogMemory();
+void LogMemory(bool force = false);
 void LogTdrOnce();
 void ResetScene();
 void NoteFrame(int frame);

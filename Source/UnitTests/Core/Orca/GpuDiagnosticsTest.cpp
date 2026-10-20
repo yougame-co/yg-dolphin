@@ -158,20 +158,62 @@ TEST(OrcaGpuDiagnostics, SixtySecondBoundaryAndMonotonicClock)
   EXPECT_FALSE(Diag::SampleDue(start - 1s, start));
 }
 
-TEST(OrcaGpuDiagnostics, BootPeriodicAndLossRequestsShareTheSameRateLimit)
+TEST(OrcaGpuDiagnostics, PeriodicSamplesShareLimitButBootErrorAndLossAreForced)
 {
   const auto start = Diag::Clock::time_point{};
   std::optional<Diag::Clock::time_point> last;
   int samples = 0;
-  for (const auto offset : {0s, 0s, 1s, 59s, 60s, 60s, 61s, 119s, 120s})
-  {
-    const auto now = start + offset;
-    if (Diag::SampleDue(now, last))
+  const auto sample = [&](auto offset, bool force = false) {
+    if (Diag::SampleDue(start + offset, last, force))
     {
-      last = now;
+      last = start + offset;
       ++samples;
+      return true;
     }
-  }
-  EXPECT_EQ(samples, 3);
-  EXPECT_EQ(last, start + 120s);
+    return false;
+  };
+  EXPECT_TRUE(sample(0s));  // periodic
+  EXPECT_FALSE(sample(0s));
+  EXPECT_TRUE(sample(0s, true));  // boot immediately after periodic
+  EXPECT_TRUE(sample(0s, true));  // second boot
+  EXPECT_TRUE(sample(0s, true));  // error
+  EXPECT_TRUE(sample(0s, true));  // loss
+  EXPECT_FALSE(sample(1s));
+  EXPECT_FALSE(sample(59s));
+  EXPECT_TRUE(sample(60s));
+  EXPECT_FALSE(sample(60s));
+  EXPECT_TRUE(sample(61s, true));  // error resets the periodic deadline
+  EXPECT_FALSE(sample(120s));
+  EXPECT_TRUE(sample(121s));
+  EXPECT_EQ(samples, 8);
+  EXPECT_EQ(last, start + 121s);
+}
+
+TEST(OrcaGpuDiagnostics, ProcessMemoryLimitUsesProcessPeakAndLabel)
+{
+  char text[384];
+  Diag::Memory memory;
+  memory.job = "yes";
+  memory.job_peak = 512 * MB;
+  memory.job_limit = 2048 * MB;
+  memory.process_limit = true;
+  Diag::FormatMemory(text, sizeof(text), memory);
+  EXPECT_NE(std::string(text).find("proc peak 512/2048 MB"), std::string::npos);
+  EXPECT_EQ(std::string(text).find("job peak"), std::string::npos);
+}
+
+TEST(OrcaGpuDiagnostics, NegativeFramesAreUnknown)
+{
+  EXPECT_EQ(Diag::FrameNumber(-1), std::nullopt);
+  EXPECT_EQ(Diag::FrameNumber(std::numeric_limits<int>::min()), std::nullopt);
+  EXPECT_EQ(Diag::FrameNumber(0), 0u);
+  EXPECT_EQ(Diag::FrameNumber(std::numeric_limits<int>::max()),
+            static_cast<u64>(std::numeric_limits<int>::max()));
+  Diag::Render render;
+  render.scene = "scMelee";
+  render.scene_frame = Diag::FrameNumber(-1);
+  render.frame = Diag::FrameNumber(-2);
+  char text[512];
+  Diag::FormatRender(text, sizeof(text), render);
+  EXPECT_NE(std::string(text).find("scene scMelee scene-at unknown frame unknown"), std::string::npos);
 }
