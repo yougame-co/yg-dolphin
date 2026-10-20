@@ -2799,6 +2799,12 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.62
+
+- Windows: when the graphics driver stops responding, YG Dolphin's log now records memory use,
+  the graphics card's video memory budget, the driver version and the render settings, so these
+  crashes can be traced. Nothing changes in play.
+
 ### 0.3.61
 
 - Ranked sets on results-only packs (Brawl Minus, Project M 3.6) end as soon as a player wins two
