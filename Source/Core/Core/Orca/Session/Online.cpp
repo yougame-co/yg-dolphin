@@ -151,8 +151,6 @@ std::string ModKeyParts(const Profile& profile)
                          location.key, value);
   parts += UniversalKeyParts();
   parts += RunningUxKeyPart();
-  if (Mod::LocalPackRequested())
-    parts += "|pack=local-offline";
   return parts;
 }
 }  // namespace

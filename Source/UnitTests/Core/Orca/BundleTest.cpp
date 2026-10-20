@@ -1103,10 +1103,10 @@ TEST(OrcaBundle, LocalTreeLoadsOfflineAndHasItsOwnKey)
   const std::string local_key = Orca::Online::CompatibilityKey();
   const std::string parts = Orca::Online::CompatibilityKeyParts();
   EXPECT_NE(parts.find("|tree=" + profile->mod->tree.hash + "|"), std::string::npos);
-  EXPECT_TRUE(parts.ends_with("|pack=local-offline"));
+  // Local packs never reach a room (Online::Enabled, StartLocked), so the key needs no marker
+  // and the key code stays the released one.
+  EXPECT_FALSE(Orca::Online::Enabled());
   Orca::Mod::SetLocalPack({});
-  const std::string tree_key = Orca::Online::CompatibilityKey();
-  EXPECT_NE(local_key, tree_key);
   // The original unsigned tree path remains available in a release session.
   {
     const ScopedEnv session("ORCA_SESSION", "1");

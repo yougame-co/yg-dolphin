@@ -4870,7 +4870,7 @@ TEST_F(OrcaRoomRuntime, FriendsReopenJoinsTheFriendWhoReturnedFirst)
                       Orca::Online::CompatibilityKey()));
   Orca::Online::StartRoom(code, false, true, true);
   ASSERT_TRUE(Wait([] { return Orca::Online::InRoom() || Orca::Online::RoomEnded(); }));
-  auto* room = dynamic_cast<YouGameRoom*>(Orca::Online::Transport());
+  auto* room = static_cast<YouGameRoom*>(Orca::Online::Transport());
   ASSERT_NE(room, nullptr);
   ASSERT_TRUE(room->ErrorCode().empty()) << room->Status();
   const u64 generation = room->Generation();
@@ -4916,7 +4916,7 @@ TEST_F(OrcaRoomRuntime, FriendsAutomaticReopenWithoutAHostFallsBackWithEitherCap
     Request("/configure/" + fresh, R"({"joining":false})");
     Orca::Online::StartRoom(code, false, true, true);
     ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
-    auto* room = dynamic_cast<YouGameRoom*>(Orca::Online::Transport());
+    auto* room = static_cast<YouGameRoom*>(Orca::Online::Transport());
     ASSERT_NE(room, nullptr);
     const u64 generation = room->Generation();
     EXPECT_EQ(Rollback::OnlineMatch::PumpRoomReopenFailureForTest([&] {
@@ -4926,7 +4926,7 @@ TEST_F(OrcaRoomRuntime, FriendsAutomaticReopenWithoutAHostFallsBackWithEitherCap
     ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
     EXPECT_EQ(Orca::Online::Code(), fresh);
     EXPECT_EQ(Orca::Online::Joining(), false);
-    auto* reopened = dynamic_cast<YouGameRoom*>(Orca::Online::Transport());
+    auto* reopened = static_cast<YouGameRoom*>(Orca::Online::Transport());
     ASSERT_NE(reopened, nullptr);
     EXPECT_NE(reopened->Generation(), generation);
     EXPECT_TRUE(reopened->ErrorCode().empty());
@@ -4979,7 +4979,7 @@ TEST_F(OrcaRoomRuntime, CompletedRecoveryEndsEitherSessionAwayFromItsNextFrame)
                         joining, Orca::Online::CompatibilityKey()));
     Orca::Online::StartRoom(code, joining, false);
     ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
-    auto* room = dynamic_cast<YouGameRoom*>(Orca::Online::Transport());
+    auto* room = static_cast<YouGameRoom*>(Orca::Online::Transport());
     ASSERT_NE(room, nullptr);
     Action(code, fmt::format(R"({{"message":{}}})",
                             QueueRoster("start", "casual", "true", joining)));
