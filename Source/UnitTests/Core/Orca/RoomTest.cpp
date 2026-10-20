@@ -2498,6 +2498,10 @@ TEST(OrcaRoom, RefusalsHaveAppCodes)
     EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 403) " + reason), "room_mismatch");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 409)"), "room_full");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 0)"), "network");
+  // Only the rooms Worker's host_gone code means the friend left; other 410s (a closed
+  // tournament match, a bare 410) keep their old handling.
+  EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 410) host_gone"), "host_gone");
+  EXPECT_NE(RefusalCode("WebSocket connect failed: ... (HTTP 410)"), "host_gone");
 }
 
 // A desync is reported as one on both sides, never as a friend who left. Under drop-in play:
@@ -2911,7 +2915,7 @@ TEST(OrcaRoomResilience, InitialSeatRetriesCoverTheLiveSeatWindowBeforeSoftFailu
 
 TEST(OrcaRoomResilience, HostGoneAfterServerCloseEndsWithoutRetrying)
 {
-  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 410)",
+  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 410) host_gone",
                               "WebSocket upgrade failed (HTTP 403) host_gone"})
   {
     SCOPED_TRACE(refusal);
@@ -3523,7 +3527,6 @@ TEST_F(OrcaRoomRuntime, HostGoneRefusalsEndOnceWithTheExistingHostLeftState)
 {
   const std::vector<std::pair<int, std::string>> refusals{
       {410, R"({"error":"Your friend isn't in that game any more","code":"host_gone"})"},
-      {410, R"({"error":"Gone"})"},
       {403, R"({"error":"Your friend isn't in that game any more","code":"host_gone"})"},
       {409, R"({"code":"host_gone"})"},
   };

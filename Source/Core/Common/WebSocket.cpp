@@ -211,7 +211,7 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
                                                         std::string();
     };
     const std::string code = field("code");
-    if (status == 410 || code == "host_gone")
+    if (code == "host_gone")
     {
       *error += " host_gone";
     }

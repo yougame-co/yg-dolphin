@@ -687,8 +687,7 @@ std::string WebSocketUrl(std::string url)
 // Why the rooms Worker refused the upgrade; only recognized body reasons reach this policy.
 std::string RefusalCode(const std::string& connect_error)
 {
-  if (connect_error.find("(HTTP 410)") != std::string::npos ||
-      connect_error.find(" host_gone") != std::string::npos)
+  if (connect_error.find(" host_gone") != std::string::npos)
     return "host_gone";
   if (connect_error.find("(HTTP 403)") != std::string::npos)
     return "room_mismatch";
@@ -2355,7 +2354,8 @@ struct YouGameRoom::Impl
     const auto now = Now();
     const bool seat_in_use = error.find("(HTTP 409)") != std::string::npos &&
                              error.find("seat in use") != std::string::npos;
-    const bool restart_refusal = seat_in_use || error.find("(HTTP 503)") != std::string::npos;
+    const bool restart_refusal = error.find("(HTTP 410)") != std::string::npos || seat_in_use ||
+                                 error.find("(HTTP 503)") != std::string::npos;
     const bool server_closed = reconnect_reason.starts_with("WebSocket closed by the server");
     // The server's live-seat window is 10 s; a held seat gets 12 s so the last try lands after it.
     const auto grace_window = seat_in_use ? INITIAL_SEAT_GRACE : REJOIN_REFUSAL_GRACE;
@@ -2472,7 +2472,8 @@ struct YouGameRoom::Impl
     auto job = std::make_unique<ReconnectJob>();
     ReconnectJob* const raw = job.get();
     const auto deadline = PublicDeadline().value_or(*reconnect.since + ROOM_HOLD);
-    job->thread = std::thread([this, raw, deadline] {
+    const bool server_closed = reconnect_reason.starts_with("WebSocket closed by the server");
+    job->thread = std::thread([this, raw, deadline, server_closed] {
       std::string ticket, store, ticket_error;
       // Ticket responses can include app-provided text. Log only this stage's fixed outcome.
       raw->error = "ticket-refresh-failed";
@@ -2501,6 +2502,7 @@ struct YouGameRoom::Impl
         }
         if (raw->error.find("(HTTP 4") == std::string::npos ||
             raw->error.find("seat in use") != std::string::npos ||
+            (server_closed && raw->error.find("(HTTP 410)") != std::string::npos) ||
             RefusalCode(raw->error) == "host_gone")
           break;
       }
