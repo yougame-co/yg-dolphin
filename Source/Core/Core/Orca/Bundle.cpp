@@ -27,6 +27,7 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
+#include "Common/Logging/LogManager.h"
 #include "Common/StringUtil.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Sandbox.h"
@@ -612,7 +613,10 @@ static void ResolveBundleWithJail(const std::string* executable_path,
     auto folder = StringToPath(dir).lexically_normal();
     if (folder.filename().empty())
       folder = folder.parent_path();
-    NOTICE_LOG_FMT(BOOT, "orca pack local {} (unsigned, offline)", dir);
+    NOTICE_LOG_FMT(BOOT, "orca pack local {} (unsigned, offline)", PathToString(folder.filename()));
+    if (auto* logs = Common::Log::LogManager::GetInstance())
+      logs->LogToFile(Common::Log::LogLevel::LNOTICE, Common::Log::LogType::BOOT,
+                      fmt::format("orca pack local {} (unsigned, offline)", dir).c_str());
     Status::Line(fmt::format("orca pack local {} (unsigned, offline)",
                             PathToString(folder.filename())));
   };

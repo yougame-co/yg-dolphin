@@ -24,6 +24,7 @@
 #include "Common/FileUtil.h"
 #include "Common/Config/Config.h"
 #include "Common/IOFile.h"
+#include "Common/Logging/LogManager.h"
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 #include "Common/Version.h"
@@ -1218,6 +1219,66 @@ TEST(OrcaBundle, MalformedLocalPacksHaveAReason)
   refused("missing");
   ASSERT_TRUE(File::WriteStringToFile(root + "tree.json", "{}"));
   refused("tree.json");
+}
+
+TEST(OrcaBundle, LocalPackConsoleStatusUsesOnlyTheFolderName)
+{
+  using namespace Common::Log;
+  const std::string root = TempDir();
+  const std::string old_user = File::GetUserPath(D_USER_IDX);
+  File::SetUserPath(D_USER_IDX, root + "user/");
+  Config::Init();
+  struct BaseLayer final : Config::ConfigLayerLoader
+  {
+    BaseLayer() : ConfigLayerLoader(Config::LayerType::Base) {}
+    void Load(Config::Layer*) override {}
+    void Save(Config::Layer*) override {}
+  };
+  Config::AddLayer(std::make_unique<BaseLayer>());
+  LogManager::Init();
+  const Common::ScopeGuard done([&] {
+    Orca::Status::SetOutput(nullptr);
+    Orca::Mod::SetLocalPack({});
+    LogManager::Shutdown();
+    Config::Shutdown();
+    File::SetUserPath(D_USER_IDX, old_user);
+    File::DeleteDirRecursively(root);
+  });
+  struct FileCapture final : LogListener
+  {
+    void Log(LogLevel, const char* message) override { lines += message; }
+    std::string lines;
+  };
+  struct StdoutConsole final : LogListener
+  {
+    void Log(LogLevel, const char* message) override { std::fputs(message, stdout); }
+  };
+  auto file = std::make_unique<FileCapture>();
+  const auto* recorded = file.get();
+  auto* logs = LogManager::GetInstance();
+  logs->RegisterListener(LogListener::FILE_LISTENER, std::move(file));
+  // Model Windows' redirected console on every platform.
+  logs->RegisterListener(LogListener::CONSOLE_LISTENER, std::make_unique<StdoutConsole>());
+  logs->EnableListener(LogListener::FILE_LISTENER, true);
+  logs->EnableListener(LogListener::CONSOLE_LISTENER, true);
+  logs->EnableListener(LogListener::LOG_WINDOW_LISTENER, false);
+  logs->SetEnable(LogType::BOOT, true);
+  ASSERT_TRUE(File::WriteStringToFile(root + "mod.json", BRAWL_FLAT));
+  ASSERT_TRUE(File::WriteStringToFile(root + "RSBE01.patches", PATCHES));
+  ASSERT_TRUE(File::WriteStringToFile(root + "RSBE01.jitwarm", "warm"));
+  Orca::Mod::SetLocalPack(root);
+  Orca::Status::SetOutput(stdout);
+  testing::internal::CaptureStdout();
+  Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+  const std::string terminal = testing::internal::GetCapturedStdout();
+  ASSERT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Flat)
+      << Orca::Mod::ResolvedError();
+  const auto name = std::filesystem::path(root).parent_path().filename().string();
+  EXPECT_NE(terminal.find("orca pack local " + name + " (unsigned, offline)\n"), std::string::npos);
+  EXPECT_EQ(terminal.find(root), std::string::npos);
+  EXPECT_EQ(terminal.find(std::filesystem::path(root).parent_path().string()), std::string::npos);
+  EXPECT_NE(recorded->lines.find("orca pack local " + root + " (unsigned, offline)"),
+            std::string::npos);
 }
 
 TEST(OrcaBundleDeathTest, LocalRefusalReturnsBootFailureWithoutAnAlert)
