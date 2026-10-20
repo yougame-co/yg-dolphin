@@ -217,37 +217,6 @@ void LogMemory(bool force)
   s_last_memory = Clock::now();
 }
 
-void LogTdrOnce()
-{
-  static std::once_flag once;
-  std::call_once(once, [] {
-    constexpr const wchar_t* key = L"SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers";
-    constexpr const wchar_t* names[] = {L"TdrDelay", L"TdrDdiDelay", L"TdrLevel"};
-    char numbers[3][16]{};
-    std::string_view values[3];
-    for (size_t i = 0; i < 3; ++i)
-    {
-      DWORD value = 0;
-      DWORD size = sizeof(value);
-      const LSTATUS result = RegGetValueW(HKEY_LOCAL_MACHINE, key, names[i], RRF_RT_REG_DWORD,
-                                         nullptr, &value, &size);
-      if (result == ERROR_SUCCESS)
-      {
-        std::snprintf(numbers[i], sizeof(numbers[i]), "%lu", static_cast<unsigned long>(value));
-        values[i] = numbers[i];
-      }
-      else
-      {
-        values[i] = result == ERROR_FILE_NOT_FOUND || result == ERROR_PATH_NOT_FOUND ? "default" :
-                                                                                     "unknown";
-      }
-    }
-    char text[160];
-    FormatTdr(text, sizeof(text), values);
-    Log(text);
-  });
-}
-
 void ResetScene()
 {
   std::lock_guard lock(s_scene_mutex);

@@ -32,7 +32,6 @@ void BeginBoot()
   LogMemory();
 #ifdef _WIN32
   GpuDiagnostics::ResetScene();
-  GpuDiagnostics::LogTdrOnce();
 #endif
 }
 

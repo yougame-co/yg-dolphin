@@ -942,7 +942,7 @@ target_include_directories(core PRIVATE "${ORCA_EMBED_DIR}")
 if(ORCA_BUNDLE_TRUST_TEST_KEY)
   set_source_files_properties(Orca/UX/UX.cpp PROPERTIES COMPILE_DEFINITIONS ORCA_BUNDLE_TRUST_TEST_KEY)
 endif()
-# The SD image's SHA-256 uses CNG; GPU diagnostics read process memory and TDR registry values.
+# The SD image's SHA-256 uses CNG; GPU diagnostics read process memory.
 if(WIN32)
   target_link_libraries(core PRIVATE bcrypt psapi advapi32)
 endif()

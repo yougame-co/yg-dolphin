@@ -55,7 +55,6 @@ size_t FormatTdr(char* out, size_t size, const std::string_view (&values)[3]);
 #ifdef _WIN32
 void Log(const char* line);
 void LogMemory(bool force = false);
-void LogTdrOnce();
 void ResetScene();
 void NoteFrame(int frame);
 void NoteScene(std::string_view scene, int frame);
