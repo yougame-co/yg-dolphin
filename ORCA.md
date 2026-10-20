@@ -2799,6 +2799,19 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.59
+
+- When your friend gets back to a friends room before you do, YG Dolphin joins their game instead
+  of reporting a network error.
+- After a dropped connection, rejoining a game that just finished shows its result like any other
+  finish, instead of a network error.
+- Trying to join a friend who already left that game says so ("Your friend left that game. Ask
+  them for a new invite.") and stops retrying.
+- Ranked sets on results-only packs (Brawl Minus, Project M 3.6): leaving during the first game
+  now counts as a loss, as it does on Project+.
+- Offline play without YouGame: `--pack <folder>` plays your own unsigned pack offline only
+  (docs/PLAY-STANDALONE.md).
+
 ### 0.3.58
 
 - The feedback button inside a game is the same red triangle as everywhere else on YouGame, and it
