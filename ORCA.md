@@ -2799,6 +2799,14 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.61
+
+- Ranked sets on results-only packs (Brawl Minus, Project M 3.6) end as soon as a player wins two
+  games, with the result and rating shown right away (0.3.59 only settled them when the players
+  left).
+- Offline local packs (`--pack`): a refused pack ends the program with an error instead of waiting,
+  and the terminal shows only the pack folder's name.
+
 ### 0.3.59
 
 - When your friend gets back to a friends room before you do, YG Dolphin joins their game instead
