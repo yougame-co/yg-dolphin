@@ -2801,6 +2801,8 @@ What each release changed for players, in plain words.
 
 ### 0.3.64
 
+- Clicking the YouGame logo inside a game (full screen or theater) opens the same menu as
+  Shift+Tab. YG Dolphin's own small dropdown is gone; the Δ feedback button stays.
 - While you search for an opponent on your own, the screen says "Waiting for another player…"
   with how long you have waited.
 - Windows graphics-crash diagnostics no longer read the Windows graphics timeout settings (as in
