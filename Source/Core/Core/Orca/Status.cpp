@@ -21,7 +21,6 @@
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/UX.h"
-#include "Core/Orca/UX/YgOrb.h"
 #include "Core/Rollback/ReplayStream.h"
 
 namespace Orca::Status
@@ -263,8 +262,6 @@ void SetAppCaps(std::string_view list)
   std::lock_guard lock(s_mutex);
   s_app_list = std::string(list);
   s_app_caps = Agreed(offered, list);
-  if (!s_app_caps.contains(HOSTUI_CAP))
-    UX::YgOrb::Menu().Close();
 }
 
 bool Cap(std::string_view name)

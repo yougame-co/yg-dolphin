@@ -135,21 +135,6 @@ void DrawHostControls(ImDrawList* dl, const Model::View& view)
     dl->AddLine(triangle[i], triangle[(i + 1) % triangle.size()], white, 2.4f * unit);
     dl->AddCircleFilled(triangle[i], 1.2f * unit, white, 16);
   }
-  const HostMenu::View menu = Menu().At();
-  if (!menu.open)
-    return;
-  const float top = p.y + 48 * k;
-  dl->AddRectFilled(ImVec2(p.x, top), ImVec2(p.x + 240 * k, top + HOST_ROWS * 32 * k),
-                    Rgba(20, 20, 20, 0.97f), 8 * k);
-  for (int row = 0; row < HOST_ROWS; ++row)
-  {
-    const float y = top + row * 32 * k;
-    if (row == menu.selected)
-      dl->AddRectFilled(ImVec2(p.x, y), ImVec2(p.x + 240 * k, y + 32 * k),
-                        Rgba(90, 90, 90, 0.8f), 6 * k);
-    Yg::Text(dl, ImVec2(p.x + 12 * k, y + 7 * k), 16 * k, IM_COL32_WHITE,
-             HostLabel(static_cast<HostAction>(row)));
-  }
 }
 
 namespace

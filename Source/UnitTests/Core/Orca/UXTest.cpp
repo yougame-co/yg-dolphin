@@ -3877,8 +3877,8 @@ TEST(OrcaUXYgOrb, HostControlHitTestsFollowBothDiscsAtEveryScale)
   {
     SCOPED_TRACE(k);
     const Place p{32, 24, 40 * k};
-    const auto hit = [&](float x, float y, bool menu = false) {
-      return ControlAt(p, menu, p.x + x * k, p.y + y * k);
+    const auto hit = [&](float x, float y) {
+      return ControlAt(p, p.x + x * k, p.y + y * k);
     };
     EXPECT_EQ(hit(20, 20), 0);
     EXPECT_EQ(hit(0, 20), 0);
@@ -3895,13 +3895,12 @@ TEST(OrcaUXYgOrb, HostControlHitTestsFollowBothDiscsAtEveryScale)
       for (const float y : {0.0f, 40.0f})
         EXPECT_EQ(hit(x, y), -1);  // Old square corners now pass through.
     EXPECT_EQ(hit(1, 1), -1);
-    EXPECT_EQ(hit(20, 44, true), -1);
-    EXPECT_EQ(hit(20, 48), -1);
-    EXPECT_EQ(hit(20, 48, true), 2);
-    EXPECT_EQ(hit(20, 80, true), 3);
-    EXPECT_EQ(hit(20, 48 + HOST_ROWS * 32, true), -1);
+    EXPECT_EQ(hit(20, 44), -1);
+    // The former dropdown rows always pass through.
+    for (int row = 0; row < 7; ++row)
+      EXPECT_EQ(hit(20, 48 + row * 32), -1);
   }
-  EXPECT_EQ(ControlAt({}, true, 0, 0), -1);
+  EXPECT_EQ(ControlAt({}, 0, 0), -1);
 }
 
 TEST(OrcaUXYgOrb, NativeHoverAndPressBelongToOnlyTheirOriginalControl)
@@ -4626,7 +4625,7 @@ protected:
     m_lines = std::make_unique<StatusLines>("");
     ASSERT_TRUE(m_lines->Ok());
     YgOrb::Current().Apply({}, YgOrb::NowMs());
-    YgOrb::Menu().Close();
+    OverlayKey::Keys().Cancel();
     LocalPadStopped();
     Pad(0);
     m_lines->Take();
@@ -4698,20 +4697,18 @@ TEST_F(OrcaUXHostUI, WithoutAgreementTheOrbAndShortcutKeepTheirLegacyPaths)
     EXPECT_FALSE(HitControls(84, 36));  // No feedback hit box.
     EXPECT_FALSE(ClickControls(36, 36));  // Windows falls through to its `orca orb` path.
     ToggleHostMenu();  // The host-menu stdin entry point.
-    EXPECT_FALSE(Menu().At().open);
-    for (const HostKey key : {HostKey::Feedback, HostKey::Menu, HostKey::Next, HostKey::Select})
+    for (const HostKey key : {HostKey::Feedback, HostKey::Menu})
       EXPECT_FALSE(HandleHostKey(key));
-    Menu().FeedbackFinished(NowMs() - 5001);
-    for (int row = 0; row < HOST_ROWS; ++row)
-      ActivateHost(static_cast<HostAction>(row));
-    EXPECT_TRUE(Menu().FeedbackDue(NowMs())) << "No screenshot request or cooldown without hostui";
-    Menu().FeedbackFinished(-5000);
+    FeedbackRequests().FeedbackFinished(NowMs() - 5001);
+    ActivateHost(HostAction::Feedback);
+    EXPECT_TRUE(FeedbackRequests().FeedbackDue(NowMs()))
+        << "No screenshot request or cooldown without hostui";
+    FeedbackRequests().FeedbackFinished(-5000);
     EXPECT_EQ(m_lines->Take(), "");  // No host, feedback or Controls output.
     EXPECT_EQ(HostVertices(), 0);  // Neither delta nor menu is drawn.
 
     EXPECT_EQ(Pad(PAD_BUTTON_UP), PAD_BUTTON_UP);
     EXPECT_EQ(Pad(PAD_BUTTON_UP | PAD_BUTTON_START), 0);
-    EXPECT_FALSE(Menu().At().open);
     EXPECT_EQ(Pad(0), 0);
     const bool talk = Orca::Status::Cap(Orca::Status::TALK_CAP);
     EXPECT_EQ(m_lines->Take(), talk ? "orca overlay down pad\norca overlay up pad\n" :
@@ -4723,34 +4720,79 @@ TEST_F(OrcaUXHostUI, WithoutAgreementTheOrbAndShortcutKeepTheirLegacyPaths)
   }
 }
 
-TEST_F(OrcaUXHostUI, AgreementEnablesTheNativeMenuAndHostActions)
+TEST_F(OrcaUXHostUI, LogoAndHostMenuEmitExactlyThePagesShiftTabTapOnTheChosenChannel)
 {
   using namespace YgOrb;
-  Orca::Status::SetAppCaps("yougame talk hostui");
-  ASSERT_TRUE(HostEnabled());
-  EXPECT_TRUE(HostView(NowMs()).on);
-  EXPECT_FALSE(Current().At(NowMs()).on);
-  EXPECT_TRUE(HitControls(36, 36));
-  EXPECT_TRUE(HitControls(84, 36));
-  EXPECT_GT(HostVertices(), 0);  // Delta is visible before opening the menu.
-  EXPECT_TRUE(ClickControls(36, 36));
-  ASSERT_TRUE(Menu().At().open);
-  EXPECT_TRUE(HitControls(100, 80));
-  EXPECT_GT(HostVertices(), 0);
-  EXPECT_TRUE(HandleHostKey(HostKey::Next));
-  EXPECT_TRUE(HandleHostKey(HostKey::Select));
-  EXPECT_FALSE(Menu().At().open);
-  for (const HostAction action : {HostAction::VolumeDown, HostAction::Mute,
-                                HostAction::ExitFullscreen, HostAction::Leave, HostAction::Controls})
-    ActivateHost(action);
-  EXPECT_EQ(m_lines->Take(), "orca host volume-up\norca host volume-down\norca host mute\n"
-                            "orca host exit-fullscreen\norca host leave\norca orb\n");
-  EXPECT_EQ(Pad(PAD_BUTTON_UP | PAD_BUTTON_START), 0);
-  EXPECT_TRUE(Menu().At().open);
-  EXPECT_EQ(Pad(0), 0);
-  EXPECT_EQ(m_lines->Take(), "");  // Native shortcut consumes its whole press.
-  EXPECT_EQ(Pad(PAD_BUTTON_B), PAD_BUTTON_B);
-  EXPECT_FALSE(Menu().At().open);
+  for (const char* caps : {"yougame hostui", "yougame talk hostui"})
+  {
+    SCOPED_TRACE(caps);
+    Orca::Status::SetAppCaps(caps);
+    ASSERT_TRUE(HostEnabled());
+    EXPECT_TRUE(HostView(NowMs()).on);
+    EXPECT_FALSE(Current().At(NowMs()).on);
+    EXPECT_TRUE(HitControls(36, 36));
+    EXPECT_TRUE(HitControls(84, 36));
+    EXPECT_FALSE(HitControls(100, 80));
+    const int vertices = HostVertices();
+    EXPECT_GT(vertices, 0);
+    const bool talk = Orca::Status::Cap(Orca::Status::TALK_CAP);
+    const std::string expected = talk ? "orca overlay down keys\norca overlay up keys\n" :
+                                        "orca orb\n";
+    for (const bool embedded : {false, true})
+    {
+      SCOPED_TRACE(embedded);
+      static std::string embedded_lines;
+      embedded_lines.clear();
+      const OverlayKey::Output output = embedded ? +[](std::string_view line) {
+        embedded_lines += std::string(line) + "\n";
+      } : nullptr;
+      const auto take = [&] {
+        const std::string host_lines = m_lines->Take();
+        if (!embedded)
+          return host_lines;
+        EXPECT_TRUE(host_lines.empty());
+        return std::exchange(embedded_lines, {});
+      };
+      // The platform's Shift+Tab down/up path defines the exact expected protocol.
+      OverlayKey::Emit(OverlayKey::Keys().Down(talk), output);
+      OverlayKey::Emit(OverlayKey::Keys().Up(), output);
+      EXPECT_EQ(take(), expected);
+      EXPECT_TRUE(ClickControls(36, 36, output));
+      EXPECT_EQ(take(), expected);
+      EXPECT_FALSE(OverlayKey::Keys().IsDown());
+      ToggleHostMenu(output);  // The host-menu stdin entry point.
+      EXPECT_EQ(take(), expected);
+      EXPECT_TRUE(HandleHostKey(HostKey::Menu, output));
+      EXPECT_EQ(take(), expected);
+      EXPECT_FALSE(ClickControls(100, 80, output));
+      EXPECT_EQ(take(), "");
+      EXPECT_FALSE(HitControls(100, 80));
+      EXPECT_EQ(HostVertices(), vertices);  // No dropdown drawing after any menu input.
+    }
+  }
+}
+
+TEST_F(OrcaUXHostUI, HostuiPadShortcutUsesThePagePressAndRelease)
+{
+  for (const char* caps : {"yougame hostui", "yougame talk hostui"})
+  {
+    SCOPED_TRACE(caps);
+    Orca::Status::SetAppCaps(caps);
+    ASSERT_TRUE(YgOrb::HostEnabled());
+    EXPECT_EQ(Pad(PAD_BUTTON_UP), PAD_BUTTON_UP);
+    EXPECT_EQ(Pad(PAD_BUTTON_UP | PAD_BUTTON_START), 0);
+    const bool talk = Orca::Status::Cap(Orca::Status::TALK_CAP);
+    EXPECT_EQ(m_lines->Take(), talk ? "orca overlay down pad\n" : "orca orb\n");
+    EXPECT_EQ(Pad(PAD_BUTTON_START), 0);
+    EXPECT_EQ(m_lines->Take(), "");  // Holding does not repeat.
+    EXPECT_EQ(Pad(0), 0);
+    EXPECT_EQ(m_lines->Take(), talk ? "orca overlay up pad\n" : "");
+    EXPECT_FALSE(OverlayKey::Pad().IsDown());
+    EXPECT_EQ(Pad(PAD_BUTTON_A | PAD_BUTTON_DOWN), PAD_BUTTON_A | PAD_BUTTON_DOWN);
+    EXPECT_EQ(Pad(PAD_BUTTON_B), PAD_BUTTON_B);
+    EXPECT_EQ(Pad(0), 0);
+    EXPECT_EQ(m_lines->Take(), "");  // No native menu navigation or actions.
+  }
 }
 
 TEST_F(OrcaUXHostUI, NativeDeltaDoesNotLightBlinkOrOpenTheOrb)
@@ -4770,10 +4812,10 @@ TEST_F(OrcaUXHostUI, NativeDeltaDoesNotLightBlinkOrOpenTheOrb)
   EXPECT_TRUE(HostView(NowMs()).feedback.pressed);
   // Rejecting the capture still exercises feedback routing without a renderer or a window.
   ScreenshotRequests().SetRenderer(nullptr);
-  Menu().FeedbackFinished(NowMs() - 5001);
+  FeedbackRequests().FeedbackFinished(NowMs() - 5001);
   EXPECT_TRUE(ClickControls(84, 36));
-  EXPECT_FALSE(Menu().At().open);
-  EXPECT_FALSE(Menu().FeedbackDue(NowMs()));  // Delta reached the feedback request/cooldown.
+  // Delta reached the feedback request/cooldown.
+  EXPECT_FALSE(FeedbackRequests().FeedbackDue(NowMs()));
   EXPECT_EQ(m_lines->Take(), "");
   UpdateControlsPointer(84, 36, false);
   UpdateControlsPointer(36, 36, false);
@@ -4784,25 +4826,27 @@ TEST_F(OrcaUXHostUI, NativeDeltaDoesNotLightBlinkOrOpenTheOrb)
   EXPECT_FALSE(view.feedback.pressed);
   UpdateControlsPointer(36, 36, true);
   EXPECT_TRUE(HostView(NowMs()).orb.pressed);
-  Menu().FeedbackFinished(NowMs() - 5001);
+  FeedbackRequests().FeedbackFinished(NowMs() - 5001);
   EXPECT_TRUE(ClickControls(36, 36));
-  EXPECT_TRUE(Menu().At().open);
-  EXPECT_TRUE(Menu().FeedbackDue(NowMs()));  // Orb clicks leave feedback ready.
-  Menu().FeedbackFinished(NowMs() - 5001);
-  EXPECT_EQ(m_lines->Take(), "");
+  EXPECT_TRUE(FeedbackRequests().FeedbackDue(NowMs()));  // Orb clicks leave feedback ready.
+  FeedbackRequests().FeedbackFinished(NowMs() - 5001);
+  EXPECT_EQ(m_lines->Take(), "orca overlay down keys\norca overlay up keys\n");
   UpdateControlsPointer(36, 36, false);
-  // A delta click also leaves an already-open orb menu untouched.
+  // Feedback stays independent of the page's overlay menu.
   EXPECT_TRUE(ClickControls(84, 36));
-  EXPECT_TRUE(Menu().At().open);
-  EXPECT_FALSE(Menu().FeedbackDue(NowMs()));
+  EXPECT_FALSE(FeedbackRequests().FeedbackDue(NowMs()));
   EXPECT_TRUE(ClickControls(36, 36));
-  EXPECT_FALSE(Menu().At().open);
+  EXPECT_EQ(m_lines->Take(), "orca overlay down keys\norca overlay up keys\n");
+  FeedbackRequests().FeedbackFinished(NowMs() - 5001);
+  EXPECT_TRUE(HandleHostKey(HostKey::Feedback));  // The platform's F8 path.
+  EXPECT_FALSE(FeedbackRequests().FeedbackDue(NowMs()));
+  EXPECT_EQ(m_lines->Take(), "");
   EXPECT_FALSE(HitControls(64, 16));
   EXPECT_FALSE(HitControls(60, 36));
   Orca::Status::SetAppCaps("talk");
   UpdateControlsPointer(84, 36, true);
   EXPECT_FALSE(Current().At(NowMs()).feedback.pressed);
-  Menu().FeedbackFinished(-5000);
+  FeedbackRequests().FeedbackFinished(-5000);
 }
 
 TEST_F(OrcaUXHostUI, DeltaDrawsARedDiscAndWhiteOutlineWithIndependentAlphaAndPressScale)
@@ -4892,12 +4936,10 @@ TEST_F(OrcaUXHostUI, LaterCapsReplaceTheAgreementIncludingDuringAShortcutPress)
   Orca::Status::SetAppCaps("talk hostui");
   ASSERT_TRUE(HostEnabled());
   Pad(0);
-  EXPECT_EQ(m_lines->Take(), "orca overlay up pad\n");  // Finish the original legacy press.
+  EXPECT_EQ(m_lines->Take(), "orca overlay up pad\n");
   Pad(PAD_BUTTON_UP | PAD_BUTTON_START);
-  ASSERT_TRUE(Menu().At().open);
-  EXPECT_EQ(m_lines->Take(), "");
+  EXPECT_EQ(m_lines->Take(), "orca overlay down pad\n");
   Orca::Status::SetAppCaps("talk");
-  EXPECT_FALSE(Menu().At().open);
   EXPECT_FALSE(HostEnabled());
   EXPECT_FALSE(HostView(NowMs()).on);
   EXPECT_FALSE(HitControls(36, 36));
@@ -4905,71 +4947,32 @@ TEST_F(OrcaUXHostUI, LaterCapsReplaceTheAgreementIncludingDuringAShortcutPress)
   EXPECT_EQ(HostVertices(), 0);
   ToggleHostMenu();
   ActivateHost(HostAction::Feedback);
-  ActivateHost(HostAction::Mute);
   Pad(0);
-  EXPECT_EQ(m_lines->Take(), "");  // No unmatched legacy release for a native press.
+  EXPECT_EQ(m_lines->Take(), "orca overlay up pad\n");  // Finish the same page press.
   Pad(PAD_BUTTON_UP | PAD_BUTTON_START);
   Pad(0);
   EXPECT_EQ(m_lines->Take(), "orca overlay down pad\norca overlay up pad\n");
   Orca::Status::SetAppCaps("talk hostui");
   ASSERT_TRUE(HostEnabled());
-  EXPECT_FALSE(Menu().At().open);
   ToggleHostMenu();
-  EXPECT_TRUE(Menu().At().open);
-  // Even off/on caps with no intervening UI poll discard the old menu.
+  EXPECT_EQ(m_lines->Take(), "orca overlay down keys\norca overlay up keys\n");
   Orca::Status::SetAppCaps("talk");
   Orca::Status::SetAppCaps("talk hostui");
-  EXPECT_FALSE(Menu().At().open);
-}
-
-TEST(OrcaUXYgOrb, HostMenuUsesTheCornerControllerNavigation)
-{
-  using namespace Orca::UX::YgOrb;
-  HostMenu menu;
-  EXPECT_FALSE(menu.Pad(PAD_BUTTON_A, false));
-  EXPECT_FALSE(menu.At().open);
-  EXPECT_FALSE(menu.Pad(PAD_BUTTON_UP | PAD_BUTTON_START, true));
-  ASSERT_TRUE(menu.At().open);
-  EXPECT_EQ(menu.At().selected, 0);  // Feedback is reachable first.
-  EXPECT_FALSE(menu.Pad(0, false));
-  EXPECT_EQ(menu.Pad(PAD_BUTTON_A, false), HostAction::Feedback);
-  EXPECT_FALSE(menu.At().open);
-  menu.Toggle();
-  menu.Pad(0, false);
-  menu.Pad(PAD_BUTTON_DOWN, false);
-  EXPECT_EQ(menu.At().selected, 1);
-  menu.Pad(PAD_BUTTON_DOWN, false);  // A hold never advances twice.
-  EXPECT_EQ(menu.At().selected, 1);
-  menu.Pad(0, false);
-  EXPECT_EQ(menu.Pad(PAD_BUTTON_A, false), HostAction::VolumeUp);
-  menu.Toggle();
-  menu.Pad(PAD_BUTTON_B, false);
-  EXPECT_FALSE(menu.At().open);
-  menu.Toggle();
-  menu.Move(-1, false);
-  EXPECT_EQ(menu.Move(0, true), HostAction::Controls);
-  EXPECT_EQ(HostLine(HostAction::VolumeUp), "orca host volume-up");
-  EXPECT_EQ(HostLine(HostAction::VolumeDown), "orca host volume-down");
-  EXPECT_EQ(HostLine(HostAction::Mute), "orca host mute");
-  EXPECT_EQ(HostLine(HostAction::ExitFullscreen), "orca host exit-fullscreen");
-  EXPECT_EQ(HostLine(HostAction::Leave), "orca host leave");
+  EXPECT_FALSE(HitControls(100, 80));
+  EXPECT_EQ(m_lines->Take(), "");
 }
 
 TEST(OrcaUXYgOrb, FeedbackWaitsForCompletionAndThenFiveSeconds)
 {
   using namespace Orca::UX::YgOrb;
-  HostMenu menu;
-  ASSERT_TRUE(menu.FeedbackDue(0));
-  EXPECT_FALSE(menu.FeedbackDue(100000));  // Still encoding.
-  menu.FeedbackFinished(100000);
-  EXPECT_FALSE(menu.FeedbackDue(104999));
-  EXPECT_TRUE(menu.FeedbackDue(105000));
-  menu.FeedbackFinished(105001);
-  EXPECT_FALSE(menu.FeedbackDue(110000));
-  for (int n = 0; n < 10; ++n)
-    EXPECT_TRUE(menu.HostDue(0));
-  EXPECT_FALSE(menu.HostDue(999));
-  EXPECT_TRUE(menu.HostDue(1000));
+  FeedbackCooldown feedback;
+  ASSERT_TRUE(feedback.FeedbackDue(0));
+  EXPECT_FALSE(feedback.FeedbackDue(100000));  // Still encoding.
+  feedback.FeedbackFinished(100000);
+  EXPECT_FALSE(feedback.FeedbackDue(104999));
+  EXPECT_TRUE(feedback.FeedbackDue(105000));
+  feedback.FeedbackFinished(105001);
+  EXPECT_FALSE(feedback.FeedbackDue(110000));
 }
 
 TEST(OrcaUXYgOrb, FeedbackPublishesACompletePngBeforeReturningItsLine)

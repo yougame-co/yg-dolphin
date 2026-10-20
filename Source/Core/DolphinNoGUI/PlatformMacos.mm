@@ -8,6 +8,8 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Status.h"
+#include "Core/Orca/UX/OverlayKey.h"
 #include "Core/Orca/UX/YgOrb.h"
 #include "Core/State.h"
 #include "Core/System.h"
@@ -24,6 +26,8 @@
 #include <climits>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <string_view>
 #include <thread>
 
 @interface Application : NSApplication
@@ -144,6 +148,11 @@
 
 namespace
 {
+void OutKey(std::string_view line)
+{
+  Embed::Out(std::string(line));
+}
+
 class PlatformMacOS : public Platform
 {
 public:
@@ -710,7 +719,8 @@ void PlatformMacOS::ProcessEvents()
         const bool down = [event type] == NSEventTypeLeftMouseDown;
         m_left_down = down;
         Orb::UpdateControlsPointer(pixel.x, bounds.size.height - pixel.y, down);
-        handled = down ? Orb::ClickControls(pixel.x, bounds.size.height - pixel.y) :
+        handled = down ? Orb::ClickControls(pixel.x, bounds.size.height - pixel.y,
+                                            IsEmbedded() ? OutKey : nullptr) :
                          Orb::HitControls(pixel.x, bounds.size.height - pixel.y);
       }
       // The embedded app owns keyboard focus and relays feedback / host-menu on stdin.
@@ -719,23 +729,32 @@ void PlatformMacOS::ProcessEvents()
         switch ([event keyCode])
         {
         case kVK_F8: handled = Orb::HandleHostKey(Orb::HostKey::Feedback); break;
-        case kVK_UpArrow:
-        case kVK_LeftArrow: handled = Orb::HandleHostKey(Orb::HostKey::Previous); break;
-        case kVK_DownArrow:
-        case kVK_RightArrow: handled = Orb::HandleHostKey(Orb::HostKey::Next); break;
-        case kVK_Return: handled = Orb::HandleHostKey(Orb::HostKey::Select); break;
-        case kVK_Escape: handled = Orb::HandleHostKey(Orb::HostKey::Close); break;
         case kVK_Tab:
-          if ([event modifierFlags] & NSEventModifierFlagShift)
-            handled = Orb::HandleHostKey(Orb::HostKey::Menu);
+          if (Orb::HostEnabled() && ([event modifierFlags] & NSEventModifierFlagShift) &&
+              !([event modifierFlags] & (NSEventModifierFlagControl | NSEventModifierFlagOption |
+                                         NSEventModifierFlagCommand)))
+          {
+            Orca::UX::OverlayKey::Emit(
+                Orca::UX::OverlayKey::Keys().Down(Orca::Status::Cap(Orca::Status::TALK_CAP)));
+            handled = true;
+          }
           break;
         }
+      }
+      else if (!IsEmbedded() &&
+               (([event type] == NSEventTypeKeyUp && [event keyCode] == kVK_Tab) ||
+                ([event type] == NSEventTypeFlagsChanged &&
+                 !([event modifierFlags] & NSEventModifierFlagShift))))
+      {
+        Orca::UX::OverlayKey::Emit(Orca::UX::OverlayKey::Keys().Up());
       }
     }
     if (event && !handled)
       [NSApp sendEvent:event];
     if (IsEmbedded())
       return;
+    if (![m_window isKeyWindow] || ![NSApp isActive])
+      Orca::UX::OverlayKey::Emit(Orca::UX::OverlayKey::Keys().Cancel());
 
     // Need to update if m_window becomes fullscreen
     m_window_fullscreen = [m_window styleMask] & NSWindowStyleMaskFullScreen;

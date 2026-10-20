@@ -464,23 +464,18 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
     if (!platform->IsEmbedded() && !(lParam & (1 << 30)))
     {
       namespace Orb = Orca::UX::YgOrb;
-      std::optional<Orb::HostKey> key;
-      switch (wParam)
-      {
-      case VK_F8: key = Orb::HostKey::Feedback; break;
-      case VK_UP:
-      case VK_LEFT: key = Orb::HostKey::Previous; break;
-      case VK_DOWN:
-      case VK_RIGHT: key = Orb::HostKey::Next; break;
-      case VK_RETURN: key = Orb::HostKey::Select; break;
-      case VK_ESCAPE: key = Orb::HostKey::Close; break;
-      case VK_TAB:
-        if (platform->m_shift_down)
-          key = Orb::HostKey::Menu;
-        break;
-      }
-      if (key && Orb::HandleHostKey(*key))
+      if (wParam == VK_F8 && Orb::HandleHostKey(Orb::HostKey::Feedback))
         return 0;
+    }
+    // Keep the same press/release semantics for the page, with or without a native window.
+    if ((platform->IsEmbedded() || Orca::UX::YgOrb::HostEnabled()) &&
+        !(lParam & (1 << 30)) && wParam == VK_TAB && platform->m_shift_down &&
+        !platform->m_control_down && !platform->m_alt_down)
+    {
+      Orca::UX::OverlayKey::Emit(
+          Orca::UX::OverlayKey::Keys().Down(Orca::Status::Cap(Orca::Status::TALK_CAP)),
+          platform->IsEmbedded() ? OutKey : nullptr);
+      return 0;
     }
     if (platform->IsEmbedded())
     {
@@ -495,9 +490,6 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
         Embed::Out("key escape");
       else if (wParam == VK_F11)
         Embed::Out("key fullscreen");
-      else if (wParam == VK_TAB && platform->m_shift_down && !platform->m_control_down &&
-               !platform->m_alt_down)
-        OutKey(Orca::UX::OverlayKey::Keys().Down(Orca::Status::Cap(Orca::Status::TALK_CAP)));
     }
     else if (wParam == VK_ESCAPE)
     {
@@ -507,8 +499,9 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
 
   // The end of a Shift+Tab press: Tab or Shift let go.
   case WM_KEYUP:
-    if (platform && platform->IsEmbedded() && (wParam == VK_TAB || wParam == VK_SHIFT))
-      OutKey(Orca::UX::OverlayKey::Keys().Up());
+    if (platform && (wParam == VK_TAB || wParam == VK_SHIFT))
+      Orca::UX::OverlayKey::Emit(Orca::UX::OverlayKey::Keys().Up(),
+                               platform->IsEmbedded() ? OutKey : nullptr);
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
   // The keyboard went elsewhere, so a Shift+Tab press still down never sees its key-up here.
@@ -519,8 +512,9 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
       platform->m_control_down = false;
       platform->m_alt_down = false;
     }
-    if (platform && platform->IsEmbedded())
-      OutKey(Orca::UX::OverlayKey::Keys().Cancel());
+    if (platform)
+      Orca::UX::OverlayKey::Emit(Orca::UX::OverlayKey::Keys().Cancel(),
+                               platform->IsEmbedded() ? OutKey : nullptr);
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
   // When embedded, Alt and F10 are game keys, so don't let them open the app's window menu.
@@ -555,7 +549,8 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
                                              static_cast<float>(GET_Y_LPARAM(lParam)), true);
     if (msg == WM_LBUTTONDOWN &&
         Orca::UX::YgOrb::ClickControls(static_cast<float>(GET_X_LPARAM(lParam)),
-                                      static_cast<float>(GET_Y_LPARAM(lParam))))
+                                      static_cast<float>(GET_Y_LPARAM(lParam)),
+                                      platform && platform->IsEmbedded() ? OutKey : nullptr))
       return 0;
     if (platform && platform->IsEmbedded())
     {

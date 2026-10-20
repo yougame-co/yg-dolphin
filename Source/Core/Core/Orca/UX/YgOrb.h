@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/UX/OverlayKey.h"
 
 // The YouGame button and its notice lines, drawn by Orca over a full-screen game in place of the
 // app's own button, which Orca's window covers. The app drives it over stdin:
@@ -29,8 +30,8 @@
 //       Hold-to-talk (cap "talk"): one row after the notices, replaced by each line. listen: the
 //       mic is open, name is who it goes to, text a hint or the live words; send: being sent; both
 //       stay until the next line. sent and error fade by themselves. off removes it.
-// On macOS clicks pass through to the app's button. On Windows a press on the disc prints
-// `orca orb` instead of `orca click`. Host-only: nothing here touches emulated state. This header
+// With hostui, a click on the disc emits the page's overlay tap. Without it, macOS clicks pass
+// through to the app and Windows prints `orca orb`. Host-only: no emulated state. This header
 // has no ImGui so DolphinNoGUI can include it; YgOrbDraw.h draws it.
 namespace Orca::UX::YgOrb
 {
@@ -181,7 +182,7 @@ public:
   std::uint64_t TalkRow(std::uint64_t generation, TalkEntry* out) const;
   // Whether (x, y), in view pixels, is on the button's disc.
   bool Hit(float x, float y) const;
-  // Native pointer target: 0 orb, 1 feedback, 2+ menu rows, -1 outside. A held press
+  // Native pointer target: 0 orb, 1 feedback, -1 outside. A held press
   // belongs to the control where it started, even when the pointer moves to its neighbour.
   void SetPointer(int control, bool down);
 
@@ -201,72 +202,42 @@ private:
   bool m_pointer_down = false;
 };
 
-// Host controls require agreed cap "hostui" and never write a pad or guest memory.
-// Up + Start opens this menu using the
-// existing corner shortcut; D-pad moves, A selects and B closes. The focused app relays its
-// feedback shortcut over stdin, without any host keyboard polling.
+// Host feedback requires agreed cap "hostui" and never writes a pad or guest memory.
+// The focused app relays its feedback shortcut over stdin, without host keyboard polling.
 enum class HostAction
 {
   Feedback,
-  VolumeUp,
-  VolumeDown,
-  Mute,
-  ExitFullscreen,
-  Leave,
-  Controls,
 };
-inline constexpr int HOST_ROWS = 7;
-std::string_view HostLabel(HostAction action);
-std::string_view HostLine(HostAction action);
 
-class HostMenu
+class FeedbackCooldown
 {
 public:
-  struct View
-  {
-    bool open = false;
-    int selected = 0;
-  };
-  void Toggle();
-  void Close();
-  View At() const;
-  std::optional<HostAction> Pad(u16 buttons, bool toggle);
-  std::optional<HostAction> Move(int direction, bool select);
   bool FeedbackDue(double now_ms);
   void FeedbackFinished(double now_ms);
-  bool HostDue(double now_ms);
 
 private:
   mutable std::mutex m_lock;
-  View m_view;
-  u16 m_buttons = 0;
   double m_feedback_at = -5000;
   bool m_feedback_pending = false;
-  std::deque<double> m_host_actions;
 };
 
 bool HostEnabled();
-HostMenu& Menu();
+FeedbackCooldown& FeedbackRequests();
 // The app's placement, or a visible default with agreed hostui before its first orb line.
 Model::View HostView(double now_ms);
-// Circular controls and menu rows, in the placement's device pixels.
-int ControlAt(const Place& place, bool menu_open, float x, float y);
+// Circular controls in the placement's device pixels.
+int ControlAt(const Place& place, float x, float y);
 void UpdateControlsPointer(float x, float y, bool down);
-// View pixels, matching the platform's input coordinates. Includes the feedback button and menu.
+// View pixels, matching the platform's input coordinates. Includes the feedback button.
 bool HitControls(float x, float y);
-bool ClickControls(float x, float y);
-void ToggleHostMenu();
+bool ClickControls(float x, float y, OverlayKey::Output output = nullptr);
+void ToggleHostMenu(OverlayKey::Output output = nullptr);
 enum class HostKey
 {
   Feedback,
   Menu,
-  Previous,
-  Next,
-  Select,
-  Close,
 };
-bool HandleHostKey(HostKey key);
-void NavigateHostPad(u16 buttons, bool toggle);
+bool HandleHostKey(HostKey key, OverlayKey::Output output = nullptr);
 void ActivateHost(HostAction action);
 // Publish a completed capture, then return its control line. Failure leaves no published file.
 // The temporary file is <directory>/<name>.tmp and the final name is always bare.
