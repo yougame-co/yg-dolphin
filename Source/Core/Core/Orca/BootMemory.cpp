@@ -7,15 +7,14 @@
 #include <cstdio>
 #include <new>
 
-#ifdef _WIN32
-#include <windows.h>
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
 #include <mach/mach.h>
 #include <sys/sysctl.h>
 #endif
 
 #include "Common/CommonTypes.h"
 #include "Common/Logging/LogManager.h"
+#include "Core/Orca/GpuDiagnostics.h"
 #include "Core/Orca/Status.h"
 
 namespace Orca::BootMemory
@@ -29,6 +28,10 @@ void BeginBoot()
 {
   s_first_frame.store(false, std::memory_order_relaxed);
   LogMemory();
+#ifdef _WIN32
+  GpuDiagnostics::ResetScene();
+  GpuDiagnostics::LogTdrOnce();
+#endif
 }
 
 void FirstFrame()
@@ -38,20 +41,11 @@ void FirstFrame()
 
 void LogMemory()
 {
+#ifdef _WIN32
+  GpuDiagnostics::LogMemory();
+#else
   constexpr u64 MB = 1024 * 1024;
   char line[160];
-#ifdef _WIN32
-  MEMORYSTATUSEX memory{};
-  memory.dwLength = sizeof(memory);
-  if (!GlobalMemoryStatusEx(&memory))
-    return;
-  std::snprintf(line, sizeof(line), "memory: total %llu MB, available %llu MB, commit %llu/%llu MB",
-                static_cast<unsigned long long>(memory.ullTotalPhys / MB),
-                static_cast<unsigned long long>(memory.ullAvailPhys / MB),
-                static_cast<unsigned long long>((memory.ullTotalPageFile - memory.ullAvailPageFile) /
-                                                MB),
-                static_cast<unsigned long long>(memory.ullTotalPageFile / MB));
-#else
   u64 total = 0, available = 0;
 #if defined(__APPLE__)
   size_t size = sizeof(total);
@@ -89,13 +83,13 @@ void LogMemory()
   std::snprintf(line, sizeof(line), "memory: total %llu MB, available %llu MB",
                 static_cast<unsigned long long>(total / MB),
                 static_cast<unsigned long long>(available / MB));
-#endif
   // Boot/error diagnostics go through the normal listeners even with category filtering off.
   if (auto* const logs = Common::Log::LogManager::GetInstance())
   {
     logs->LogWithFullPath(Common::Log::LogLevel::LNOTICE, Common::Log::LogType::ROLLBACK,
                           "Orca/BootMemory.cpp", 0, line);
   }
+#endif
 }
 
 bool Run(void (*step)(void*), void* context)
