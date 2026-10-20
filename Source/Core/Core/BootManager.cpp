@@ -68,12 +68,14 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     if (executable && executable->reader)
       launcher_bytes = executable->reader->GetBytes();
     Orca::Mod::ResolveBundle(executable ? &executable->path : nullptr, launcher_bytes);
-    if (!Orca::SessionActive() &&
+    if ((!Orca::SessionActive() || Orca::Mod::LocalPackRequested()) &&
         Orca::Mod::ResolvedKind() == Orca::Mod::BundleKind::Refused)
     {
       const std::string error = Orca::Mod::ResolvedError();
       Orca::Status::Error("profile", error);
-      PanicAlertFmt("{}", error);
+      // Local CLI failures return to the frontend immediately; a modal alert would wait for input.
+      if (!Orca::Mod::LocalPackRequested())
+        PanicAlertFmt("{}", error);
       return false;
     }
   }

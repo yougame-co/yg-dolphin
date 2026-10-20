@@ -22,11 +22,15 @@
 #include <picojson.h>
 
 #include "Common/FileUtil.h"
+#include "Common/Config/Config.h"
 #include "Common/IOFile.h"
+#include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 #include "Common/Version.h"
+#include "Common/WindowSystemInfo.h"
 #include "Core/Boot/Boot.h"
 #include "Core/Boot/ElfReader.h"
+#include "Core/BootManager.h"
 #include "Core/ConfigManager.h"
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Mod.h"
@@ -34,6 +38,7 @@
 #include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/System.h"
 
 namespace
 {
@@ -1213,6 +1218,55 @@ TEST(OrcaBundle, MalformedLocalPacksHaveAReason)
   refused("missing");
   ASSERT_TRUE(File::WriteStringToFile(root + "tree.json", "{}"));
   refused("tree.json");
+}
+
+TEST(OrcaBundleDeathTest, LocalRefusalReturnsBootFailureWithoutAnAlert)
+{
+#if GTEST_HAS_DEATH_TEST
+  const std::string old_style = testing::FLAGS_gtest_death_test_style;
+  testing::FLAGS_gtest_death_test_style = "threadsafe";
+  const Common::ScopeGuard restore_style(
+      [&] { testing::FLAGS_gtest_death_test_style = old_style; });
+  const std::string root = TempDir();
+  const Common::ScopeGuard done([&] { File::DeleteDirRecursively(root); });
+  for (const bool signed_pack : {false, true})
+  {
+    SCOPED_TRACE(signed_pack);
+    if (signed_pack)
+      ASSERT_TRUE(File::WriteStringToFile(root + "mod.sig", "invalid"));
+    else
+      ASSERT_TRUE(File::WriteStringToFile(root + "mod.json", "{"));
+    EXPECT_EXIT(
+        {
+          File::SetUserPath(D_USER_IDX, root + "user/");
+          Config::Init();
+          SConfig::Init();
+          Orca::Mod::SetLocalPack(root);
+          Common::RegisterMsgAlertHandler(
+              [](const char*, const char*, bool, Common::MsgType) -> bool { std::exit(2); });
+          auto* output = std::tmpfile();
+          if (!output)
+            std::exit(3);
+          Orca::Status::SetOutput(output);
+          auto boot = std::make_unique<BootParameters>(
+              BootParameters::Executable{"unused.dol", nullptr});
+          const bool booted = BootManager::BootCore(Core::System::GetInstance(), std::move(boot),
+                                                    WindowSystemInfo{});
+          const int code = Orca::Status::Finish();
+          std::rewind(output);
+          char line[1024];
+          std::string lines;
+          while (std::fgets(line, sizeof(line), output))
+            lines += line;
+          std::fputs(lines.c_str(), stderr);
+          std::exit(!booted && code == 1 &&
+                            Orca::Mod::ResolvedKind() == Orca::Mod::BundleKind::Refused ? 1 : 3);
+        },
+        testing::ExitedWithCode(1), "orca error profile YG Dolphin refused this game's pack:");
+  }
+#else
+  GTEST_SKIP() << "Subprocess assertions are unavailable on this platform";
+#endif
 }
 
 TEST(OrcaBundle, FindsItsFolder)
