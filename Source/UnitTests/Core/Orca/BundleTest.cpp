@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1074,11 +1075,24 @@ TEST(OrcaBundle, LocalTreeLoadsOfflineAndHasItsOwnKey)
   };
   write_tree();
   Orca::Mod::SetLocalPack(root);
+  auto* output = std::tmpfile();
+  ASSERT_NE(output, nullptr);
+  const Common::ScopeGuard output_done([&] {
+    Orca::Status::SetOutput(nullptr);
+    std::fclose(output);
+  });
+  Orca::Status::SetOutput(output);
   EXPECT_TRUE(Orca::SessionActive());
   EXPECT_TRUE(Orca::Mod::Requested());
   Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
   ASSERT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Tree)
       << Orca::Mod::ResolvedError();
+  std::rewind(output);
+  char line[1024];
+  ASSERT_NE(std::fgets(line, sizeof(line), output), nullptr);
+  EXPECT_EQ(line, fmt::format("orca pack local {} (unsigned, offline)\n",
+                             std::filesystem::path(root).parent_path().filename().string()));
+  EXPECT_EQ(std::string(line).find(root), std::string::npos);
   std::string error;
   auto profile = Orca::LoadModProfile(Orca::Mod::Dir(), &error);
   ASSERT_TRUE(profile) << error;
@@ -1148,9 +1162,22 @@ TEST(OrcaBundle, UnsignedLocalFlatLoadsAndSignedLoaderStaysStrict)
   ASSERT_TRUE(File::WriteStringToFile(root + "RSBE01.patches", PATCHES));
   ASSERT_TRUE(File::WriteStringToFile(root + "RSBE01.jitwarm", "warm"));
   Orca::Mod::SetLocalPack(root);
+  auto* output = std::tmpfile();
+  ASSERT_NE(output, nullptr);
+  const Common::ScopeGuard output_done([&] {
+    Orca::Status::SetOutput(nullptr);
+    std::fclose(output);
+  });
+  Orca::Status::SetOutput(output);
   Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
   ASSERT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Flat)
       << Orca::Mod::ResolvedError();
+  std::rewind(output);
+  char line[1024];
+  ASSERT_NE(std::fgets(line, sizeof(line), output), nullptr);
+  EXPECT_EQ(line, fmt::format("orca pack local {} (unsigned, offline)\n",
+                             std::filesystem::path(root).parent_path().filename().string()));
+  EXPECT_EQ(std::string(line).find(root), std::string::npos);
   ASSERT_NE(Orca::Mod::ResolvedFlat(), nullptr);
   std::string error;
   EXPECT_TRUE(Orca::LoadFlatProfile(*Orca::Mod::ResolvedFlat(), &error)) << error;

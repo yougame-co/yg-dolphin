@@ -386,7 +386,8 @@ static std::optional<FlatBundle> LoadFlatBundleImpl(const std::string& dir_in,
   if (!present.contains(std::string(FLAT_MANIFEST)))
     return fail("no mod.json");
 
-  // mod.sig first, by a key this Orca trusts: nobody else's mod.json reaches the JSON parser.
+  // Signed bundles check mod.sig first, by a key this Orca trusts, before parsing mod.json.
+  // Local packs read unsigned mod.json by design.
   std::string why;
   std::optional<std::pair<PublicKey, Signature>> signature;
   if (local)
@@ -608,9 +609,12 @@ static void ResolveBundleWithJail(const std::string* executable_path,
   if (dir.empty())
     return decide(BundleKind::None);
   const auto announce_local = [&] {
-    const std::string line = fmt::format("orca pack local {} (unsigned, offline)", dir);
-    NOTICE_LOG_FMT(BOOT, "{}", line);
-    Status::Line(line);
+    auto folder = StringToPath(dir).lexically_normal();
+    if (folder.filename().empty())
+      folder = folder.parent_path();
+    NOTICE_LOG_FMT(BOOT, "orca pack local {} (unsigned, offline)", dir);
+    Status::Line(fmt::format("orca pack local {} (unsigned, offline)",
+                            PathToString(folder.filename())));
   };
   if (local && File::Exists(dir + std::string(FLAT_SIGNATURE)))
     return refuse("--pack takes unsigned local packs; open signed community packs through YouGame");

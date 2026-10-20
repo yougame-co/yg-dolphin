@@ -190,10 +190,10 @@ For a launcher pack, pass its launcher with `-e` and your Brawl disc with
 has to meet the engine's format, file and version requirements. Invalid packs stop with a
 reason; they do not silently start plain Brawl.
 
-A successful selection prints this to stdout and the boot log:
+A successful selection prints the folder's name to stdout (the boot log keeps the full path):
 
 ```text
-orca pack local <folder> (unsigned, offline)
+orca pack local <folder-name> (unsigned, offline)
 ```
 
 Local-pack mode refuses **all online rooms**, including Casual, Ranked and friends rooms,

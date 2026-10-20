@@ -432,9 +432,14 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     const std::string_view arg(argv[i]);
     if (arg == "--")
       break;
-    if (arg == "--pack=" ||
-        (arg == "--pack" &&
-         (i + 1 == argc || argv[i + 1][0] == '\0' || argv[i + 1][0] == '-')))
+    const size_t equals = arg.find('=');
+    const std::string_view option = arg.substr(0, equals);
+    // Optparse accepts --pa and --pac too; --p is ambiguous with --platform.
+    const bool pack = option.size() >= 4 && std::string_view("--pack").starts_with(option);
+    if (pack &&
+        ((equals != std::string_view::npos && equals + 1 == arg.size()) ||
+         (equals == std::string_view::npos &&
+          (i + 1 == argc || argv[i + 1][0] == '\0' || argv[i + 1][0] == '-'))))
     {
       fmt::print(stderr, "orca error profile --pack needs a pack folder\n");
       return 1;
