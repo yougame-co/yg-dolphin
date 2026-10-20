@@ -107,12 +107,13 @@ std::string_view DifferingRule(const GuestMemory& m, const Orca::Mod::RankedRule
 GameResult FromRecord(const SetBlock::SetState& set, int index)
 {
   GameResult g;
-  g.from_set_block = true;
   if (index < 0 || index >= SetBlock::MAX_RECORDS)
   {
     g.why = "limit";
     return g;
   }
+  // A recorded game: the block, not the room's tally, ends its set (a "limit" game above never did).
+  g.from_set_block = true;
   const SetBlock::GameRecord& r = set.records[index];
   const auto value = [](u8 v) { return v == 0xFF ? -1 : int(v); };
   g.start = static_cast<int>(r.start & 0x7FFFFFFF);
