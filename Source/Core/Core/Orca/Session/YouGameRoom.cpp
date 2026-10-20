@@ -687,6 +687,9 @@ std::string WebSocketUrl(std::string url)
 // Why the rooms Worker refused the upgrade; only recognized body reasons reach this policy.
 std::string RefusalCode(const std::string& connect_error)
 {
+  if (connect_error.find("(HTTP 410)") != std::string::npos ||
+      connect_error.find(" host_gone") != std::string::npos)
+    return "host_gone";
   if (connect_error.find("(HTTP 403)") != std::string::npos)
     return "room_mismatch";
   if (connect_error.find("match complete") != std::string::npos)
@@ -698,6 +701,8 @@ std::string RefusalCode(const std::string& connect_error)
 
 std::string RefusalReason(const std::string& connect_error)
 {
+  if (RefusalCode(connect_error) == "host_gone")
+    return "Your friend left that game. Ask them for a new invite.";
   if (connect_error.find("(HTTP 403)") != std::string::npos)
   {
     if (connect_error.find(" host_older") != std::string::npos)
@@ -2342,11 +2347,15 @@ struct YouGameRoom::Impl
   void ReconnectFailed(const std::string& error)
   {
     reconnect_error = error;
+    if (RefusalCode(error) == "host_gone")
+    {
+      EndRecovery(RoomRefusalReason(error), "host_gone");
+      return;
+    }
     const auto now = Now();
     const bool seat_in_use = error.find("(HTTP 409)") != std::string::npos &&
                              error.find("seat in use") != std::string::npos;
-    const bool restart_refusal = error.find("(HTTP 410)") != std::string::npos || seat_in_use ||
-                                 error.find("(HTTP 503)") != std::string::npos;
+    const bool restart_refusal = seat_in_use || error.find("(HTTP 503)") != std::string::npos;
     const bool server_closed = reconnect_reason.starts_with("WebSocket closed by the server");
     // The server's live-seat window is 10 s; a held seat gets 12 s so the last try lands after it.
     const auto grace_window = seat_in_use ? INITIAL_SEAT_GRACE : REJOIN_REFUSAL_GRACE;
@@ -2463,8 +2472,7 @@ struct YouGameRoom::Impl
     auto job = std::make_unique<ReconnectJob>();
     ReconnectJob* const raw = job.get();
     const auto deadline = PublicDeadline().value_or(*reconnect.since + ROOM_HOLD);
-    const bool server_closed = reconnect_reason.starts_with("WebSocket closed by the server");
-    job->thread = std::thread([this, raw, deadline, server_closed] {
+    job->thread = std::thread([this, raw, deadline] {
       std::string ticket, store, ticket_error;
       // Ticket responses can include app-provided text. Log only this stage's fixed outcome.
       raw->error = "ticket-refresh-failed";
@@ -2493,7 +2501,7 @@ struct YouGameRoom::Impl
         }
         if (raw->error.find("(HTTP 4") == std::string::npos ||
             raw->error.find("seat in use") != std::string::npos ||
-            (server_closed && raw->error.find("(HTTP 410)") != std::string::npos))
+            RefusalCode(raw->error) == "host_gone")
           break;
       }
       raw->done = true;
@@ -2539,8 +2547,11 @@ struct YouGameRoom::Impl
     {
       // Legacy queue rooms retain status-only 409 refusals. Keep recognized 403 reasons so
       // game/mode refusals and version refusals get their own wording, even without recovery.
-      if (const auto http_status = error->find("(HTTP 409)"); http_status != std::string::npos)
-        error->erase(http_status + 10);
+      if (RefusalCode(*error) != "host_gone")
+      {
+        if (const auto http_status = error->find("(HTTP 409)"); http_status != std::string::npos)
+          error->erase(http_status + 10);
+      }
       return false;
     }
     return false;

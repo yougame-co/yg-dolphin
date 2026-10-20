@@ -2909,40 +2909,26 @@ TEST(OrcaRoomResilience, InitialSeatRetriesCoverTheLiveSeatWindowBeforeSoftFailu
   EXPECT_FALSE(recovered.back().reconnecting);
 }
 
-TEST(OrcaRoomResilience, ServerCloseRefusalsRetryForTenSecondsWithoutExtendingTheWindow)
+TEST(OrcaRoomResilience, HostGoneAfterServerCloseEndsWithoutRetrying)
 {
-  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 410)"})
+  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 410)",
+                              "WebSocket upgrade failed (HTTP 403) host_gone"})
   {
     SCOPED_TRACE(refusal);
-    std::vector<RoomTestStep> steps{
+    const auto trace = TraceRoomForTest(TraceOptions(), {
         {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
         {RK::SocketClose, 1000, "WebSocket closed by the server"},
-    };
-    for (const int ms : {1000, 1500, 2500, 4500, 8500})
-    {
-      steps.push_back({RK::PollReconnect, ms});
-      steps.push_back({RK::ConnectFailure, ms, refusal});
-    }
-    steps.push_back({RK::PollReconnect, 10999});
-    steps.push_back({RK::PollReconnect, 11000});
-    steps.push_back({RK::ConnectFailure, 11000, refusal});
-    const auto trace = TraceRoomForTest(TraceOptions(), steps);
-    EXPECT_EQ(trace[3].reconnect_attempts, 1u);  // immediate first reconnect
-    EXPECT_EQ(trace[4].reconnect_at, RoomClock::time_point{} + 1500ms);  // later backoff
-    EXPECT_EQ(trace[12].reconnect_at, RoomClock::time_point{} + 11000ms);
-    EXPECT_EQ(trace[13].reconnect_attempts, 5u);
-    EXPECT_EQ(trace[14].reconnect_attempts, 6u);
-    for (size_t i = 0; i + 1 < trace.size(); ++i)
-      EXPECT_NE(trace[i].state, RoomState::Ended) << i;
+        {RK::PollReconnect, 1000}, {RK::ConnectFailure, 1000, refusal},
+    });
     EXPECT_EQ(trace.back().state, RoomState::Ended);
-    EXPECT_EQ(trace.back().error_code, "network");
-    // A welcome inside that window keeps the session and resets only the outage.
-    steps.resize(13);
-    steps.push_back({RK::Message, 10000, RosterMessage("welcome")});
-    const auto recovered = TraceRoomForTest(TraceOptions(), steps);
-    EXPECT_EQ(recovered.back().state, RoomState::Waiting);
-    EXPECT_FALSE(recovered.back().reconnecting);
+    EXPECT_EQ(trace.back().error_code, "host_gone");
+    EXPECT_EQ(trace.back().status, "Your friend left that game. Ask them for a new invite.");
+    EXPECT_EQ(trace.back().reconnect_attempts, 1u);
   }
+}
+
+TEST(OrcaRoomResilience, ServerCloseRefusalsKeepTheirExistingRetryWindows)
+{
   // A held seat gets 12 s (the server's live-seat window is 10 s), then ends; a 503 (a rooms
   // isolate restarting until the site answers) is never final: it falls back to the room hold.
   for (const auto& refusal : {"WebSocket upgrade failed (HTTP 409) seat in use",
@@ -3226,6 +3212,28 @@ protected:
     return false;
   }
   void Action(const std::string& code, const std::string& body) { Request("/action/" + code, body); }
+  std::string JoinFailureStatus(const YouGameRoom& room)
+  {
+    const ScopedEnv session("ORCA_SESSION", "1");
+    auto* output = std::tmpfile();
+    EXPECT_NE(output, nullptr);
+    if (!output)
+      return {};
+    const Common::ScopeGuard cleanup([&] {
+      Orca::Status::SetOutput(nullptr);
+      Orca::Status::SetAppCaps("");
+      std::fclose(output);
+    });
+    Orca::Status::SetOutput(output);
+    Orca::Status::SetAppCaps("join");
+    Rollback::OnlineMatch::ReportJoinFailure(room.ErrorCode(), room.Status());
+    std::rewind(output);
+    char buffer[512];
+    std::string lines;
+    while (std::fgets(buffer, sizeof(buffer), output))
+      lines += buffer;
+    return lines;
+  }
   std::string url;
   std::vector<std::unique_ptr<ScopedEnv>> vars;
 };
@@ -3489,7 +3497,6 @@ TEST_F(OrcaRoomRuntime, RealFullRoomBodyEndsRecoveryAfterOneFreshTicketFallback)
 TEST_F(OrcaRoomRuntime, RealRestartRefusalBodiesRecoverAfterAServerClose)
 {
   const std::vector<std::pair<int, std::string>> refusals{
-      {410, R"({"error":"Your friend isn't in that game any more","code":"host_gone"})"},
       {409, R"({"error":"This seat is in use. Join again in a moment.","code":"seat_in_use"})"},
       {503, R"({"error":"Service Unavailable"})"},
   };
@@ -3512,6 +3519,46 @@ TEST_F(OrcaRoomRuntime, RealRestartRefusalBodiesRecoverAfterAServerClose)
   }
 }
 
+TEST_F(OrcaRoomRuntime, HostGoneRefusalsEndOnceWithTheExistingHostLeftState)
+{
+  const std::vector<std::pair<int, std::string>> refusals{
+      {410, R"({"error":"Your friend isn't in that game any more","code":"host_gone"})"},
+      {410, R"({"error":"Gone"})"},
+      {403, R"({"error":"Your friend isn't in that game any more","code":"host_gone"})"},
+      {409, R"({"code":"host_gone"})"},
+  };
+  for (const bool recovery : {false, true})
+  {
+    for (size_t i = 0; i < refusals.size(); ++i)
+    {
+      const auto& [status, body] = refusals[i];
+      SCOPED_TRACE(fmt::format("recovery={} status={} body={}", recovery, status, body));
+      const std::string code = fmt::format("gone{}{}", i, recovery ? 'r' : 'l');
+      const std::string refusal = fmt::format(R"({{"refuse":{},"refuse_status":{}}})", body, status);
+      auto room = Open(code, refusal, true, true, recovery);
+      ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+      EXPECT_EQ(room->ErrorCode(), "host_gone");
+      EXPECT_EQ(room->Status(), "Your friend left that game. Ask them for a new invite.");
+      EXPECT_EQ(JoinFailureStatus(*room), "orca state host-left host_gone\n");
+      room->Leave();
+      EXPECT_EQ(Connections(code), 1);
+      EXPECT_EQ(Request("/state/" + code).get("tickets").get<double>(), 1);
+      if (!recovery)
+        continue;
+      // A refusal during recovery is also final, including inside the old restart grace.
+      room = Open(code);
+      ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+      Action(code, fmt::format(R"({{"refuse":{},"refuse_status":{},"close":1013}})", body, status));
+      ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+      EXPECT_EQ(room->ErrorCode(), "host_gone");
+      EXPECT_EQ(room->Status(), "Your friend left that game. Ask them for a new invite.");
+      room->Leave();
+      EXPECT_EQ(Connections(code), 2);
+      EXPECT_EQ(Request("/state/" + code).get("tickets").get<double>(), 1);
+    }
+  }
+}
+
 TEST_F(OrcaRoomRuntime, RealExpiredTicketBodyKeepsTheKnownNetworkCode)
 {
   auto room = Open("expired401",
@@ -3520,6 +3567,8 @@ TEST_F(OrcaRoomRuntime, RealExpiredTicketBodyKeepsTheKnownNetworkCode)
   EXPECT_EQ(room->ErrorCode(), "network");
   EXPECT_EQ(room->Status(), "The invite expired; press Play again");
   EXPECT_EQ(Connections("expired401"), 1);
+  EXPECT_EQ(JoinFailureStatus(*room),
+            "orca error network The invite expired; press Play again\n");
 }
 
 TEST_F(OrcaRoomRuntime, RefusalBodiesKeepTheSiteCodeAndDistinguishVersionsFromGameOrMode)

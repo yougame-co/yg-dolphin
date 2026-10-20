@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -98,6 +99,9 @@ std::string RoomReopenCode(const std::string& previous_code, const std::string& 
 bool PumpRoomReopenForTest();
 // Adopts the room, waits for its failure, then pumps the actual fallback and one solo frame.
 int PumpRoomReopenFailureForTest(const std::function<void()>& wait_for_failure);
+
+// Refused joins whose host or match ended use the app's existing state events.
+void ReportJoinFailure(std::string_view code, std::string_view sentence);
 
 // Headless runtime fixture: pumps the same host event/keyframe path with a real room and a
 // supplied game history. The caller initializes Core::System's memory and owns `game`.

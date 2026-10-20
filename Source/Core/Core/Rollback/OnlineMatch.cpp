@@ -2059,11 +2059,8 @@ void FailJoin(Core::System& system, Match& match)
   const bool automatic = std::exchange(match.reopen_join, false);
   if (automatic)
     Orca::Status::Event("playing");
-  // A matchmade room that closed after its result (the opponent left before this game got in).
-  else if (code == "match-over")
-    Orca::Status::Event("host-left match-over");
   else
-    Orca::Status::Report(code.empty() ? "network" : code, sentence);
+    ReportJoinFailure(code, sentence);
   match.join_error_code.clear();
   match.join_error.clear();
   if (automatic || Soft())
@@ -4755,6 +4752,16 @@ void LogStats(const char* when)
       Orca::Online::Direct().line, stats.saves, stats.snapshot_every,
       match.port ? match.port->SaveMs() : 0.0, stats.late_seats,
       match.session->Error().empty() ? "" : "; ", match.session->Error());
+}
+
+void ReportJoinFailure(std::string_view code, std::string_view sentence)
+{
+  if (code == "host_gone")
+    Orca::Status::Event("host-left host_gone");
+  else if (code == "match-over")
+    Orca::Status::Event("host-left match-over");
+  else
+    Orca::Status::Report(code.empty() ? "network" : code, sentence);
 }
 
 bool Active()
