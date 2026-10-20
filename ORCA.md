@@ -2799,6 +2799,13 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.64
+
+- While you search for an opponent on your own, the screen says "Waiting for another player…"
+  with how long you have waited.
+- Windows graphics-crash diagnostics no longer read the Windows graphics timeout settings (as in
+  production's 0.3.63).
+
 ### 0.3.62
 
 - Windows: when the graphics driver stops responding, YG Dolphin's log now records memory use,
