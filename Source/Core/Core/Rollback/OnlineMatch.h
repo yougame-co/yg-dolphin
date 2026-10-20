@@ -96,6 +96,8 @@ std::string RoomReopenCode(const std::string& previous_code, const std::string& 
                             bool held, bool taken);
 // Pumps the actual reopen path against Online's room and returns whether it adopted a friend.
 bool PumpRoomReopenForTest();
+// Adopts the room, waits for its failure, then pumps the actual fallback and one solo frame.
+int PumpRoomReopenFailureForTest(const std::function<void()>& wait_for_failure);
 
 // Headless runtime fixture: pumps the same host event/keyframe path with a real room and a
 // supplied game history. The caller initializes Core::System's memory and owns `game`.
@@ -119,11 +121,12 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
                                          std::unique_ptr<Orca::Net::KeyframeStore> store,
                                          bool host_requested = false);
 
-// Runs Boundary's session loop with a supplied host session and short silence window.
+// Runs Boundary's session loop with a supplied session and short silence window.
 int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,
                                    const std::vector<int>& seated,
                                    const std::function<void()>& poll,
-                                   const std::function<std::vector<int>()>& left_in_play);
+                                   const std::function<std::vector<int>()>& left_in_play,
+                                   bool joining = false);
 
 // ---- The origin and fresh starts ----
 // Every Orca boots the same way up to its origin: port 1 plugged in with nothing pressed, ports 2-4

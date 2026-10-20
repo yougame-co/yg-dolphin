@@ -1157,6 +1157,8 @@ void KeepRoomOpen(Match& match)
     {
       if (Orca::Online::Joining().value_or(false))
       {
+        if (Pausing())
+          return;
         JoinInPlay(match, Orca::Online::Code(), true);
         match.reopen_join = true;
         return;
@@ -1226,6 +1228,7 @@ void KeepRoomOpen(Match& match)
                  reopen.empty() ? std::string("a new room") : "room " + reopen, code,
                  Orca::Online::StatusLine());
   Orca::Online::ShutdownInBackground();
+  // FailJoin keeps an automatic adoption on its own game even without "caps join".
   Orca::Online::StartRoom(reopen, false, true, !reopen.empty());
   match.reopen_backoff = std::min(match.reopen_backoff * 2, std::chrono::seconds(30));
   match.reopen_at = now + match.reopen_backoff;
@@ -2043,7 +2046,7 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
   return JoinPump::Waiting;
 }
 
-// A join that failed before this game changed: with "caps join" play on solo, otherwise stop.
+// A failed automatic reopen or a join with "caps join" plays on solo; other failed joins stop.
 void FailJoin(Core::System& system, Match& match)
 {
   const std::string sentence =
@@ -2053,7 +2056,8 @@ void FailJoin(Core::System& system, Match& match)
   if (code.empty())
     code = Orca::Online::RoomErrorCode();
   // An automatic friends-room join that failed falls back to a new room without an app error.
-  if (std::exchange(match.reopen_join, false))
+  const bool automatic = std::exchange(match.reopen_join, false);
+  if (automatic)
     Orca::Status::Event("playing");
   // A matchmade room that closed after its result (the opponent left before this game got in).
   else if (code == "match-over")
@@ -2062,7 +2066,7 @@ void FailJoin(Core::System& system, Match& match)
     Orca::Status::Report(code.empty() ? "network" : code, sentence);
   match.join_error_code.clear();
   match.join_error.clear();
-  if (Soft())
+  if (automatic || Soft())
   {
     Core::DisplayMessage(sentence, 6000);
     BecomeSolo(match, "the join failed", "playing", match.loaded_time == Clock::time_point{});
@@ -5094,6 +5098,27 @@ bool PumpRoomReopenForTest()
   return match.joining && match.reopen_join;
 }
 
+int PumpRoomReopenFailureForTest(const std::function<void()>& wait_for_failure)
+{
+  Core::System& system = Core::System::GetInstance();
+  Match match;
+  match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK, true);
+  match.running = 0;
+  KeepRoomOpen(match);
+  if (!match.joining || !match.reopen_join)
+    return -1;
+  wait_for_failure();
+  if (PumpJoin(match, &match.join_status) != JoinPump::Failed)
+    return -1;
+  FailJoin(system, match);
+  if (match.joining || match.finished || !match.reopen_pending)
+    return -1;
+  RunSolo(match, [](int) { return Pad{}; });
+  std::this_thread::sleep_until(*match.reopen_pending);
+  KeepRoomOpen(match);
+  return match.running;
+}
+
 static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGameRoom& room,
                                           Orca::Net::Game& game, Orca::Net::ReplayArchive replay,
                                           int current_frame, bool session_alive,
@@ -5179,11 +5204,14 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
 int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,
                                    const std::vector<int>& seated,
                                    const std::function<void()>& poll,
-                                   const std::function<std::vector<int>()>& left_in_play)
+                                   const std::function<std::vector<int>()>& left_in_play,
+                                   bool joining)
 {
   Core::System& system = Core::System::GetInstance();
   Match match;
   match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK, true);
+  match.joining = joining;
+  match.local_seat = joining ? 1 : 0;
   match.running = completed;
   match.seated.insert(seated.begin(), seated.end());
   match.session = std::move(session);

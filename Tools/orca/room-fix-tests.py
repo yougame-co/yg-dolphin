@@ -55,7 +55,7 @@ def send(ws, value, opcode=1):
 
 def peer_hello(cfg, peer="peer", acknowledged=False):
     data = {"k": "hello", "c": cfg.get("compatibility", "test"), "r": acknowledged,
-            "h": cfg.get("joining", True) and peer == "peer", "dl": int(cfg.get("direct", False))}
+            "h": cfg.get("host", cfg.get("joining", True)) and peer == "peer", "dl": int(cfg.get("direct", False))}
     if cfg.get("doubles") and not cfg.get("legacy"):
         slot = int(peer[-1]) if peer[-1].isdigit() else 1
         data.update(doubles=True, ct=f"{slot:02x}")

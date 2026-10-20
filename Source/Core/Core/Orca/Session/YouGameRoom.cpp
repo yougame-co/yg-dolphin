@@ -1225,7 +1225,8 @@ struct YouGameRoom::Impl
   int room_size = MAX_SEATS;
   std::string match_id;
   std::string last_match_id;  // The server may clear the roster match before sending its result.
-  bool rejoin_verdict_pending = false;
+  // A cleared recovery match may have missed its verdict; roster refreshes cannot extend the wait.
+  std::optional<Clock::time_point> rejoin_verdict_until;
   bool set_done = false;
   // The room's `set-over` arrived: it stays open after the verdict until the players leave.
   bool set_over = false;
@@ -1469,6 +1470,19 @@ struct YouGameRoom::Impl
       End(why, app_code);
   }
 
+  void EndExpiredHold(const std::string& why)
+  {
+    bool settled;
+    {
+      std::lock_guard lock(mutex);
+      settled = rejoin_verdict_until.has_value();
+    }
+    if (settled)
+      End("The match is over", "match-over");
+    else
+      EndRecovery(why);
+  }
+
   // `app_code`: the app's error code for this end (Orca::Status); empty for a normal leave.
   void End(std::string why, std::string app_code = "network")
   {
@@ -1493,6 +1507,7 @@ struct YouGameRoom::Impl
       room_recovery_until = {};
       public_self_hold_until.reset();
       public_peer_holds.clear();
+      rejoin_verdict_until.reset();
       host_away_until.reset();
       host_hold_until.reset();
     }
@@ -2264,7 +2279,7 @@ struct YouGameRoom::Impl
       {
         std::lock_guard lock(mutex);
         const std::string& match = match_id.empty() ? last_match_id : match_id;
-        decided = set_done || set_over ||
+        decided = set_done || set_over || rejoin_verdict_until ||
                   (close_code == CLOSE_MATCH_OVER &&
                    (match.empty() ? std::ranges::any_of(verdicts_seen, [](const auto& id) {
                       return id.ends_with("/$final");
@@ -2401,7 +2416,7 @@ struct YouGameRoom::Impl
       {
         if (reconnect_job)
           reconnect_job->cancel = true;
-        EndRecovery("Lost the connection to the room (hold-expired)");
+        EndExpiredHold("Lost the connection to the room (hold-expired)");
         return;
       }
       // Retry cutoff reached; keep reading a reachable room for its verdict.
@@ -3142,12 +3157,12 @@ struct YouGameRoom::Impl
       // that pending match's identity, so neither reports nor a new begin outrun its outcome.
       const bool held_match = id.empty() && QueueHold();
       std::lock_guard lock(mutex);
-      if (held_match && !match_id.empty())
-        rejoin_verdict_pending = true;
+      if (held_match && !match_id.empty() && !rejoin_verdict_until)
+        rejoin_verdict_until = Now() + ROOM_VERDICT_GRACE;
       if (!id.empty())
       {
         last_match_id = id;
-        rejoin_verdict_pending = false;
+        rejoin_verdict_until.reset();
       }
       if (id != match_id && !held_match)
       {
@@ -3165,7 +3180,7 @@ struct YouGameRoom::Impl
         match_id = std::move(id);
     }
     if (const auto it = m.find("participants");
-        !rejoin_verdict_pending && it != m.end() && it->second.is<picojson::array>())
+        !rejoin_verdict_until && it != m.end() && it->second.is<picojson::array>())
     {
       lobby_participants.clear();
       for (const auto& p : it->second.get<picojson::array>())
@@ -3724,7 +3739,7 @@ struct YouGameRoom::Impl
         }))
       return true;
     std::lock_guard lock(mutex);
-    return rejoin_verdict_pending || !input_holds.empty();
+    return rejoin_verdict_until || !input_holds.empty();
   }
 
   void ResultLine(const std::string& line)
@@ -3784,7 +3799,7 @@ struct YouGameRoom::Impl
       return;
     std::lock_guard lock(mutex);
     set_done = true;
-    rejoin_verdict_pending = false;
+    rejoin_verdict_until.reset();
     match_id.clear();
   }
 
@@ -3817,7 +3832,7 @@ struct YouGameRoom::Impl
         PublishRankedFinal(m, true);
         std::lock_guard lock(mutex);
         set_done = true;
-        rejoin_verdict_pending = false;
+        rejoin_verdict_until.reset();
         match_id.clear();
         // The server has settled the set. Keep the socket/outbox alive solely to
         // reconcile receipts, without letting a previous hold end that work.
@@ -3859,7 +3874,7 @@ struct YouGameRoom::Impl
     // The room stays: the host begins the next match (TryBegin).
     finish_sent = false;
     std::lock_guard lock(mutex);
-    rejoin_verdict_pending = false;
+    rejoin_verdict_until.reset();
     match_id.clear();
     return true;
   }
@@ -4286,9 +4301,10 @@ struct YouGameRoom::Impl
             std::ranges::any_of(public_peer_holds, [&](const auto& hold) {
               return !PublicHoldAliveLocked(hold.second, now);
             });
+        expired = expired || (rejoin_verdict_until && now >= *rejoin_verdict_until);
       }
       if (expired)
-        EndRecovery("room-hold-expired");
+        EndExpiredHold("room-hold-expired");
       return;
     }
     for (auto& [id, peer] : peers)
@@ -4361,8 +4377,8 @@ struct YouGameRoom::Impl
   {
     LobbyFields(m);
     // Settlement can clear the gameplay roster before its verdict reaches a recovering game.
-    // Keep the match's identities and session until result takes the normal completed path.
-    if (QueueRecovery() && rejoin_verdict_pending)
+    // Keep identities/session, including departures, until the verdict or its bounded wait ends.
+    if (QueueRecovery() && rejoin_verdict_until)
       return;
     if (m.count("host"))
       host = Str(m, "host");
@@ -4705,7 +4721,7 @@ struct YouGameRoom::Impl
         reconnect = {};
         {
           std::lock_guard lock(mutex);
-          if (!rejoin_verdict_pending)
+          if (!rejoin_verdict_until)
             public_self_hold_until.reset();
         }
         dropped = false;
@@ -4867,15 +4883,13 @@ struct YouGameRoom::Impl
       {
         std::lock_guard lock(mutex);
         set_over = true;
-        if (held && !set_done && !match_id.empty() &&
-            !verdicts_seen.contains(match_id + "/$final"))
-          rejoin_verdict_pending = true;
+        rejoin_verdict_until.reset();
       }
       NOTICE_LOG_FMT(NETPLAY, "Orca room: set over: the room stays open until the players leave "
                               "({} s at most)",
                      ms / 1000);
       Orca::UX::SetEnd::Current().SetOver(Orca::UX::SetEnd::NowMs());
-      if (held && !pending_ranked_final && !rejoin_verdict_pending)
+      if (held && !pending_ranked_final)
         End("The match is over", "match-over");
     }
     else if (t == "command-error")
@@ -5406,7 +5420,7 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
       return false;
     if (m_impl->QueueRecoveryLocked())
     {
-      if (m_impl->set_done || (m_impl->set_over && !m_impl->rejoin_verdict_pending))
+      if (m_impl->set_done || m_impl->set_over)
         return false;
       // While our room socket is away, input silence waits on our own reconnect hold.
       // A separately announced peer hold remains untouched throughout that reconnect.
@@ -5455,7 +5469,7 @@ bool YouGameRoom::RoomRecovering(Clock::time_point now) const
   if (!m_impl->RoomRecoveryLocked() || m_impl->state != RoomState::Waiting)
     return false;
   if (m_impl->QueueRecoveryLocked())
-    return !m_impl->set_done && (!m_impl->set_over || m_impl->rejoin_verdict_pending) &&
+    return !m_impl->set_done && !m_impl->set_over &&
            m_impl->PublicHoldAliveLocked(m_impl->WaitingDeadlineLocked(), now);
   return now < m_impl->room_recovery_until ||
          std::ranges::any_of(m_impl->input_holds,
