@@ -3378,14 +3378,14 @@ struct YouGameRoom::Impl
       return;
     const bool ranked = room_queue == "ranked";
     const int n = ranked ? ++ranked_sent : ++casual_sent;
-    // A ranked game from the match block is named by its fight's first frame, the same on both
+    // A ranked game is named by its fight's first frame, the same on both
     // machines whatever either missed.
     const std::string id = ranked && report.start >= 0 ? fmt::format("g{}", report.start) :
                                                          fmt::format("{}{}", ranked ? "g" : "c", n);
     if (ranked)
     {
       game_numbers[id] = report.number > 0 ? report.number : n;
-      if (report.start >= 0)
+      if (report.from_set_block)
         block_ids.insert(id);
       if (report.set_done)
       {

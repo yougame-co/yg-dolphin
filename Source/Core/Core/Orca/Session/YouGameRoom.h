@@ -176,6 +176,8 @@ struct GameReport
   // same on both machines; -1 for the legacy "g<n>"), its number in the set, and for the game that
   // ended the set, how (1: won by `set_winner_seat`, 2: void).
   int start = -1;
+  // Local provenance only: the ranked SetBlock, rather than the room's tally, ends this set.
+  bool from_set_block = false;
   int number = 0;
   int set_done = 0;
   int set_winner_seat = -1;

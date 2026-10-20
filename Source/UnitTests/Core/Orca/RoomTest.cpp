@@ -30,6 +30,7 @@
 #include "Common/WebSocket.h"
 #include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
+#include "Core/Orca/Games/Brawl/Results.h"
 #include "Core/Orca/Games/Generic/GenericModule.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/DirectLink.h"
@@ -1057,6 +1058,69 @@ TEST(OrcaRoomRecovery, RankedFinalRetriesAndReplaysUntilItsReceipt)
   ASSERT_EQ(finals.size(), 2u);
   EXPECT_EQ(finals[0], finals[1]);
   EXPECT_EQ(results, 3u);  // Two games, one final.
+}
+
+TEST(OrcaRoom, SceneRankedWinsWithStartFramesFinishThroughTheTally)
+{
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "ranked")},
+      {RK::Message, 0, QueueRoster("start", "ranked")},
+      {RK::GameStart, 1, "", 120}, {RK::ReportGame, 2, "1", 120}, {RK::Tick, 3},
+      {RK::Message, 4, R"({"t":"game-result","matchId":"queue-recovery-match","id":"g120","ranking":["me","peer"]})"},
+      {RK::GameStart, 5, "", 360}, {RK::ReportGame, 6, "2", 360}, {RK::Tick, 7},
+      {RK::Message, 8, R"({"t":"game-result","matchId":"queue-recovery-match","id":"g360","ranking":["me","peer"]})"},
+  });
+  std::vector<std::string> reports, finishes;
+  for (size_t i = 0; i < trace.size(); ++i)
+  {
+    for (const auto& wire : trace[i].sent)
+    {
+      picojson::value message;
+      ASSERT_TRUE(picojson::parse(message, wire).empty());
+      if (message.get("t").to_str() == "game-report")
+        reports.push_back(message.get("id").to_str());
+      if (message.get("t").to_str() == "finish")
+      {
+        EXPECT_EQ(i, trace.size() - 1);
+        EXPECT_EQ(message.get("winner").to_str(), "me");
+        EXPECT_EQ(message.get("matchId").to_str(), "queue-recovery-match");
+        finishes.push_back(wire);
+      }
+    }
+  }
+  EXPECT_EQ(reports, (std::vector<std::string>{"g120", "g360"}));
+  ASSERT_EQ(finishes.size(), 1u);
+  ASSERT_EQ(trace.back().results.size(), 1u);
+  EXPECT_NE(trace.back().results[0].find(R"("score":[2,0])"), std::string::npos);
+}
+
+TEST(OrcaRoom, SceneRankedGamesWithStartFramesVoidAtTheGameLimit)
+{
+  std::vector<RoomTestStep> steps{
+      {RK::Message, 0, QueueRoster("welcome", "ranked")},
+      {RK::Message, 0, QueueRoster("start", "ranked")}};
+  for (int n = 1; n <= SetTally::SET_GAMES; ++n)
+  {
+    steps.push_back({RK::ReportGame, n * 3, std::to_string(n), unsigned(n * 120)});
+    steps.push_back({RK::Tick, n * 3 + 1});
+    steps.push_back({RK::Message, n * 3 + 2,
+        fmt::format(R"({{"t":"game-result","matchId":"queue-recovery-match","id":"g{}","draw":true}})", n * 120)});
+  }
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+  size_t finishes = 0;
+  for (size_t i = 0; i < trace.size(); ++i)
+    for (const auto& wire : trace[i].sent)
+    {
+      picojson::value message;
+      ASSERT_TRUE(picojson::parse(message, wire).empty());
+      if (message.get("t").to_str() == "finish")
+      {
+        ++finishes;
+        EXPECT_EQ(i, trace.size() - 1);
+        EXPECT_TRUE(message.get("void").evaluate_as_boolean());
+      }
+    }
+  EXPECT_EQ(finishes, 1u);
 }
 
 TEST(OrcaRoomRecovery, RankedMissingEarlierReceiptReconcilesBeforeFinalScore)
@@ -5898,4 +5962,98 @@ TEST_F(OrcaRoomRuntime, HarnessMarkerFollowsActualBeginGameStartReportAndFinish)
     }
     EXPECT_EQ(seen.size(), 4u);
   }
+}
+
+TEST_F(OrcaRoomRuntime, SetBlockStillControlsTheEndAfterTwoAgreedWins)
+{
+  const std::string code = "block0361";
+  auto room = Open(code, R"({"joining":false,"queue":"ranked"})", false, false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  Action(code, R"({"message":{"t":"start","matchId":"block-set","participants":[{"id":"me","connectionId":"me","slot":0},{"id":"peer","connectionId":"peer","slot":1}]}})");
+  Orca::UX::SetBlock::SetState set;
+  for (int n = 1; n <= 3; ++n)
+  {
+    auto& record = set.records[n - 1];
+    record.start = n * 120;
+    record.winner = 0;
+    const auto result = Orca::UX::FromRecord(set, n - 1);
+    ASSERT_TRUE(result.from_set_block);
+    GameReport report;
+    report.kind = GameReport::Kind::Win;
+    report.winner_seat = result.winner_port;
+    report.start = result.start;
+    report.number = result.number;
+    report.from_set_block = result.from_set_block;
+    report.detail = result.DetailJson();
+    report.set_done = n == 3 ? 1 : 0;
+    report.set_winner_seat = n == 3 ? 0 : -1;
+    room->ReportGame(report);
+    ASSERT_TRUE(Wait([&] {
+      const auto state = Request("/state/" + code);
+      for (const auto& message : state.get("messages").get<picojson::array>())
+        if (message.get("t").to_str() == "game-report" &&
+            message.get("id").to_str() == "g" + std::to_string(n * 120))
+          return true;
+      return false;
+    }));
+    Action(code, fmt::format(R"({{"message":{{"t":"game-result","matchId":"block-set","id":"g{}","ranking":["me","peer"]}}}})", n * 120));
+    ASSERT_TRUE(Wait([&] { return room->KnownSetGames() >= std::min(n, 2); }));
+    if (n < 3)
+      EXPECT_FALSE(Sent(code, "finish"));
+  }
+  ASSERT_TRUE(Wait([&] { return Sent(code, "finish"); }));
+  const auto state = Request("/state/" + code);
+  int reports = 0, finishes = 0;
+  for (const auto& message : state.get("messages").get<picojson::array>())
+  {
+    if (message.get("t").to_str() == "game-report")
+      ++reports;
+    if (message.get("t").to_str() == "finish")
+    {
+      ++finishes;
+      EXPECT_EQ(reports, 3);
+      EXPECT_EQ(message.serialize(), R"({"matchId":"block-set","t":"finish","winner":"me"})");
+    }
+  }
+  EXPECT_EQ(finishes, 1);
+}
+
+TEST_F(OrcaRoomRuntime, SceneGameOneStartStillPrecedesTheForfeitingLeave)
+{
+  const std::string code = "scene0361";
+  auto room = Open(code, R"({"joining":false,"queue":"ranked"})", false, false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  Action(code, R"({"message":{"t":"start","matchId":"scene-leave","participants":[{"id":"me","connectionId":"me","slot":0},{"id":"peer","connectionId":"peer","slot":1}]}})");
+  Orca::UX::ResultsTracker tracker;
+  Orca::UX::Reading reading;
+  reading.scene = Orca::UX::Reading::Scene::Other;
+  tracker.Store(119, reading, 0);
+  reading.scene = Orca::UX::Reading::Scene::Fight;
+  tracker.Store(120, reading, 0);
+  std::vector<int> starts;
+  EXPECT_TRUE(tracker.Confirm(120, -1, &starts).empty());
+  ASSERT_EQ(starts, std::vector<int>{120});
+  room->ReportGameStart(starts[0]);
+  ASSERT_TRUE(Wait([&] { return Sent(code, "game-start"); }));
+  room->Leave();
+  const auto state = Request("/state/" + code);
+  int began = 0, left = 0;
+  for (const auto& message : state.get("messages").get<picojson::array>())
+  {
+    const auto type = message.get("t").to_str();
+    if (type == "game-start")
+    {
+      ++began;
+      EXPECT_EQ(message.serialize(), R"({"id":"g120","matchId":"scene-leave","t":"game-start"})");
+    }
+    if (type == "leave")
+    {
+      ++left;
+      EXPECT_EQ(began, 1);
+    }
+    EXPECT_NE(type, "game-report");
+    EXPECT_NE(type, "finish");
+  }
+  EXPECT_EQ(began, 1);
+  EXPECT_EQ(left, 1);
 }

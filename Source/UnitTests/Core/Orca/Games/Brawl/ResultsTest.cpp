@@ -273,6 +273,25 @@ TEST(OrcaResults, AGameIsAFightThatReachesItsResults)
   EXPECT_EQ(t.out[1].start, t.starts[1]);
 }
 
+TEST(OrcaResults, SceneResultsKeepTheirStartWithoutSetBlockProvenance)
+{
+  for (const Scene end : {Scene::Results, Scene::Other})
+  {
+    ResultsTracker tracker;
+    tracker.Store(119, At(Scene::Other), 0);
+    tracker.Store(120, At(Scene::Fight), 0);
+    tracker.Store(121, At(end), 0);
+    std::vector<int> starts;
+    const auto results = tracker.Confirm(121, -1, &starts);
+    ASSERT_EQ(starts, std::vector<int>{120});
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].start, 120);
+    EXPECT_FALSE(results[0].from_set_block);
+    EXPECT_EQ(results[0].set_done, 0);
+    EXPECT_EQ(results[0].kind, end == Scene::Results ? Kind::Win : Kind::Void);
+  }
+}
+
 TEST(OrcaResults, SceneGameStartsOnlyWhenItsFirstFightFrameIsFinal)
 {
   ResultsTracker tracker;

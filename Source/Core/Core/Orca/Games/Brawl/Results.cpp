@@ -107,6 +107,7 @@ std::string_view DifferingRule(const GuestMemory& m, const Orca::Mod::RankedRule
 GameResult FromRecord(const SetBlock::SetState& set, int index)
 {
   GameResult g;
+  g.from_set_block = true;
   if (index < 0 || index >= SetBlock::MAX_RECORDS)
   {
     g.why = "limit";

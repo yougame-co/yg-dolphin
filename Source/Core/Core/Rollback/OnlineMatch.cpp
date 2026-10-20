@@ -3570,6 +3570,7 @@ void ConfirmResults(Match& match)
     if (report.kind != Orca::Net::GameReport::Kind::Void)
       report.detail = r.DetailJson();
     report.start = r.start;
+    report.from_set_block = r.from_set_block;
     report.number = r.number;
     report.set_done = r.set_done;
     report.set_winner_seat = r.set_winner;
