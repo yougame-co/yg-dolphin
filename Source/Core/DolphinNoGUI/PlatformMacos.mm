@@ -172,6 +172,7 @@ protected:
 
 private:
   bool InitEmbedded();
+  void BeginGameActivity();
   // Embed mode, every main loop pass: keeps the window on top of the parent as it moves, resizes,
   // hides or changes Space, and decides whether the game gets input. Returns false once the parent
   // window is gone.
@@ -190,6 +191,7 @@ private:
   NSMenu* menuBar;
   AppDelegate* m_app_delegate;
   WindowDelegate* m_window_delegate;
+  id m_game_activity = nil;
 
   int m_window_x = Config::Get(Config::MAIN_RENDER_WINDOW_XPOS);
   int m_window_y = Config::Get(Config::MAIN_RENDER_WINDOW_YPOS);
@@ -224,6 +226,8 @@ private:
 
 PlatformMacOS::~PlatformMacOS()
 {
+  if (m_game_activity)
+    [[NSProcessInfo processInfo] endActivity:m_game_activity];
   if (m_occlusion_observer)
     [[NSNotificationCenter defaultCenter] removeObserver:m_occlusion_observer];
   if (m_activation_observer)
@@ -248,6 +252,7 @@ bool PlatformMacOS::Init()
   if (IsEmbedded())
     return InitEmbedded();
 
+  BeginGameActivity();
   [Application sharedApplication];
 
   m_app_delegate = [[AppDelegate alloc] initWithPlatform:this];
@@ -372,8 +377,20 @@ void PlatformMacOS::UpdateSurfaceVisible()
   }
 }
 
+void PlatformMacOS::BeginGameActivity()
+{
+  if (!Orca::SessionActive() || m_game_activity)
+    return;
+  m_game_activity = [[NSProcessInfo processInfo]
+      beginActivityWithOptions:(NSActivityUserInitiated | NSActivityLatencyCritical)
+                        reason:@"YG Dolphin game"];
+  if (m_game_activity)
+    NOTICE_LOG_FMT(CORE, "Orca: game activity holds user-initiated, latency-critical priority");
+}
+
 bool PlatformMacOS::InitEmbedded()
 {
+  BeginGameActivity();
   [Application sharedApplication];
   m_app_delegate = [[AppDelegate alloc] initWithPlatform:this];
   [NSApp setDelegate:m_app_delegate];
