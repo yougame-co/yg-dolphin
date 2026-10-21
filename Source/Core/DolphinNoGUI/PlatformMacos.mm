@@ -206,6 +206,8 @@ private:
   bool m_left_down = false;  // From this window's left mouse down/up events.
   Embed::Mac::QueryTimer m_parent_query{Embed::Mac::PARENT_QUERY_INTERVAL};
   Embed::Mac::QueryTimer m_above_query{Embed::Mac::ABOVE_QUERY_INTERVAL};
+  Embed::Mac::SettleGate m_parent_settle;
+  bool m_settle_wait_logged = false;
   bool m_parent_exists = false;
   bool m_parent_on_screen = false;
   pid_t m_parent_owner = 0;
@@ -399,10 +401,10 @@ bool PlatformMacOS::InitEmbedded()
   [m_window setHasShadow:NO];
   [m_window setIgnoresMouseEvents:YES];
   [m_window setAnimationBehavior:NSWindowAnimationBehaviorNone];
-  // Follow the app's window to any Space, including its full-screen one. TrackParent hides this
-  // window whenever the app's window is off screen.
-  [m_window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces |
-                                  NSWindowCollectionBehaviorFullScreenAuxiliary |
+  [m_window setLevel:NSNormalWindowLevel];
+  // Join only the active desktop Space. The host uses simple full screen; this panel must never
+  // accompany another app into a native full-screen Space.
+  [m_window setCollectionBehavior:NSWindowCollectionBehaviorMoveToActiveSpace |
                                   NSWindowCollectionBehaviorIgnoresCycle |
                                   NSWindowCollectionBehaviorTransient];
   [m_window setTitle:@"YG Dolphin"];
@@ -460,6 +462,11 @@ void PlatformMacOS::EmbedSetVisible(bool visible)
   if (!IsEmbedded())
     return;
   m_embed_visible = visible;
+  if (!visible)
+  {
+    m_parent_settle.Observe(std::chrono::steady_clock::now(), false, std::nullopt);
+    m_settle_wait_logged = false;
+  }
   TrackParent(true);
   UpdateSurfaceVisible();
 }
@@ -540,6 +547,13 @@ bool PlatformMacOS::TrackParent(bool force)
       m_parent_on_screen = on_screen;
       m_parent_owner = owner;
       m_parent_bounds = bounds;
+      std::optional<Embed::Mac::SettleGate::Bounds> settle_bounds;
+      if (exists)
+        settle_bounds = Embed::Mac::SettleGate::Bounds{bounds.origin.x, bounds.origin.y,
+                                                      bounds.size.width, bounds.size.height};
+      // Time spent waiting for WindowServer is not evidence that the returned bounds were stable.
+      m_parent_settle.Observe(std::chrono::steady_clock::now(), m_embed_visible && on_screen,
+                              settle_bounds);
     }
 
     if (!m_parent_exists)
@@ -547,6 +561,7 @@ bool PlatformMacOS::TrackParent(bool force)
       if (m_embed_on_screen)
         [m_window orderOut:nil];
       m_embed_on_screen = false;
+      m_settle_wait_logged = false;
       m_window_focus = false;
       // The app's window is gone without a "quit". Stop rather than run unseen with sound on.
       if (!m_parent_missing_since)
@@ -567,6 +582,7 @@ bool PlatformMacOS::TrackParent(bool force)
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         [m_window makeKeyAndOrderFront:NSApp];
         [m_window makeMainWindow];
+        [NSApp activateIgnoringOtherApps:YES];
         [[NSNotificationCenter defaultCenter] addObserver:NSApp
                                                 selector:@selector(shutdown)
                                                     name:NSWindowWillCloseNotification
@@ -584,7 +600,20 @@ bool PlatformMacOS::TrackParent(bool force)
 
     // Apply rect commands immediately using cached bounds, even between WindowServer queries.
     const CGRect bounds = m_parent_bounds;
-    const bool show = m_embed_visible && m_parent_on_screen;
+    bool show = m_embed_visible && m_parent_on_screen;
+    if (!show)
+      m_settle_wait_logged = false;
+    // MainLoop polls TrackParent even without new events. Only ordering in waits for settling;
+    // movement while visible and ordering out retain their immediate behavior.
+    if (show && !m_embed_on_screen && !m_parent_settle.Ready(now))
+    {
+      if (!m_settle_wait_logged)
+      {
+        fprintf(stderr, "Orca: waiting for the app's window to settle\n");
+        m_settle_wait_logged = true;
+      }
+      show = false;
+    }
     if (show)
     {
       // The rect is in pixels from the top left of the app window's frame, title bar included.
@@ -642,6 +671,7 @@ bool PlatformMacOS::TrackParent(bool force)
       {
         [m_window orderWindow:NSWindowAbove relativeTo:static_cast<NSInteger>(parent)];
         m_embed_on_screen = true;
+        m_settle_wait_logged = false;
       }
       if ([m_window isVisible])
       {
