@@ -2799,6 +2799,13 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.65
+
+- Faster start: the game boots at full speed until its first frame, and a warm start no longer
+  waits for the full check of Project+'s files (the check still runs in the background and must
+  pass before anything goes online). A warm Project+ start reaches its first frame several
+  seconds sooner.
+
 ### 0.3.64
 
 - Clicking the YouGame logo inside a game (full screen or theater) opens the same menu as
