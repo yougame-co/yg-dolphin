@@ -33,6 +33,8 @@ EXCLUDE=(Tools/orca-publish-public.sh ORCA_NOTES.md Tools/orca/xplat.py Tools/or
 DENY='(^|[^q])hbox|hungry ?box|\bcherl\b|\bcrunch|gmail\.com|/Users/|C:\\\\Users|~/Documents|\$HOME/Documents|brawl-dolphin/|xfinity|comcast'
 # The match-start timing tools drive YouGame's site with roster accounts too (a glob: git's pathspec).
 EXCLUDE+=('Tools/orca/match-latency*')
+# Agents' private verification notes (local paths, test accounts): never part of the source.
+EXCLUDE+=(notes)
 
 cd "$(git rev-parse --show-toplevel)"
 BASE=$(git rev-parse --verify "f84df020^{commit}") # Dolphin 2609, the fork point
@@ -42,7 +44,7 @@ src=$(git rev-parse --verify "$REF^{commit}")
 idx=$(mktemp)
 trap 'rm -f "$idx"' EXIT
 GIT_INDEX_FILE=$idx git read-tree "$src"
-GIT_INDEX_FILE=$idx git rm -q -f --cached --ignore-unmatch -- "${EXCLUDE[@]}"
+GIT_INDEX_FILE=$idx git rm -q -r -f --cached --ignore-unmatch -- "${EXCLUDE[@]}"
 tree=$(GIT_INDEX_FILE=$idx git write-tree)
 
 # Denylist check on every line Orca added since the fork point (Dolphin's own text is not ours).
