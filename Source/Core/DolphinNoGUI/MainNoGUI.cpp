@@ -41,6 +41,7 @@
 #include "Core/Orca/Activity.h"
 #include "Core/Orca/BootLogs.h"
 #include "Core/Orca/BootMemory.h"
+#include "Core/Orca/BootThrottle.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/Bundle.h"
@@ -54,6 +55,9 @@
 #include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/UX.h"
+#include "Core/Rollback/Diag.h"
+#include "Core/Rollback/Harness.h"
+#include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
 #include "DolphinNoGUI/Embed.h"
 #include "VideoCommon/Present.h"
@@ -113,10 +117,14 @@ static void PrintAlert(const char* text) noexcept
 #endif
 }
 
-// At the game's first frame, embedded: the boot logs the app turned on go off (Orca/BootLogs.h).
+// At the game's first frame: restore pacing; embedded boot logs go off (Orca/BootLogs.h).
 // On the CPU thread, so std::fprintf: a throw from there can't unwind (Orca/CrashNote.h).
 static void EndBootLogs()
 {
+  Orca::BootThrottle::Finish(Rollback::RingPort::Active() ||
+                             (Rollback::Harness::Active() && !Rollback::Diag::KeepThrottle()));
+  if (!s_embedded)
+    return;
   const std::string ended = Orca::BootLogs::EndAtFirstFrame();
   if (!ended.empty())
     std::fprintf(stderr, "Orca: boot logs off at the first frame: %s\n", ended.c_str());
@@ -741,11 +749,14 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   }
 
   bool booted = false;
+  Orca::BootThrottle::Begin();
+  Orca::Status::SetFirstFrameListener(EndBootLogs);
   Orca::BootMemory::Run([&] {
     booted = BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi);
   });
   if (!booted)
   {
+    Orca::BootThrottle::Finish(false);
     fprintf(stderr, "Could not boot the specified file\n");
     // In a session, the session status has already reported the error.
     if (embed.enabled && !Orca::SessionActive())

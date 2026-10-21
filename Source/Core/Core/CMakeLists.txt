@@ -511,6 +511,8 @@ add_library(core
   Orca/Activity.h
   Orca/BootLogs.cpp
   Orca/BootLogs.h
+  Orca/BootThrottle.cpp
+  Orca/BootThrottle.h
   Orca/BootMemory.cpp
   Orca/BootMemory.h
   Orca/Branding.cpp
