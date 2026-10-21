@@ -79,7 +79,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
         if self.path == "/api/multiplayer/ticket":
-            code = body["room"]
+            watching = "watch" in body
+            code = body["watch"] if watching else body["room"]
             with lock:
                 cfg = rooms[code]
                 cfg["tickets"] += 1
@@ -91,7 +92,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply({"url": f"http://127.0.0.1:{self.server.server_port}",
                             "ticket": f"loopback-fixture-{ticket_number}", "direct": cfg.get("direct", False),
                             "ice": [{"urls": "stun:127.0.0.1:9"}],
-                            **({"tourney": cfg["tourney"]} if "tourney" in cfg else {})})
+                            **({"tourney": cfg["tourney"]} if "tourney" in cfg else {}),
+                            **({"watch": f"/watch/{code}"} if watching else {})})
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return

@@ -22,6 +22,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
+#include "Common/ScopeGuard.h"
 
 #include "Core/AchievementManager.h"
 #include "Core/Boot/Boot.h"
@@ -107,6 +108,10 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
 
   // Orca rollback session: force the universal and the game profile's settings on both players.
   std::optional<Orca::Profile> orca_profile;
+  Common::ScopeGuard cancel_audit([&] {
+    if (orca_profile && orca_profile->boot_audit)
+      orca_profile->boot_audit->Cancel();
+  });
   if (Orca::SessionActive())
   {
     Orca::Status::State("booting");
@@ -337,6 +342,8 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
         wsi);
   }
   const bool initialized = Core::Init(system, std::move(boot), wsi);
+  if (initialized)
+    cancel_audit.Dismiss();
   if (initialized && orca_profile && orca_profile->boot_audit)
     Orca::BootAudit::WatchSession(orca_profile->boot_audit);
   return initialized;
@@ -344,13 +351,7 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
 
 void RestoreConfig()
 {
-  // Finish the audit even if an offline run stopped before it completed. Its refusal must reach
-  // the session's final status, rather than being left in a host job after shutdown.
-  if (const Orca::Profile* profile = Orca::ActiveProfile(); profile && profile->boot_audit &&
-      !profile->boot_audit->Wait())
-  {
-    Orca::Status::Error("profile", profile->boot_audit->Error());
-  }
+  Orca::BootAudit::CancelSession();
   Core::ShutdownWiiRoot();
 
   if (Core::WiiRootIsTemporary())

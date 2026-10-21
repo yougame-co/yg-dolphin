@@ -30,6 +30,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Rollback/ReplayStream.h"
 #include "Core/System.h"
 
 using namespace std::chrono_literals;
@@ -60,12 +61,17 @@ struct HeldHash
   std::atomic<int> calls{0};
   static Audit::Hasher Function(const std::shared_ptr<HeldHash>& held)
   {
-    return [held](const std::string& path) {
+    return [held](const std::string& path, const std::atomic<bool>& stop) {
       if (held->calls.fetch_add(1) == 0)
         held->entered.set_value();
-      if (held->result.wait_for(5s) != std::future_status::ready || !held->result.get())
+      const auto deadline = std::chrono::steady_clock::now() + 5s;
+      while (!stop && held->result.wait_for(10ms) != std::future_status::ready &&
+             std::chrono::steady_clock::now() < deadline)
+      {
+      }
+      if (stop || held->result.wait_for(0ms) != std::future_status::ready || !held->result.get())
         return std::string("different");
-      return Orca::HashFile(path);
+      return Orca::HashFile(path, &stop);
     };
   }
 };
@@ -239,10 +245,123 @@ TEST_F(OrcaBootAudit, ColdVerificationPopulatesAWarmRecordAndStillAudits)
   EXPECT_EQ(held->calls, 1);
 }
 
+TEST_F(OrcaBootAudit, CancelledHashNeverReturnsADigest)
+{
+  std::atomic<bool> stop{true};
+  EXPECT_TRUE(Orca::HashFile(path, &stop).empty());
+  stop = false;
+  EXPECT_EQ(Orca::HashFile(path, &stop), expected);
+  ASSERT_TRUE(File::WriteStringToFile(path, ""));
+  stop = true;
+  EXPECT_TRUE(Orca::HashFile(path, &stop).empty());
+}
+
+TEST_F(OrcaBootAudit, CancellationFinishesAtTheReadBoundaryAndPreservesAllRecords)
+{
+  const std::string card = dir + "/sd.raw";
+  ASSERT_TRUE(File::WriteStringToFile(card, "card fixture"));
+  const std::vector<FileToVerify> files{Entry(), {card, Orca::HashFile(card), "card refusal"}};
+  for (const bool warm : {false, true})
+  {
+    if (warm)
+      ASSERT_TRUE(Audit::Start(files, cache)->Wait());
+    std::vector<std::pair<std::string, std::string>> records;
+    std::vector<std::filesystem::file_time_type> times;
+    if (warm)
+    {
+      for (const auto& entry : std::filesystem::directory_iterator(StringToPath(cache)))
+      {
+        std::string contents;
+        ASSERT_TRUE(File::ReadFileToString(PathToString(entry.path()), contents));
+        records.emplace_back(PathToString(entry.path()), contents);
+        times.push_back(entry.last_write_time());
+      }
+      ASSERT_EQ(records.size(), 2u);
+    }
+    std::promise<void> reading;
+    std::promise<void> finish_chunk;
+    auto chunk = finish_chunk.get_future();
+    std::atomic<int> reads{0};
+    std::atomic<int> failures{0};
+    const auto audit = Audit::Start(files, cache, [&](const std::string& file,
+                                                     const std::atomic<bool>& stop) {
+      if (file == card)
+      {
+        // Hold one in-flight read; cancellation must take effect before another chunk begins.
+        ++reads;
+        reading.set_value();
+        if (chunk.wait_for(2s) != std::future_status::ready)
+          return std::string{};
+        if (!stop)
+          ++reads;
+      }
+      return Orca::HashFile(file, &stop);
+    });
+    EXPECT_EQ(audit->CacheHit(), warm);
+    audit->OnFailure([&] { ++failures; });
+    EXPECT_EQ(reading.get_future().wait_for(2s), std::future_status::ready);
+    audit->Cancel();
+    auto stopped = std::async(std::launch::async, [&] { return audit->Wait(); });
+    finish_chunk.set_value();
+    EXPECT_EQ(stopped.wait_for(500ms), std::future_status::ready);
+    EXPECT_FALSE(stopped.get());
+    EXPECT_EQ(reads, 1);
+    EXPECT_TRUE(audit->Error().empty());
+    audit->OnFailure([&] { ++failures; });
+    EXPECT_EQ(failures, 0);
+    if (!warm)
+    {
+      EXPECT_FALSE(File::Exists(cache));
+    }
+    for (std::size_t i = 0; i < records.size(); ++i)
+    {
+      std::string contents;
+      EXPECT_TRUE(File::ReadFileToString(records[i].first, contents));
+      EXPECT_EQ(contents, records[i].second);
+      EXPECT_TRUE(std::filesystem::last_write_time(StringToPath(records[i].first)) == times[i]);
+    }
+    std::atomic<int> calls{0};
+    const auto next = Audit::Start(files, cache, [&](const std::string& file,
+                                                   const std::atomic<bool>& stop) {
+      ++calls;
+      return Orca::HashFile(file, &stop);
+    });
+    EXPECT_EQ(next->CacheHit(), warm);
+    EXPECT_TRUE(next->Wait());
+    EXPECT_EQ(calls, 2);
+  }
+}
+
+TEST_F(OrcaBootAudit, DestructionCancelsTheWorker)
+{
+  const auto held = std::make_shared<HeldHash>();
+  auto audit = Start(HeldHash::Function(held));
+  ASSERT_EQ(held->entered.get_future().wait_for(2s), std::future_status::ready);
+  auto destroyed = std::async(std::launch::async, [&] { audit.reset(); });
+  EXPECT_EQ(destroyed.wait_for(500ms), std::future_status::ready);
+  destroyed.get();
+  EXPECT_FALSE(File::Exists(cache));
+}
+
+TEST_F(OrcaBootAudit, SessionCancellationReleasesOnlineStartWithoutARoom)
+{
+  const auto held = std::make_shared<HeldHash>();
+  const auto audit = Start(HeldHash::Function(held));
+  Activate(audit);
+  auto online = std::async(std::launch::async, [] { Orca::Online::StartRoom("cancelled", false); });
+  EXPECT_EQ(online.wait_for(30ms), std::future_status::timeout);
+  Orca::BootAudit::CancelSession();
+  EXPECT_EQ(online.wait_for(500ms), std::future_status::ready);
+  online.get();
+  EXPECT_FALSE(audit->Wait());
+  EXPECT_TRUE(audit->Error().empty());
+  EXPECT_EQ(Orca::Online::Transport(), nullptr);
+}
+
 TEST_F(OrcaBootAudit, FailedWarmAuditDropsTheRecord)
 {
   ASSERT_TRUE(Start()->Wait());
-  const auto warm = Start([](const std::string&) { return "mismatch"; });
+  const auto warm = Start([](const std::string&, const std::atomic<bool>&) { return "mismatch"; });
   EXPECT_TRUE(warm->CacheHit());
   EXPECT_FALSE(warm->Wait());
   EXPECT_EQ(warm->Error(), Entry().refusal);
@@ -296,7 +415,7 @@ TEST_F(OrcaBootAudit, PermissionDeniedCacheFileIsAMiss)
 
 TEST_F(OrcaBootAudit, ChangingAFileDuringTheAuditRefusesIt)
 {
-  const auto audit = Start([&](const std::string&) {
+  const auto audit = Start([&](const std::string&, const std::atomic<bool>&) {
     EXPECT_TRUE(File::WriteStringToFile(path, "changed file"));
     return expected;
   });
@@ -312,7 +431,7 @@ TEST_F(OrcaBootAuditDeathTest, FailureCompletedDuringInitializationStillEndsTheS
   ASSERT_EXIT(
       {
         SetEnv("ORCA_SESSION", "1");
-        const auto failed = Start([](const std::string&) { return "mismatch"; });
+        const auto failed = Start([](const std::string&, const std::atomic<bool>&) { return "mismatch"; });
         Activate(failed);
         if (failed->Wait())
           std::_Exit(1);
@@ -331,9 +450,9 @@ TEST_F(OrcaBootAudit, AllLauncherFilesAreAuditedOnEveryStart)
   const std::vector<FileToVerify> files{Entry(), {card, Orca::HashFile(card), "card refusal"}};
   EXPECT_TRUE(Audit::Start(files, cache)->Wait());
   std::atomic<int> calls = 0;
-  const auto warm = Audit::Start(files, cache, [&](const std::string& file) {
+  const auto warm = Audit::Start(files, cache, [&](const std::string& file, const std::atomic<bool>& stop) {
     ++calls;
-    return Orca::HashFile(file);
+    return Orca::HashFile(file, &stop);
   });
   EXPECT_TRUE(warm->CacheHit());
   EXPECT_TRUE(warm->Wait());
@@ -374,12 +493,14 @@ TEST_F(OrcaBootAuditDeathTest, FailedAuditRefusesStartAndStartRoomWithoutARoom)
         if (!output)
           std::_Exit(1);
         Orca::Status::SetOutput(output);
-        const auto failed = Start([](const std::string&) { return "mismatch"; });
+        const auto failed = Start([](const std::string&, const std::atomic<bool>&) { return "mismatch"; });
         Activate(failed);
         Orca::BootAudit::WatchSession(failed);
         Orca::Online::Start();
         Orca::Online::StartRoom("auditbad", true);
         Core::HostDispatchJobs(Core::System::GetInstance());
+        Orca::BootAudit::CancelSession();
+        failed->ReportFailure();
         std::rewind(output);
         std::string lines;
         char buffer[512];
@@ -455,11 +576,21 @@ protected:
     });
     EXPECT_EQ(has_started.wait_for(2s), std::future_status::ready);
     EXPECT_EQ(start.wait_for(50ms), std::future_status::timeout);
+    auto accessors = std::async(std::launch::async, [] {
+      return Orca::Online::Transport() == nullptr && Orca::Online::Seat() == -1 &&
+             Orca::Online::SeatName(0).empty() && Orca::Online::HelloControls().empty();
+    });
+    const bool responsive = accessors.wait_for(100ms) == std::future_status::ready;
+    EXPECT_TRUE(responsive);
+    if (responsive)
+      EXPECT_TRUE(accessors.get());
     const auto pending = Request("/state/auditpass");
     EXPECT_EQ(pending.get("tickets").get<double>(), 0);
     EXPECT_EQ(pending.get("connects").get<double>(), 0);
     held->release.set_value(pass);
     start.get();
+    if (!responsive)
+      accessors.get();
     if (!pass)
     {
       EXPECT_EQ(Orca::Online::Transport(), nullptr);
@@ -478,6 +609,84 @@ protected:
         std::this_thread::sleep_for(10ms);
     }
     EXPECT_GT(tickets, 0);
+  }
+  void CheckWatch(bool by_ticket, bool pass, bool abandon = false)
+  {
+    const auto old_source = Orca::GetEnv("ORCA_REPLAY_SOURCE");
+    const auto old_input = Orca::GetEnv("ORCA_TEST_REPLAY_IN");
+    const auto old_origin = Orca::GetEnv("ORCA_REPLAY_ROOMS_ORIGIN");
+    const Common::ScopeGuard restore([&] {
+      SetEnv("ORCA_REPLAY_SOURCE", old_source);
+      SetEnv("ORCA_TEST_REPLAY_IN", old_input);
+      SetEnv("ORCA_REPLAY_ROOMS_ORIGIN", old_origin);
+    });
+    SetEnv("ORCA_REPLAY_SOURCE", by_ticket ? "" : "ws://" + url.substr(7) + "/watch/auditpass");
+    SetEnv("ORCA_TEST_REPLAY_IN", by_ticket ? "watch:auditpass" : "");
+    SetEnv("ORCA_REPLAY_ROOMS_ORIGIN", url);
+    Request("/configure/auditpass", true);
+    ASSERT_TRUE(Start()->Wait());
+    const auto held = std::make_shared<HeldHash>();
+    const auto audit = Start(HeldHash::Function(held));
+    Activate(audit);
+    ASSERT_TRUE(audit->CacheHit());
+    auto player = Rollback::ReplayStream::Player::FromEnv();
+    ASSERT_NE(player, nullptr);
+    std::atomic<bool> stop{false};
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    std::string stopped;
+    Rollback::ReplayStream::PlayerHost host;
+    host.stop = [&](const std::string& why) { stopped = why; };
+    host.stopping = [&] { return stop || std::chrono::steady_clock::now() >= deadline; };
+    auto playing = std::async(std::launch::async, [&] {
+      int running = -1;
+      player->Step(Core::System::GetInstance(), host, &running, 0, 0, {});
+    });
+    EXPECT_EQ(playing.wait_for(100ms), std::future_status::timeout);
+    const auto pending = Request("/state/auditpass");
+    EXPECT_EQ(pending.get("tickets").get<double>(), 0);
+    EXPECT_EQ(pending.get("connects").get<double>(), 0);
+    if (abandon)
+    {
+      stop = true;
+      playing.get();
+      auto destroyed = std::async(std::launch::async, [&] { player.reset(); });
+      EXPECT_EQ(destroyed.wait_for(500ms), std::future_status::ready);
+      // Always release the fixture, so a regression fails without hanging the suite.
+      held->release.set_value(true);
+      destroyed.get();
+      EXPECT_TRUE(audit->Wait());
+      const auto abandoned = Request("/state/auditpass");
+      EXPECT_EQ(abandoned.get("tickets").get<double>(), 0);
+      EXPECT_EQ(abandoned.get("connects").get<double>(), 0);
+      return;
+    }
+    held->release.set_value(pass);
+    if (pass)
+    {
+      double connects = 0;
+      for (int attempt = 0; attempt < 100 && connects == 0; ++attempt)
+      {
+        connects = Request("/state/auditpass").get("connects").get<double>();
+        if (connects == 0)
+          std::this_thread::sleep_for(10ms);
+      }
+      EXPECT_GT(connects, 0);
+      EXPECT_EQ(Request("/state/auditpass").get("tickets").get<double>(), by_ticket ? 1 : 0);
+    }
+    else
+    {
+      EXPECT_EQ(playing.wait_for(2s), std::future_status::ready);
+    }
+    stop = true;
+    playing.get();
+    if (!pass)
+    {
+      EXPECT_TRUE(player->Over());
+      EXPECT_EQ(stopped, "The replay couldn't be played: " + Entry().refusal);
+      const auto refused = Request("/state/auditpass");
+      EXPECT_EQ(refused.get("tickets").get<double>(), 0);
+      EXPECT_EQ(refused.get("connects").get<double>(), 0);
+    }
   }
   std::string url, old_site, old_game, old_room, old_direct;
   bool configured = false;
@@ -500,7 +709,58 @@ TEST_F(OrcaBootAuditRoom, MismatchCannotRequestATicketOrOpenARoom)
   CheckStart(true, false);
 }
 
+TEST_F(OrcaBootAuditRoom, ProductWatchWaitsBeforeConnecting)
+{
+  CheckWatch(false, true);
+}
+
+TEST_F(OrcaBootAuditRoom, DevWatchWaitsBeforeRequestingATicket)
+{
+  CheckWatch(true, true);
+}
+
+TEST_F(OrcaBootAuditRoom, FailedAuditNeverRequestsAWatchTicketOrConnects)
+{
+  CheckWatch(false, false);
+  CheckWatch(true, false);
+}
+
+TEST_F(OrcaBootAuditRoom, WatchDestructionDoesNotWaitForTheAudit)
+{
+  CheckWatch(false, true, true);
+  CheckWatch(true, true, true);
+}
+
 using OrcaBootAuditRoomDeathTest = OrcaBootAuditRoom;
+
+TEST_F(OrcaBootAuditRoomDeathTest, FailedWatchAuditReportsTheProfileRefusalOnce)
+{
+  const ScopedDeathStyle death_style;
+  ASSERT_EXIT(
+      {
+        SetEnv("ORCA_SESSION", "1");
+        std::FILE* const output = std::tmpfile();
+        if (!output)
+          std::_Exit(1);
+        Orca::Status::SetOutput(output);
+        CheckWatch(false, false);
+        CheckWatch(true, false);
+        Orca::BootAudit::CancelSession();
+        std::rewind(output);
+        std::string lines;
+        char buffer[512];
+        while (std::fgets(buffer, sizeof(buffer), output))
+          lines += buffer;
+        const std::string refusal = "orca error profile " + Entry().refusal + "\n";
+        const auto first = lines.find(refusal);
+        std::_Exit(!HasFailure() && Orca::Status::ExitCode() == 1 &&
+                          first != std::string::npos &&
+                          lines.find("orca error ", first + refusal.size()) == std::string::npos
+                      ? 0
+                      : 1);
+      },
+      testing::ExitedWithCode(0), "");
+}
 
 TEST_F(OrcaBootAuditRoomDeathTest, ChangedBytesWithMatchingCacheIdentityRefuseBeforeOnline)
 {

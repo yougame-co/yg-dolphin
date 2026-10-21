@@ -257,13 +257,6 @@ namespace
 {
 void StartLocked(Net::RoomOptions options)
 {
-  // No room constructor (and therefore no queue request or ticket) until the full audit passes.
-  if (const Profile* profile = ActiveProfile(); profile && profile->boot_audit &&
-      !profile->boot_audit->Wait())
-  {
-    Status::Error("profile", profile->boot_audit->Error());
-    return;
-  }
   if (Mod::LocalPackRequested())
   {
     NOTICE_LOG_FMT(NETPLAY, "Orca: local packs are offline only; room refused");
@@ -297,6 +290,9 @@ void StartLocked(Net::RoomOptions options)
 
 void Start()
 {
+  // Accessors keep running while the audit hashes. No room constructor until it passes.
+  if (!BootAudit::WaitForOnline(BootAudit::SessionAudit()))
+    return;
   std::lock_guard lock(s_mutex);
   if (s_room)
     return;
@@ -308,6 +304,8 @@ void Start()
 
 void StartRoom(const std::string& code, bool joining, bool friends_room, bool join_if_taken)
 {
+  if (!BootAudit::WaitForOnline(BootAudit::SessionAudit()))
+    return;
   std::lock_guard lock(s_mutex);
   if (s_room)
     return;

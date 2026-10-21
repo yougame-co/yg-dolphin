@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -254,8 +255,9 @@ bool PrepareModBoot(Profile* profile, const std::string* executable_path,
 // ORCA_PROFILE: the launcher profile for a session that boots an executable; empty when unset.
 std::string LauncherProfileName();
 
-// XXH3-128 of a file as 32 lowercase hex digits; empty when it can't be read.
-std::string HashFile(const std::string& path);
+// XXH3-128 of a file as 32 lowercase hex digits; empty on a read failure or cancellation.
+// Cancellation is checked before each 8 MiB read and before returning the digest.
+std::string HashFile(const std::string& path, const std::atomic<bool>* stop = nullptr);
 
 // Why DiscIO::CreateDisc gave nothing for `disc_path`, as the end of an error line: no path, a file
 // that won't open or read (with the system's own reason), one cut short, or one that isn't a disc

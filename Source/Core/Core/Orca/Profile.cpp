@@ -569,6 +569,9 @@ std::vector<Profile::KeptCode> s_kept_code;
 
 void SetActiveProfile(std::optional<Profile> profile)
 {
+  if (s_active_profile && s_active_profile->boot_audit &&
+      (!profile || profile->boot_audit != s_active_profile->boot_audit))
+    s_active_profile->boot_audit->Cancel();
   s_active_profile = std::move(profile);
   s_boot_frames = 0;
   Mod::ResetGuards();
@@ -868,7 +871,7 @@ std::string LauncherProfileName()
   return value;
 }
 
-std::string HashFile(const std::string& path)
+std::string HashFile(const std::string& path, const std::atomic<bool>* stop)
 {
   File::IOFile file(path, "rb");
   if (!file)
@@ -882,6 +885,11 @@ std::string HashFile(const std::string& path)
   bool ok = true;
   while (remaining > 0)
   {
+    if (stop && stop->load(std::memory_order_relaxed))
+    {
+      ok = false;
+      break;
+    }
     const size_t n = static_cast<size_t>(std::min<u64>(remaining, buffer.size()));
     if (!file.ReadBytes(buffer.data(), n))
     {
@@ -893,7 +901,9 @@ std::string HashFile(const std::string& path)
   }
   const XXH128_hash_t hash = XXH3_128bits_digest(state);
   XXH3_freeState(state);
-  return ok ? fmt::format("{:016x}{:016x}", hash.high64, hash.low64) : std::string{};
+  return ok && (!stop || !stop->load(std::memory_order_relaxed)) ?
+             fmt::format("{:016x}{:016x}", hash.high64, hash.low64) :
+             std::string{};
 }
 
 // The system's reason for the last failed open or read. On Windows that's its own code and words

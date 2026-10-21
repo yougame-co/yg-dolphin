@@ -3,6 +3,7 @@
 
 #include "Core/Orca/BootAudit.h"
 
+#include <chrono>
 #include <filesystem>
 #include <system_error>
 #include <utility>
@@ -135,7 +136,11 @@ bool CacheRecord::Matches(const Identity& current, std::string_view expected) co
 }
 
 Audit::Audit(std::vector<FileToVerify> files, std::string cache_dir, Hasher hasher)
-    : m_files(std::move(files)), m_hasher(hasher ? std::move(hasher) : HashFile)
+    : m_files(std::move(files)),
+      m_hasher(hasher ? std::move(hasher) :
+                        [](const std::string& path, const std::atomic<bool>& stop) {
+                          return HashFile(path, &stop);
+                        })
 {
   for (const auto& file : m_files)
   {
@@ -152,7 +157,7 @@ Audit::Audit(std::vector<FileToVerify> files, std::string cache_dir, Hasher hash
 }
 
 std::shared_ptr<Audit> Audit::Start(std::vector<FileToVerify> files, std::string cache_dir,
-                                    Hasher hasher)
+                                   Hasher hasher)
 {
   return std::shared_ptr<Audit>(
       new Audit(std::move(files), std::move(cache_dir), std::move(hasher)));
@@ -160,6 +165,7 @@ std::shared_ptr<Audit> Audit::Start(std::vector<FileToVerify> files, std::string
 
 Audit::~Audit()
 {
+  Cancel();
   m_worker.join();
 }
 
@@ -167,32 +173,53 @@ void Audit::Run()
 {
   for (std::size_t i = 0; i < m_files.size(); ++i)
   {
+    if (m_stop.load(std::memory_order_relaxed))
+    {
+      Complete(false);
+      return;
+    }
     const auto& file = m_files[i];
-    const std::string hash = m_hasher(file.path);
+    const std::string hash = m_hasher(file.path, m_stop);
     const auto after = Identify(file.path);
     // A file replaced or edited during verification never supplies a cache record or goes online.
     const bool changed = m_identities[i] && after != m_identities[i];
     if (hash.empty() || hash != file.expected || changed)
     {
-      Drop(m_records[i]);
-      Complete(false, file.refusal);
+      Complete(false, file.refusal, i);
       return;
     }
-    if (after && m_identities[i])
-      Save(m_records[i], *after, hash);
   }
   Complete(true);
 }
 
-void Audit::Complete(bool passed, std::string error)
+void Audit::Complete(bool passed, std::string error, std::optional<std::size_t> failed)
 {
   std::function<void()> failure;
   {
     std::lock_guard lock(m_mutex);
+    // Publish cache changes only after the entire audit, serialized with Cancel. In particular,
+    // cancelling the SD read must leave the launcher's record unchanged too.
+    if (m_stop.load(std::memory_order_relaxed))
+    {
+      passed = false;
+      error.clear();
+    }
+    else if (passed)
+    {
+      for (std::size_t i = 0; i < m_files.size(); ++i)
+      {
+        if (m_identities[i])
+          Save(m_records[i], *m_identities[i], m_files[i].expected);
+      }
+    }
+    else if (failed)
+    {
+      Drop(m_records[*failed]);
+    }
     m_error = std::move(error);
     m_passed = passed;
     m_finished = true;
-    if (!m_passed)
+    if (!m_passed && !m_error.empty())
       failure = std::exchange(m_failure, {});
   }
   m_done.notify_all();
@@ -200,11 +227,29 @@ void Audit::Complete(bool passed, std::string error)
     failure();
 }
 
-bool Audit::Wait()
+bool Audit::Wait(const std::atomic<bool>* stop)
 {
   std::unique_lock lock(m_mutex);
-  m_done.wait(lock, [this] { return m_finished; });
+  if (stop)
+  {
+    // A watch worker can be destroyed independently of the session's audit.
+    while (!m_finished && !stop->load(std::memory_order_relaxed))
+      m_done.wait_for(lock, std::chrono::milliseconds(10));
+    if (stop->load(std::memory_order_relaxed))
+      return false;
+  }
+  else
+  {
+    m_done.wait(lock, [this] { return m_finished; });
+  }
   return m_passed;
+}
+
+void Audit::Cancel()
+{
+  std::lock_guard lock(m_mutex);
+  if (!m_finished)
+    m_stop.store(true, std::memory_order_relaxed);
 }
 
 std::string Audit::Error() const
@@ -213,17 +258,53 @@ std::string Audit::Error() const
   return m_error;
 }
 
+void Audit::ReportFailure()
+{
+  std::string error;
+  {
+    std::lock_guard lock(m_mutex);
+    if (!m_finished || m_passed || m_error.empty() || m_reported)
+      return;
+    m_reported = true;
+    error = m_error;
+  }
+  Status::Error("profile", error);
+}
+
 void Audit::OnFailure(std::function<void()> handler)
 {
   std::function<void()> failure;
   {
     std::lock_guard lock(m_mutex);
     m_failure = std::move(handler);
-    if (m_finished && !m_passed)
+    if (m_finished && !m_passed && !m_error.empty())
       failure = std::exchange(m_failure, {});
   }
   if (failure)
     failure();
+}
+
+std::shared_ptr<Audit> SessionAudit()
+{
+  const Profile* profile = ActiveProfile();
+  return profile ? profile->boot_audit : nullptr;
+}
+
+bool WaitForOnline(const std::shared_ptr<Audit>& audit, const std::atomic<bool>* stop)
+{
+  if (!audit || audit->Wait(stop))
+    return !stop || !stop->load(std::memory_order_relaxed);
+  audit->ReportFailure();
+  return false;
+}
+
+void CancelSession()
+{
+  if (const auto audit = SessionAudit())
+  {
+    audit->Cancel();
+    audit->ReportFailure();
+  }
 }
 
 void WatchSession(const std::shared_ptr<Audit>& audit)
@@ -236,7 +317,7 @@ void WatchSession(const std::shared_ptr<Audit>& audit)
           const Profile* active = ActiveProfile();
           if (failed && active && active->boot_audit == failed)
           {
-            Status::Error("profile", failed->Error());
+            failed->ReportFailure();
             Core::Stop(system);
           }
         },
