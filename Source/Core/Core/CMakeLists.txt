@@ -509,6 +509,8 @@ add_library(core
   NetPlayServer.h
   Orca/Activity.cpp
   Orca/Activity.h
+  Orca/BootAudit.cpp
+  Orca/BootAudit.h
   Orca/BootLogs.cpp
   Orca/BootLogs.h
   Orca/BootThrottle.cpp

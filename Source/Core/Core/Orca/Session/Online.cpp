@@ -28,6 +28,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/Config/SessionSettings.h"
+#include "Core/Orca/BootAudit.h"
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Engine/Module.h"
@@ -256,6 +257,13 @@ namespace
 {
 void StartLocked(Net::RoomOptions options)
 {
+  // No room constructor (and therefore no queue request or ticket) until the full audit passes.
+  if (const Profile* profile = ActiveProfile(); profile && profile->boot_audit &&
+      !profile->boot_audit->Wait())
+  {
+    Status::Error("profile", profile->boot_audit->Error());
+    return;
+  }
   if (Mod::LocalPackRequested())
   {
     NOTICE_LOG_FMT(NETPLAY, "Orca: local packs are offline only; room refused");

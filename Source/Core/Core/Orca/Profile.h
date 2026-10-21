@@ -32,6 +32,10 @@ class CPUThreadGuard;
 // Data/Sys/Orca/<GameID>.ini, which also names the disc revision and the frame boundary.
 namespace Orca
 {
+namespace BootAudit
+{
+class Audit;
+}
 struct Profile
 {
   // The profile's name: the disc's game ID for a disc profile (RSBE01), or the ORCA_PROFILE name
@@ -81,9 +85,11 @@ struct Profile
   // session opens it read-only.
   std::string sd_image;
   std::string sd_image_hash;
-  // Set at boot: the verified image's full path, which the session forces as the SD card path. Not
-  // part of the lobby key; the hash is.
+  // Set at boot: the image's full path, which the session forces as the read-only SD card path.
+  // A legacy launcher's audit must pass before going online. The key uses the expected hash.
   std::string sd_image_path;
+  // Host-only verification of a legacy launcher's files. Expected hashes above remain the key.
+  std::shared_ptr<BootAudit::Audit> boot_audit;
   // The title whose save seeds the session NAND (default: the booted title's own).
   std::optional<u64> save_title;
   // Set at boot: the game ID Dolphin gave the booted file (a loader's comes from its file name).
@@ -256,9 +262,10 @@ std::string HashFile(const std::string& path);
 // image. The app opens the disc before every run but never reads it, so a crash report needs this.
 std::string DiscOpenProblem(const std::string& disc_path);
 
-// A launcher profile's boot checks: the executable at `executable_path`, the disc at `disc_path`
-// and the SD image must match the profile. On success sets `profile->sd_image_path`; on failure,
-// `error` says why.
+// A launcher profile's boot checks: the disc must match, and a worker verifies the loader and SD
+// image. Cache misses wait for verification; hits can boot offline while the full audit runs.
+// Sets sd_image_path and boot_audit. Online start must await the audit; failures retain the old
+// profile refusal. On a synchronous failure, error says why.
 bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
                          const std::string& disc_path, std::string* error);
 

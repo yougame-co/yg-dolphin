@@ -40,6 +40,7 @@
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/Sram.h"
 #include "Core/HW/Wiimote.h"
+#include "Core/Orca/BootAudit.h"
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/Session/Session.h"
@@ -948,13 +949,6 @@ std::string DiscOpenProblem(const std::string& disc_path)
 bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
                          const std::string& disc_path, std::string* error)
 {
-  if (HashFile(executable_path) != profile->launcher_hash)
-  {
-    *error = fmt::format("Orca: {} is not the loader profile {} names", executable_path,
-                         profile->game_id);
-    return false;
-  }
-
   const std::unique_ptr<DiscIO::VolumeDisc> disc =
       disc_path.empty() ? nullptr : DiscIO::CreateDisc(disc_path);
   if (!disc)
@@ -974,20 +968,27 @@ bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
     return false;
   }
 
-  if (profile->sd_image.empty())
-    return true;
-  std::string folder;
-  SplitPath(executable_path, &folder, nullptr, nullptr);
-  const std::string image = folder + profile->sd_image;
-  if (HashFile(image) != profile->sd_image_hash)
+  std::vector<BootAudit::FileToVerify> files{{
+      executable_path, profile->launcher_hash,
+      fmt::format("Orca: {} is not the loader profile {} names", executable_path, profile->game_id)}};
+  if (!profile->sd_image.empty())
   {
-    *error = fmt::format("Orca: {} is missing or is not the SD card profile {} names", image,
-                         profile->game_id);
+    std::string folder;
+    SplitPath(executable_path, &folder, nullptr, nullptr);
+    const std::string image = folder + profile->sd_image;
+    files.push_back({image, profile->sd_image_hash,
+                     fmt::format("Orca: {} is missing or is not the SD card profile {} names", image,
+                                 profile->game_id)});
+    // Read-only, as before; a cache hit can run offline while its audit is pending.
+    profile->sd_image_path = image;
+  }
+  profile->boot_audit = BootAudit::Audit::Start(std::move(files),
+                                              File::GetUserPath(D_CACHE_IDX) + "OrcaBoot");
+  if (!profile->boot_audit->CacheHit() && !profile->boot_audit->Wait())
+  {
+    *error = profile->boot_audit->Error();
     return false;
   }
-  // The session's config layer points the SD card at this image (read-only), never at the player's
-  // own card.
-  profile->sd_image_path = image;
   return true;
 }
 

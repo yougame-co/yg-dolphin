@@ -37,6 +37,7 @@
 #include "Core/HW/Sram.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Orca/BootAudit.h"
 #include "Core/Orca/BootMemory.h"
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Profile.h"
@@ -335,11 +336,21 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
             std::move(boot->boot_session_data)),
         wsi);
   }
-  return Core::Init(system, std::move(boot), wsi);
+  const bool initialized = Core::Init(system, std::move(boot), wsi);
+  if (initialized && orca_profile && orca_profile->boot_audit)
+    Orca::BootAudit::WatchSession(orca_profile->boot_audit);
+  return initialized;
 }
 
 void RestoreConfig()
 {
+  // Finish the audit even if an offline run stopped before it completed. Its refusal must reach
+  // the session's final status, rather than being left in a host job after shutdown.
+  if (const Orca::Profile* profile = Orca::ActiveProfile(); profile && profile->boot_audit &&
+      !profile->boot_audit->Wait())
+  {
+    Orca::Status::Error("profile", profile->boot_audit->Error());
+  }
   Core::ShutdownWiiRoot();
 
   if (Core::WiiRootIsTemporary())
