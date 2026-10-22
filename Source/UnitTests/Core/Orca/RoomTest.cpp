@@ -3562,6 +3562,38 @@ TEST_F(OrcaRoomRuntime, RealFullRoomBodyEndsRecoveryAfterOneFreshTicketFallback)
   EXPECT_EQ(Request("/state/" + code).get("tickets").get<double>(), 2);
 }
 
+TEST_F(OrcaRoomRuntime, UnstableRefusalBodiesEndWithoutHeldSeatRetriesOrTicketRefresh)
+{
+  for (const bool recovery : {false, true})
+  {
+    for (const bool initial : {false, true})
+    {
+      if (!initial && !recovery)
+        continue;
+      // Only the recognized code determines this policy, even with unrelated body text.
+      for (const char* body : {R"({"error":"room unstable","code":"room_unstable"})",
+                               R"({"error":"This seat is in use.","code":"room_unstable"})"})
+      {
+        SCOPED_TRACE(fmt::format("recovery={} initial={} body={}", recovery, initial, body));
+        const std::string code = "unstref370";
+        const std::string refusal = fmt::format(R"({{"refuse":{},"refuse_status":409}})", body);
+        auto room = Open(code, initial ? refusal : "{}", true, true, recovery);
+        if (!initial)
+        {
+          ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+          Action(code, fmt::format(R"({{"refuse":{},"refuse_status":409,"close":1013}})", body));
+        }
+        ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+        EXPECT_EQ(room->ErrorCode(), "room-unstable");
+        EXPECT_EQ(room->Status(), "The room keeps disconnecting.");
+        room->Leave();
+        EXPECT_EQ(Connections(code), initial ? 1 : 2);
+        EXPECT_EQ(Request("/state/" + code).get("tickets").get<double>(), 1);
+      }
+    }
+  }
+}
+
 TEST_F(OrcaRoomRuntime, RealRestartRefusalBodiesRecoverAfterAServerClose)
 {
   const std::vector<std::pair<int, std::string>> refusals{
@@ -5361,6 +5393,85 @@ TEST_F(OrcaRoomRuntime, KeepRoomOpenReplacesUnstableCodesAndPreservesItsGiveUpBu
     EXPECT_EQ(lines.find(give_up, at + give_up.size()), std::string::npos);
     Orca::Online::Shutdown();
   }
+}
+
+TEST_F(OrcaRoomRuntime, KeepRoomOpenUnstableRefusalsImmediatelyOpenNewCodes)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv fresh_room("ORCA_TEST_ROOM", nullptr);
+  Orca::Status::SetAppCaps("join");
+  const Common::ScopeGuard cleanup([] {
+    Orca::Online::Shutdown();
+    Orca::Status::SetAppCaps("");
+  });
+  for (const bool initial : {false, true})
+  {
+    const std::string code = initial ? "uinitial370" : "urejoin370";
+    const std::string next = code + "n";
+    const std::string refusal =
+        R"({"joining":false,"refuse":{"error":"room unstable","code":"room_unstable"},"refuse_status":409})";
+    Request("/configure/" + code, initial ? refusal : R"({"joining":false})");
+    Orca::Online::StartRoom(code, false, true);
+    if (!initial)
+    {
+      ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
+      Action(code, R"({"refuse":{"error":"room unstable","code":"room_unstable"},"refuse_status":409,"close":1013})");
+    }
+    ASSERT_TRUE(Wait([] { return Orca::Online::RoomEnded(); }));
+    ASSERT_EQ(Orca::Online::RoomErrorCode(), "room-unstable");
+    Request("/configure/" + next, R"({"joining":false})");
+    SetEnv("ORCA_TEST_ROOM", next.c_str());
+    const auto attempts = Rollback::OnlineMatch::TraceRoomReopenForTest({0s, 1s}, [&] {
+      ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
+      EXPECT_EQ(Orca::Online::Code(), next);
+    });
+    EXPECT_EQ(attempts, (std::vector<unsigned>{1, 1}));
+    EXPECT_EQ(Connections(code), initial ? 1 : 2);
+    EXPECT_EQ(Connections(next), 1);
+    Orca::Online::Shutdown();
+  }
+}
+
+TEST_F(OrcaRoomRuntime, KeepRoomOpenHealthyReplacementEndsTheUnstableEpisode)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv fresh_room("ORCA_TEST_ROOM", "healthy370");
+  Orca::Status::SetAppCaps("join");
+  const Common::ScopeGuard cleanup([] {
+    Orca::Online::Shutdown();
+    Orca::Status::SetAppCaps("");
+  });
+  const std::string code = "healthy370";
+  Request("/configure/oldhealth370",
+          R"({"joining":false,"refuse":{"code":"room_unstable"},"refuse_status":409})");
+  Request("/configure/" + code, R"({"joining":false})");
+  Orca::Online::StartRoom("oldhealth370", false, true);
+  ASSERT_TRUE(Wait([] { return Orca::Online::RoomEnded(); }));
+  ASSERT_EQ(Orca::Online::RoomErrorCode(), "room-unstable");
+  int step = 0;
+  const auto attempts = Rollback::OnlineMatch::TraceRoomReopenForTest(
+      {0s, 1s, 300s, 301s, 1801s, 1802s, 1804s, 1805s}, [&] {
+        if (step <= 4 || step >= 6)
+        {
+          ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
+          EXPECT_EQ(Orca::Online::Code(), code);
+        }
+        if (step == 4)
+        {
+          // An ordinary final room loss after thirty minutes of healthy replacement hosting.
+          Action(code, R"({"close":4003})");
+          ASSERT_TRUE(Wait([] { return Orca::Online::RoomEnded(); }));
+          EXPECT_EQ(Orca::Online::RoomErrorCode(), "network");
+        }
+        ++step;
+      });
+  // The replacement keeps attempt 1 until exactly five healthy minutes have elapsed.
+  // The later ordinary loss starts at attempt 1 again, rather than giving up immediately.
+  EXPECT_EQ(attempts, (std::vector<unsigned>{1, 1, 1, 0, 0, 0, 1, 0}));
+  EXPECT_EQ(Connections("oldhealth370"), 1);
+  EXPECT_EQ(Connections(code), 2);
 }
 
 TEST_F(OrcaRoomRuntime, KeepRoomOpenStopsAfterTenFailuresOrFiveMinutesAndTellsTheAppOnce)

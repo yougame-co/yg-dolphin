@@ -185,6 +185,7 @@ struct Match
   bool room_lost = false;
   bool reopen_gave_up = false;
   bool unstable_reopening = false;
+  std::optional<Clock::time_point> unstable_hosted_since;
   unsigned reopen_attempts = 0;
   std::optional<Clock::time_point> network_failure_since;
   Clock::time_point room_lost_at{}, reopen_at{};
@@ -1079,6 +1080,7 @@ void ForgetRoom(Match& match)
   match.room_lost = false;
   match.reopen_gave_up = false;
   match.unstable_reopening = false;
+  match.unstable_hosted_since.reset();
   match.reopen_attempts = 0;
   match.network_failure_since.reset();
   match.reopen_backoff = {};
@@ -1189,7 +1191,18 @@ void KeepRoomOpen(Match& match, Clock::time_point now = Clock::now())
       }
       match.room_lost = false;
       match.reopen_gave_up = false;
-      // A WELCOME on a replacement room must not erase the unstable-room give-up budget.
+      // Keep the episode's budget across replacements until one hosts for five minutes
+      // without another room loss. An ordinary later outage gets its own budget.
+      if (match.unstable_reopening)
+      {
+        if (!match.unstable_hosted_since)
+          match.unstable_hosted_since = now;
+        if (now - *match.unstable_hosted_since >= std::chrono::minutes(5))
+        {
+          match.unstable_reopening = false;
+          match.unstable_hosted_since.reset();
+        }
+      }
       if (!match.unstable_reopening)
       {
         match.reopen_attempts = 0;
@@ -1207,6 +1220,7 @@ void KeepRoomOpen(Match& match, Clock::time_point now = Clock::now())
     }
     return;
   }
+  match.unstable_hosted_since.reset();
   // A session ends with its room: it fails at its next step and the host goes solo.
   if (match.session)
     return;

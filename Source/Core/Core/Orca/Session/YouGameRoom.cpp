@@ -689,6 +689,8 @@ std::string RefusalCode(const std::string& connect_error)
 {
   if (connect_error.find(" host_gone") != std::string::npos)
     return "host_gone";
+  if (connect_error.find(" room_unstable") != std::string::npos)
+    return "room-unstable";
   if (connect_error.find("(HTTP 403)") != std::string::npos)
     return "room_mismatch";
   if (connect_error.find("match complete") != std::string::npos)
@@ -702,6 +704,8 @@ std::string RefusalReason(const std::string& connect_error)
 {
   if (RefusalCode(connect_error) == "host_gone")
     return "Your friend left that game. Ask them for a new invite.";
+  if (RefusalCode(connect_error) == "room-unstable")
+    return "The room keeps disconnecting.";
   if (connect_error.find("(HTTP 403)") != std::string::npos)
   {
     if (connect_error.find(" host_older") != std::string::npos)
@@ -2388,9 +2392,10 @@ struct YouGameRoom::Impl
   void ReconnectFailed(const std::string& error)
   {
     reconnect_error = error;
-    if (RefusalCode(error) == "host_gone")
+    const std::string refusal_code = RefusalCode(error);
+    if (refusal_code == "host_gone" || refusal_code == "room-unstable")
     {
-      EndRecovery(RoomRefusalReason(error), "host_gone");
+      EndRecovery(RoomRefusalReason(error), refusal_code);
       return;
     }
     const auto now = Now();
@@ -2554,7 +2559,8 @@ struct YouGameRoom::Impl
         if (raw->error.find("(HTTP 4") == std::string::npos ||
             raw->error.find("seat in use") != std::string::npos ||
             (server_closed && raw->error.find("(HTTP 410)") != std::string::npos) ||
-            RefusalCode(raw->error) == "host_gone")
+            RefusalCode(raw->error) == "host_gone" ||
+            RefusalCode(raw->error) == "room-unstable")
           break;
       }
       raw->done = true;
@@ -2600,7 +2606,7 @@ struct YouGameRoom::Impl
     {
       // Legacy queue rooms retain status-only 409 refusals. Keep recognized 403 reasons so
       // game/mode refusals and version refusals get their own wording, even without recovery.
-      if (RefusalCode(*error) != "host_gone")
+      if (RefusalCode(*error) != "host_gone" && RefusalCode(*error) != "room-unstable")
       {
         if (const auto http_status = error->find("(HTTP 409)"); http_status != std::string::npos)
           error->erase(http_status + 10);
