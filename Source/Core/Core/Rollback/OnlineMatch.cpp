@@ -184,6 +184,7 @@ struct Match
   // growing backoff; `home_code` is the last room that worked.
   bool room_lost = false;
   bool reopen_gave_up = false;
+  bool unstable_reopening = false;
   unsigned reopen_attempts = 0;
   std::optional<Clock::time_point> network_failure_since;
   Clock::time_point room_lost_at{}, reopen_at{};
@@ -1077,6 +1078,7 @@ void ForgetRoom(Match& match)
   match.reopen_join = false;
   match.room_lost = false;
   match.reopen_gave_up = false;
+  match.unstable_reopening = false;
   match.reopen_attempts = 0;
   match.network_failure_since.reset();
   match.reopen_backoff = {};
@@ -1187,8 +1189,12 @@ void KeepRoomOpen(Match& match, Clock::time_point now = Clock::now())
       }
       match.room_lost = false;
       match.reopen_gave_up = false;
-      match.reopen_attempts = 0;
-      match.network_failure_since.reset();
+      // A WELCOME on a replacement room must not erase the unstable-room give-up budget.
+      if (!match.unstable_reopening)
+      {
+        match.reopen_attempts = 0;
+        match.network_failure_since.reset();
+      }
       match.reopen_backoff = {};
       match.home_code = Orca::Online::Code();
     }
@@ -1223,7 +1229,9 @@ void KeepRoomOpen(Match& match, Clock::time_point now = Clock::now())
   }
   if (match.reopen_gave_up)
     return;
-  if (code == "network")
+  if (code == "room-unstable")
+    match.unstable_reopening = true;
+  if (code == "network" || match.unstable_reopening)
   {
     if (!match.network_failure_since)
       match.network_failure_since = now;
@@ -1243,14 +1251,18 @@ void KeepRoomOpen(Match& match, Clock::time_point now = Clock::now())
     match.room_lost = true;
     match.room_lost_at = now;
     match.reopen_backoff = std::chrono::seconds(2);
-    match.reopen_at = now + match.reopen_backoff;
+    const auto delay = code == "room-unstable" ? std::chrono::seconds(0) : match.reopen_backoff;
+    match.reopen_at = now + delay;
     const std::string why = Orca::Online::StatusLine();
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: this game's room ended ({}: {}); another opens in {} s",
-                   code, why, match.reopen_backoff.count());
+                   code, why, delay.count());
     Core::DisplayMessage(why, 6000);
     if (Soft())
     {
-      if (Orca::Online::RoomTaken() || code == "room_full")
+      if (code == "room-unstable")
+        Orca::Status::Report("network", "The room keeps disconnecting. Opening a new room; "
+                                         "send your friend a new invite.");
+      else if (Orca::Online::RoomTaken() || code == "room_full")
         Orca::Status::Event("playing");
       else
         Orca::Status::Report("network", fmt::format("{}: your game opens its room again", why));
@@ -1261,7 +1273,8 @@ void KeepRoomOpen(Match& match, Clock::time_point now = Clock::now())
   // Forget queue codes before trying a private room, including on later retries.
   match.home_code = RoomReopenCode(match.home_code, Orca::Online::RoomQueue(),
                                    now - match.room_lost_at < ROOM_HOLD,
-                                   Orca::Online::RoomTaken() || code == "room_full");
+                                   Orca::Online::RoomTaken() || code == "room_full" ||
+                                       code == "room-unstable");
   if (now < match.reopen_at)
     return;
   const std::string reopen = match.home_code;
@@ -4804,7 +4817,7 @@ void ReportJoinFailure(std::string_view code, std::string_view sentence)
   else if (code == "match-over")
     Orca::Status::Event("host-left match-over");
   else
-    Orca::Status::Report(code.empty() ? "network" : code, sentence);
+    Orca::Status::Report(code.empty() || code == "room-unstable" ? "network" : code, sentence);
 }
 
 bool Active()

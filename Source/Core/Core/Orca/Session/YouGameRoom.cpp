@@ -997,6 +997,7 @@ struct YouGameRoom::Impl
   decltype(ws) test_held_socket;
   RoomReconnect reconnect;
   RoomReconnectBudget reconnect_budget;
+  RoomRejoinFlaps rejoin_flaps;
   bool dropped = false;
   bool initial_seat_retry = false;
   u32 jitter_sequence = 0;
@@ -2111,8 +2112,11 @@ struct YouGameRoom::Impl
     const auto cap = reconnect.UpgradeCap(Now(), PublicDeadline());
     std::lock_guard lock(mutex);
     const auto age = std::chrono::duration_cast<std::chrono::seconds>(Now() - ticket_minted);
-    return fmt::format("attempt={} close-code={} ticket_age={} cap_ms={} close-reason={} last-error={}",
+    return fmt::format("attempt={} close-code={} ticket_age={} cap_ms={} short-lived={} window_s={} "
+                       "close-reason={} last-error={}",
                        reconnect.attempts, reconnect_close_code, age.count(), cap.count(),
+                       rejoin_flaps.Count(Now()),
+                       std::chrono::duration_cast<std::chrono::seconds>(RoomRejoinFlaps::WINDOW).count(),
                        reconnect_reason, reconnect_error.empty() ? "none" : reconnect_error);
   }
 
@@ -2218,12 +2222,29 @@ struct YouGameRoom::Impl
     }
   }
 
-  bool StartReconnect(unsigned close_code, const std::string& why)
+  bool StartReconnect(unsigned close_code, const std::string& why, bool socket_failed = true)
   {
     const auto now = Now();
     const bool retry = reconnect.since.has_value();
     // All recovery rooms share the hold, close-code finality and reconnect backoff.
-    if (!RoomRecovery() || !reconnect.Start(now, close_code, ReconnectJitter()))
+    if (!RoomRecovery() || FinalRoomClose(close_code))
+      return false;
+    // Deliberate client test cuts exercise the reconnect budget, not server instability.
+    if (!socket_failed)
+      rejoin_flaps.welcome.reset();
+    if (!retry && socket_failed && rejoin_flaps.Lost(now))
+    {
+      CaptureSocketLoss(why);
+      reconnect_close_code = close_code;
+      reconnect_reason = why;
+      reconnect_error.clear();
+      reconnect_logged = false;
+      ReconnectOutcome("room-unstable", false);
+      End("The room keeps disconnecting.", "room-unstable");
+      ws->Close(4001);
+      return true;
+    }
+    if (!reconnect.Start(now, close_code, ReconnectJitter()))
       return false;
     dropped = true;
     if (QueueRecovery())
@@ -2293,8 +2314,10 @@ struct YouGameRoom::Impl
     return true;
   }
 
-  bool OnSocketClose(unsigned close_code, const std::string& why)
+  bool OnSocketClose(unsigned close_code, const std::string& why, bool socket_failed = true)
   {
+    if (State() == RoomState::Ended)
+      return false;
     // A server-decided public set never reconnects after its final room close.
     if (QueueRecovery())
     {
@@ -2319,7 +2342,7 @@ struct YouGameRoom::Impl
         return false;
       }
     }
-    if (StartReconnect(close_code, why))
+    if (StartReconnect(close_code, why, socket_failed))
       return true;
     CaptureSocketLoss(why);
     if (close_code == CLOSE_MATCH_OVER)
@@ -2748,7 +2771,7 @@ struct YouGameRoom::Impl
                      blackout->from_s, blackout->to_s, blackout->room_before_s);
         dropped = true;
         // All recovery rooms exercise the real reconnect path in the test hook.
-        if (RoomRecovery() && OnSocketClose(0, "test-blackout"))
+        if (RoomRecovery() && OnSocketClose(0, "test-blackout", false))
           continue;
         // The hook can test queue drops too, without changing their recovery policy.
         test_held_socket = std::move(ws);
@@ -2762,7 +2785,7 @@ struct YouGameRoom::Impl
         dropped = true;
         const unsigned test_close_code = Env("ORCA_TEST_ROOM_CLOSE_CODE") == "1013" ? 1013 : 0;
         // All recovery rooms exercise the real reconnect path in the test hook.
-        if (RoomRecovery() && OnSocketClose(test_close_code, "test-drop"))
+        if (RoomRecovery() && OnSocketClose(test_close_code, "test-drop", false))
           continue;
         End("Lost the connection to the room (test drop)");
         break;
@@ -4759,6 +4782,8 @@ struct YouGameRoom::Impl
           return;
         }
         ReconnectOutcome(kept_session ? "same-seat" : "same-seat-fresh-drop-in", kept_session);
+        if (held_seat)
+          rejoin_flaps.Rejoined(Now());
         reconnect = {};
         {
           std::lock_guard lock(mutex);

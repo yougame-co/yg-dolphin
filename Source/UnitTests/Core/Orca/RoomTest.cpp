@@ -5025,6 +5025,98 @@ TEST_F(OrcaRoomRuntime, FriendsAutomaticReopenWaitsUntilAfterThePause)
   EXPECT_EQ(Orca::Online::Code(), code);
 }
 
+TEST(OrcaRoomResilience, FourShortLivedRejoinsEndTheRoomExactlyOnce)
+{
+  std::vector<RoomTestStep> steps{{RK::Message, 0, RosterMessage("welcome")},
+                                 {RK::SocketClose, 100, "WebSocket closed by the server"}};
+  for (int i = 1; i <= 4; ++i)
+  {
+    steps.push_back({RK::Message, i * 1000, RosterMessage("welcome")});
+    steps.push_back({RK::SocketClose, i * 1000 + 100, "WebSocket closed by the server"});
+  }
+  steps.push_back({RK::SocketClose, 5000, "WebSocket closed by the server"});
+  steps.push_back({RK::Tick, 6000});
+  const auto trace = TraceRoomForTest(TraceOptions(), steps);
+  unsigned endings = 0;
+  for (size_t i = 0; i < trace.size(); ++i)
+  {
+    EXPECT_EQ(trace[i].state == RoomState::Ended, i >= 9);
+    for (const auto& line : trace[i].notices)
+    {
+      if (line.find("ended room-unstable") != std::string::npos)
+      {
+        ++endings;
+        EXPECT_EQ(line.find("room-away self eof"), 0u);
+        EXPECT_NE(line.find("short-lived=4 window_s=300"), std::string::npos);
+      }
+    }
+  }
+  EXPECT_EQ(endings, 1u);
+  EXPECT_EQ(trace.back().error_code, "room-unstable");
+}
+
+TEST(OrcaRoomResilience, LongLivedRejoinsNeitherCountNorResetShortLivedHistory)
+{
+  RoomRejoinFlaps flaps;
+  const auto start = RoomClock::time_point{};
+  EXPECT_FALSE(flaps.Lost(start));  // The initial socket isn't a rejoin.
+  for (const auto seconds : {1, 2, 3})
+  {
+    flaps.Rejoined(start + std::chrono::seconds(seconds));
+    EXPECT_FALSE(flaps.Lost(start + std::chrono::seconds(seconds) + 1ms));
+    EXPECT_FALSE(flaps.Lost(start + std::chrono::seconds(seconds) + 2ms));
+  }
+  for (const auto seconds : {4, 65, 127})
+  {
+    flaps.Rejoined(start + std::chrono::seconds(seconds));
+    EXPECT_FALSE(flaps.Lost(start + std::chrono::seconds(seconds) + 60s));
+    EXPECT_EQ(flaps.Count(start + std::chrono::seconds(seconds) + 60s), 3u);
+  }
+  flaps.Rejoined(start + 188s);
+  EXPECT_TRUE(flaps.Lost(start + 188s + 59999ms));
+}
+
+TEST(OrcaRoomResilience, ShortLivedRejoinsOutsideTheRollingWindowNeverEndTheRoom)
+{
+  RoomRejoinFlaps flaps;
+  const auto start = RoomClock::time_point{};
+  std::vector<RoomTestStep> steps{{RK::Message, 0, RosterMessage("welcome")},
+                                 {RK::SocketClose, 0, "WebSocket closed by the server"}};
+  for (int i = 0; i < 10; ++i)
+  {
+    flaps.Rejoined(start + i * 100s);
+    EXPECT_FALSE(flaps.Lost(start + i * 100s + 1ms));
+    EXPECT_LE(flaps.Count(start + i * 100s + 1ms), 3u);
+    steps.push_back({RK::Message, i * 100000 + 80000, RosterMessage("welcome")});
+    steps.push_back({RK::SocketClose, i * 100000 + 99999, "WebSocket closed by the server"});
+  }
+  const auto trace = TraceRoomForTest(TraceOptions(), steps);
+  for (const auto& snapshot : trace)
+    EXPECT_NE(snapshot.state, RoomState::Ended);
+  EXPECT_EQ(flaps.Count(start + 1200s + 1ms), 0u);
+}
+
+TEST(OrcaRoomResilience, ThreeShortLivedRejoinsAndHealthyRejoinsKeepTheRoom)
+{
+  std::vector<RoomTestStep> steps{{RK::Message, 0, RosterMessage("welcome")},
+                                 {RK::SocketClose, 0, "WebSocket closed by the server"}};
+  for (int i = 1; i <= 3; ++i)
+  {
+    steps.push_back({RK::Message, i * 1000, RosterMessage("welcome")});
+    steps.push_back({RK::SocketClose, i * 1000 + 1, "WebSocket closed by the server"});
+  }
+  for (int i = 0; i < 3; ++i)
+  {
+    steps.push_back({RK::Message, i * 61000 + 4000, RosterMessage("welcome")});
+    steps.push_back({RK::SocketClose, i * 61000 + 64000, "WebSocket closed by the server"});
+  }
+  const auto trace = TraceRoomForTest(TraceOptions(), steps);
+  for (const auto& snapshot : trace)
+    EXPECT_NE(snapshot.state, RoomState::Ended);
+  ASSERT_FALSE(trace.back().notices.empty());
+  EXPECT_NE(trace.back().notices.back().find("short-lived=3 window_s=300"), std::string::npos);
+}
+
 TEST(OrcaRoomResilience, ReconnectUpgradeCapsGrowWithinTheOriginalHold)
 {
   const auto trace = TraceRoomForTest(TraceOptions(), {
@@ -5163,6 +5255,105 @@ TEST_F(OrcaRoomRuntime, ReconnectAllowsASlowTicketMintOnItsWorkerAndCancelsLeave
   const auto start = RoomClock::now();
   room->Leave();
   EXPECT_LT(RoomClock::now() - start, 2s);
+}
+
+TEST_F(OrcaRoomRuntime, KeepRoomOpenReplacesUnstableCodesAndPreservesItsGiveUpBudget)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv fresh_room("ORCA_TEST_ROOM", nullptr);
+  Orca::Status::SetAppCaps("join");
+  const Common::ScopeGuard cleanup([] {
+    Orca::Online::Shutdown();
+    Orca::Status::SetAppCaps("");
+  });
+  for (const bool time_limit : {false, true})
+  {
+    SCOPED_TRACE(time_limit);
+    const auto room_code = [&](int number) {
+      return fmt::format("flap370{}x{}", time_limit ? 1 : 0, number);
+    };
+    Request("/configure/" + room_code(0), R"({"joining":false})");
+    Orca::Online::StartRoom(room_code(0), false, true);
+    const auto end_unstable = [&] {
+      ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
+      auto* room = static_cast<YouGameRoom*>(Orca::Online::Transport());
+      ASSERT_NE(room, nullptr);
+      for (int i = 0; i < 5; ++i)
+      {
+        ASSERT_TRUE(Wait([&] { return room->RoundTripMs() >= 0; }));
+        u32 before;
+        room->RoundTripMs(&before);
+        Action(Orca::Online::Code(), R"({"close":1013})");
+        ASSERT_TRUE(Wait([&] {
+          u32 after;
+          room->RoundTripMs(&after);
+          return room->GetState() == RoomState::Ended || after > before;
+        }));
+      }
+      ASSERT_TRUE(Orca::Online::RoomEnded());
+      EXPECT_EQ(Orca::Online::RoomErrorCode(), "room-unstable");
+      EXPECT_TRUE(Orca::Online::ReportSessionEnd("room ended", false));
+    };
+    auto* out = std::tmpfile();
+    ASSERT_NE(out, nullptr);
+    Orca::Status::SetOutput(out);
+    const Common::ScopeGuard output_cleanup([&] {
+      Orca::Status::SetOutput(nullptr);
+      std::fclose(out);
+    });
+    std::vector<std::chrono::seconds> times;
+    if (time_limit)
+      times = {0s, 1s, 2s, 301s, 302s};
+    else
+      for (int i = 0; i <= 22; ++i)
+        times.push_back(std::chrono::seconds(i));
+    const int last_host_step = time_limit ? 2 : 20;
+    int step = 0;
+    const auto attempts = Rollback::OnlineMatch::TraceRoomReopenForTest(times, [&] {
+      if (step <= last_host_step)
+      {
+        ASSERT_TRUE(Wait([] { return Orca::Online::InRoom(); }));
+        EXPECT_EQ(Orca::Online::Code(), room_code((step + 1) / 2));
+        if (step % 2 == 0)
+        {
+          end_unstable();
+          const std::string next = room_code(step / 2 + 1);
+          Request("/configure/" + next, R"({"joining":false})");
+          SetEnv("ORCA_TEST_ROOM", next.c_str());
+        }
+      }
+      ++step;
+    });
+    for (size_t i = 0; i < attempts.size(); ++i)
+      EXPECT_EQ(attempts[i], time_limit ? std::min<unsigned>(1, (i + 1) / 2) :
+                                         std::min<unsigned>(10, (i + 1) / 2));
+    const unsigned reopens = time_limit ? 1 : 10;
+    for (unsigned i = 0; i <= reopens; ++i)
+      EXPECT_EQ(Connections(room_code(i)), 5);  // No old code was opened again.
+    EXPECT_EQ(Connections(room_code(reopens + 1)), 0);
+    std::rewind(out);
+    std::string lines;
+    char buffer[512];
+    while (std::fgets(buffer, sizeof(buffer), out))
+      lines += buffer;
+    const std::string notice = "orca error network The room keeps disconnecting. Opening a new room; send your friend a new invite.";
+    unsigned notices = 0;
+    for (size_t at = 0; (at = lines.find(notice, at)) != std::string::npos; at += notice.size())
+      ++notices;
+    EXPECT_EQ(notices, reopens) << lines;
+    const std::string network = "orca error network ";
+    unsigned errors = 0;
+    for (size_t at = 0; (at = lines.find(network, at)) != std::string::npos; at += network.size())
+      ++errors;
+    EXPECT_EQ(errors, reopens + 1);  // One per replacement, then the final give-up.
+    EXPECT_EQ(lines.find("orca error room-unstable"), std::string::npos);
+    const std::string give_up = "orca state no-room\n";
+    const auto at = lines.find(give_up);
+    ASSERT_NE(at, std::string::npos) << lines;
+    EXPECT_EQ(lines.find(give_up, at + give_up.size()), std::string::npos);
+    Orca::Online::Shutdown();
+  }
 }
 
 TEST_F(OrcaRoomRuntime, KeepRoomOpenStopsAfterTenFailuresOrFiveMinutesAndTellsTheAppOnce)
