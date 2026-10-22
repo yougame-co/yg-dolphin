@@ -4624,7 +4624,14 @@ TEST_F(OrcaRoomRuntime, UpgradeFailurePathsNeverLogTicketUrls)
     ASSERT_TRUE(Wait([&] { return timed->Seat() == 1 && timed->RoundTripMs() >= 0; }));
     Action("logtime4", R"({"upgrade_delay":5})");
     timed->TestDropConnection();
-    ASSERT_TRUE(Wait([&] { return Connections("logtime4") >= 3; }));
+    // Allow the first capped upgrade to fail and the next one to reach the fixture.
+    RoomReconnect upgrades;
+    upgrades.attempts = 1;
+    const auto now = RoomClock::now();
+    const auto first_cap = upgrades.UpgradeCap(now);
+    upgrades.attempts = 2;
+    const auto reconnect_wait = first_cap + upgrades.UpgradeCap(now);
+    ASSERT_TRUE(Wait([&] { return Connections("logtime4") >= 3; }, reconnect_wait));
     Action("logtime4", R"({"upgrade_delay":0})");
     timed->Leave();
     auto moved = Open("logcolo4", R"({"cf_ray":"fixture-EWR","recovery_cf_ray":"fixture-IAD"})");
