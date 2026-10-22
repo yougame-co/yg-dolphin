@@ -2831,6 +2831,13 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.67
+
+- Broadcast a replay or a live match you're watching through YouGame, with game sound.
+  The broadcast keeps going when the game view is hidden or has no room on screen.
+- On Mac, the game finishes every change to its picture at once, so the screen can't be left
+  waiting on it.
+
 ### 0.3.66
 
 - On Mac, the game stays with YouGame when entering or leaving full screen, and waits for the
