@@ -181,7 +181,8 @@ std::size_t Mixer::Mix(s16* samples, std::size_t num_samples)
   for (auto& mixer : m_gba_mixers)
     mixer.Mix(samples, num_samples);
 
-  Broadcast::Audio(samples, num_samples, m_output_sample_rate);
+  if (Broadcast::Active())
+    Broadcast::Audio(samples, num_samples, m_output_sample_rate);
 
   return num_samples;
 }
