@@ -5365,8 +5365,8 @@ TEST_F(OrcaRoomRuntime, KeepRoomOpenReplacesUnstableCodesAndPreservesItsGiveUpBu
       ++step;
     });
     for (size_t i = 0; i < attempts.size(); ++i)
-      EXPECT_EQ(attempts[i], time_limit ? std::min<unsigned>(1, (i + 1) / 2) :
-                                         std::min<unsigned>(10, (i + 1) / 2));
+      EXPECT_EQ(attempts[i], time_limit ? std::min<unsigned>(1, static_cast<unsigned>((i + 1) / 2)) :
+                                         std::min<unsigned>(10, static_cast<unsigned>((i + 1) / 2)));
     const unsigned reopens = time_limit ? 1 : 10;
     for (unsigned i = 0; i <= reopens; ++i)
       EXPECT_EQ(Connections(room_code(i)), 5);  // No old code was opened again.
