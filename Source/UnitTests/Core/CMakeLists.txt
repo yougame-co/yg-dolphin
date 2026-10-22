@@ -160,3 +160,5 @@ target_sources(PowerPCTest PRIVATE
 if(_M_X86_64 OR _M_ARM_64)
   target_sources(PowerPCTest PRIVATE PowerPC/JitHookCompileTest.cpp)
 endif()
+
+add_dolphin_test(OrcaHarnessInputTest Orca/HarnessInputTest.cpp)

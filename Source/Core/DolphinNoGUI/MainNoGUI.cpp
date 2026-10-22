@@ -133,8 +133,7 @@ static void PrintPanicLine(const char* text) noexcept
 static void EndBootLogs()
 {
   s_boot_guest_ready.store(true, std::memory_order_relaxed);
-  Orca::BootThrottle::Finish(Rollback::RingPort::Active() ||
-                             (Rollback::Harness::Active() && !Rollback::Diag::KeepThrottle()));
+  Orca::BootThrottle::FinishAtFirstFrame();
   if (!s_embedded)
     return;
   const std::string ended = Orca::BootLogs::EndAtFirstFrame();
