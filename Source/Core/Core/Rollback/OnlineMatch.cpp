@@ -2862,6 +2862,8 @@ void TakeCommands(Core::System& system, Match& match)
   // Restore this player's own game once a queue room is over, so the next pairing doesn't start
   // from the last opponent's character select.
   const bool restored = MaybeRestoreQueueImage(system, match);
+  if (match.finished || !match.port)
+    return;
   // On the queue's own character select, the current game is the one to come back to.
   const bool queue_css =
       Orca::Status::Cap("queue2") && (restored || Orca::UX::QueueApp::OnSoloCss());
@@ -4096,6 +4098,8 @@ std::optional<int> Boundary(Core::System& system,
   // already sees its own character select.
   if (MaybeRestoreQueueImage(system, match))
     rewound_to = match.running + 1;
+  if (match.finished || !match.port)
+    return std::nullopt;
 
   // The header this game's room calls for, written only where HeaderFreeAt allows (never in the
   // canonical boot).
@@ -4145,6 +4149,8 @@ std::optional<int> Boundary(Core::System& system,
   }
 
   TakeCommands(system, match);
+  if (match.finished || !match.port)
+    return std::nullopt;
   LeaveOnMismatch(match);
   if (match.want_queue_image)
     CaptureQueueImage(system, match);
@@ -4152,6 +4158,8 @@ std::optional<int> Boundary(Core::System& system,
   {
     if (MaybeRestoreQueueImage(system, match))
       rewound_to = match.running + 1;
+    if (match.finished || !match.port)
+      return std::nullopt;
   }
   // After the app's commands and the frame hook: a Casual or Ranked pick made with friends, a kept
   // pick to arm, a former joiner's way home, then "no-room" for one that didn't come home.
@@ -4197,14 +4205,15 @@ std::optional<int> Boundary(Core::System& system,
     // host's offer meanwhile; the join goes on from there (JoinHost).
     if (PumpJoin(match, &match.join_status) == JoinPump::Failed)
       FailJoin(system, match);
+    // A launch refusal before "caps join" ends the match and releases its port.
+    if (match.finished || Stopping(system) || !match.port)
+      return std::nullopt;
     if (match.joining)
     {
       RunSolo(match, local_pad);
       return std::nullopt;
     }
-    // Failed (with "caps join" this player now plays its own boot on port 1), or stopping.
-    if (match.finished || Stopping(system))
-      return std::nullopt;
+    // Failed with "caps join": this player now plays its own boot on port 1.
   }
   else if (match.joining && !match.session)
   {
@@ -5187,6 +5196,22 @@ std::vector<unsigned> TraceRoomReopenForTest(const std::vector<std::chrono::seco
     attempts.push_back(match.reopen_attempts);
   }
   return attempts;
+}
+
+LaunchJoinBoundaryResult PumpLaunchJoinBoundaryForTest()
+{
+  Core::System& system = Core::System::GetInstance();
+  Match& match = TheMatch();
+  match = {};
+  const Common::ScopeGuard cleanup([&] { match = {}; });
+  match.started = true;
+  match.joining = true;
+  match.local_seat = 1;
+  match.boot_time = Clock::now();
+  match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK, true);
+  match.port->SetCatchingUp(true);
+  Boundary(system, [](int) { return Pad{}; }, [](int, bool, const auto&, bool) {}, {});
+  return {match.finished, match.joining, match.port != nullptr, match.running};
 }
 
 int PumpRoomReopenFailureForTest(const std::function<void()>& wait_for_failure)

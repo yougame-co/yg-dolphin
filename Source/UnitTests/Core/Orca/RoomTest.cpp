@@ -4957,6 +4957,39 @@ ReplayArchive FriendsReplay(int first, int current, int friends = 0)
 }
 }
 
+TEST_F(OrcaRoomRuntime, LaunchJoinHostGoneBeforeCapsEndsAtTheBoundary)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const Common::ScopeGuard cleanup([] {
+    Orca::Online::Shutdown();
+    Orca::Status::SetAppCaps("");
+  });
+  for (const bool soft : {false, true})
+  {
+    SCOPED_TRACE(fmt::format("caps join={}", soft));
+    Orca::Status::SetAppCaps(soft ? "join" : "");
+    const std::string code = soft ? "gonesoft370" : "goneboot370";
+    Request("/configure/" + code,
+            R"({"refuse":{"code":"host_gone"},"refuse_status":410})");
+    Orca::Online::StartRoom(code, true, true);
+    ASSERT_TRUE(Wait([] { return Orca::Online::RoomEnded(); }));
+    ASSERT_EQ(Orca::Online::Joining(), true);
+    ASSERT_EQ(Orca::Online::RoomErrorCode(), "host_gone");
+    EXPECT_EQ(Orca::Online::StatusLine(),
+              "Your friend left that game. Ask them for a new invite.");
+    const auto result = Rollback::OnlineMatch::PumpLaunchJoinBoundaryForTest();
+    EXPECT_EQ(result.finished, !soft);
+    EXPECT_EQ(result.has_port, soft);
+    if (soft)
+      EXPECT_FALSE(result.joining);
+    // The stopped headless CPU must not advance a frame or touch a port after End().
+    EXPECT_EQ(result.frame, -1);
+    EXPECT_EQ(Connections(code), 1);
+    Orca::Online::Shutdown();
+  }
+}
+
 TEST_F(OrcaRoomRuntime, FriendsReopenJoinsTheFriendWhoReturnedFirst)
 {
   FriendsHeadlessCore core;
