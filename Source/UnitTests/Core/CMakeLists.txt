@@ -162,3 +162,4 @@ if(_M_X86_64 OR _M_ARM_64)
 endif()
 
 add_dolphin_test(OrcaHarnessInputTest Orca/HarnessInputTest.cpp)
+add_dolphin_test(OrcaVirtualPadOnlyTest Orca/VirtualPadOnlyTest.cpp)

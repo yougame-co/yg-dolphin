@@ -59,7 +59,8 @@ public:
   std::vector<Packet> pending;
 };
 
-// Run in a child: the production harness deliberately caches its input file on first use.
+// Run in a fresh child: the harness caches its input file, and other suites can leave threads.
+// _Exit avoids running process-wide teardown from the assertion child.
 void ScriptedRun(bool online)
 {
   const std::string directory = File::CreateTempDir();
@@ -68,13 +69,13 @@ void ScriptedRun(bool online)
     File::IOFile file(script, "w");
     const std::string rule = "0 1000 1 A SX=200\n";
     if (!file.WriteBytes(rule.data(), rule.size()))
-      std::exit(2);
+      std::_Exit(2);
   }
   SetEnv("ORCA_SESSION", "1");
   SetEnv("ORCA_TEST_DEV_GAME", online ? "RSBE01" : "");
   SetEnv("YG_INPUT", script.c_str());
   if (Orca::Online::Enabled() != online || !Rollback::Harness::Active())
-    std::exit(3);
+    std::_Exit(3);
   Core::SetIsThrottlerTempDisabled(false);
   Orca::BootThrottle::Begin();
   Orca::BootThrottle::FinishAtFirstFrame();
@@ -82,7 +83,7 @@ void ScriptedRun(bool online)
   if (!online)
   {
     File::DeleteDirRecursively(directory);
-    std::exit(unthrottled ? 0 : 4);
+    std::_Exit(unthrottled ? 0 : 4);
   }
 
   // Two real input-exchange sessions; one samples the script, one a pad. The host pacer
@@ -114,7 +115,7 @@ void ScriptedRun(bool online)
         if (step.kind == StepKind::Stall)
           ++stalls;
         else if (step.kind != StepKind::Run)
-          std::exit(5);
+          std::_Exit(5);
       }
     }
   }
@@ -128,16 +129,29 @@ void ScriptedRun(bool online)
                stalls, games[0].running + 1, games[1].running + 1,
                static_cast<int>(links[0].Connected() && links[1].Connected()));
   File::DeleteDirRecursively(directory);
-  std::exit(!unthrottled && stalls == 0 && delivered ? 0 : 6);
+  std::_Exit(!unthrottled && stalls == 0 && delivered ? 0 : 6);
 }
+class OrcaHarnessInput : public testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    m_style = GTEST_FLAG_GET(death_test_style);
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+  }
+  void TearDown() override { GTEST_FLAG_SET(death_test_style, m_style); }
+
+private:
+  std::string m_style;
+};
 }  // namespace
 
-TEST(OrcaHarnessInput, OnlineScriptUsesSessionPacingAndDelayedLocalInput)
+TEST_F(OrcaHarnessInput, OnlineScriptUsesSessionPacingAndDelayedLocalInput)
 {
   ASSERT_EXIT(ScriptedRun(true), testing::ExitedWithCode(0), "0 stalls, frames 600/600");
 }
 
-TEST(OrcaHarnessInput, OfflineScriptKeepsUnthrottledPacing)
+TEST_F(OrcaHarnessInput, OfflineScriptKeepsUnthrottledPacing)
 {
   ASSERT_EXIT(ScriptedRun(false), testing::ExitedWithCode(0), "");
 }
