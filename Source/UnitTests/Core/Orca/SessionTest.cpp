@@ -5652,3 +5652,415 @@ TEST(OrcaDoubles, FasterBatchKeepsThePreviousUnconfirmedGateEnd)
   friends.Play(800);
   friends.Compare(compare_from);
 }
+
+TEST(OrcaCoSeats, CoSeatsOffIsIdentical)
+{
+  FourFriends ordinary(false, 1);
+  FourFriends enabled(true, 1);
+  ordinary.Play(400);
+  enabled.Play(400);
+  EXPECT_EQ(ordinary.mesh.wire, enabled.mesh.wire);
+  u64 wire_hash = 0;
+  for (const auto& packet : enabled.mesh.wire)
+    for (const unsigned char byte : packet)
+      wire_hash = Mix(wire_hash, byte);
+  u64 frame_hash = 0;
+  for (int seat = 0; seat < 2; ++seat)
+  {
+    EXPECT_EQ(ordinary.players[seat]->game.m_history, enabled.players[seat]->game.m_history);
+    EXPECT_EQ(ordinary.players[seat]->game.m_ran_pads, enabled.players[seat]->game.m_ran_pads);
+    EXPECT_EQ(ordinary.players[seat]->session->Plan(), enabled.players[seat]->session->Plan());
+    for (const auto& [frame, pads] : enabled.players[seat]->game.m_ran_pads)
+    {
+      frame_hash = Mix(frame_hash, static_cast<u64>(frame));
+      for (const Pad& pad : pads)
+        for (const u8 byte : pad)
+          frame_hash = Mix(frame_hash, byte);
+    }
+  }
+  // Captured on 80448a9e1f before changing Session: every encoded byte and every run pad.
+  EXPECT_EQ(wire_hash, 0x4fbbf8356c8b5cdeull);
+  EXPECT_EQ(frame_hash, 0x493a6b3462a47136ull);
+  ordinary.Compare();
+  enabled.Compare();
+}
+
+namespace
+{
+struct CoMeshPlayer : MeshPlayer
+{
+  CoMeshPlayer(FriendsMesh& network, int local, const std::vector<int>& siblings,
+               const std::vector<int>& host_group)
+      : MeshPlayer(network, local, local == 0 ? 300 : 240, true), co_seats(siblings)
+  {
+    Config config = DropInConfig(local, local == 0 ? 300 : 240);
+    config.per_peer_inputs = true;
+    config.co_seats = siblings;
+    config.snapshot_every = 1;
+    for (const int seat : host_group)
+      (*config.plan)[seat] = {0, NEVER, 0};
+    config.start_pad = Input(local, 299);
+    for (const int seat : siblings)
+      config.start_pads[seat] = Input(seat, 299);
+    session = std::make_unique<Session>(config, game, transport);
+    session->SetValuesHeld(4);
+  }
+  static Pad Input(int seat, int wall)
+  {
+    return Pad{static_cast<u8>((wall / 7 + seat * 3) % 4),
+               static_cast<u8>(wall % 3), 0, 0, static_cast<u8>(seat + 1), 0, 0, 0};
+  }
+  int TickCo(int wall, int frames = 1)
+  {
+    int ran = 0;
+    for (int guard = 0; guard < 4000 && ran < frames; ++guard)
+    {
+      Pads pads{};
+      for (int seat = 0; seat < MAX_SEATS; ++seat)
+      {
+        pads[seat] = Input(seat, wall);
+        if (held_start)
+          pads[seat][0] |= PAD_WIRE_START_HIGH;
+      }
+      const Step step = session->OnBoundary(completed, pads[transport.seat], &pads);
+      if (step.kind == StepKind::Ended || step.kind == StepKind::Wait || step.kind == StepKind::Stall)
+        return ran;
+      const bool fresh = step.kind == StepKind::Run && !session->Resimulating();
+      for (int seat = 0; seat < MAX_SEATS; ++seat)
+        ran_plugged[step.frame][seat] = session->Plugged(seat, step.frame);
+      completed = game.Run();
+      if (fresh)
+        ++ran;
+    }
+    return ran;
+  }
+  std::vector<int> co_seats;
+};
+
+struct CoSeatMesh
+{
+  explicit CoSeatMesh(const std::vector<std::vector<int>>& machine_groups) : groups(machine_groups)
+  {
+    for (const auto& group : groups)
+    {
+      const int lead = group.front();
+      players[lead] = std::make_unique<CoMeshPlayer>(mesh, lead,
+          std::vector<int>(group.begin() + 1, group.end()), groups.front());
+    }
+    std::vector<Pads> log;
+    for (int frame = 0; frame < 300; ++frame)
+    {
+      Pads pads;
+      pads.fill(UNPLUGGED_PAD);
+      for (const int seat : groups.front())
+        pads[seat] = CoMeshPlayer::Input(seat, frame);
+      for (int seat = 0; seat < MAX_SEATS; ++seat)
+        players[0]->ran_plugged[frame][seat] = !IsUnplugged(pads[seat]);
+      players[0]->game.SetPads(frame, pads);
+      players[0]->game.Run();
+      log.push_back(pads);
+    }
+    players[0]->session->SetLog(240, {log.begin() + 240, log.end()});
+    std::vector<int> arrivals;
+    for (size_t machine = 1; machine < groups.size(); ++machine)
+    {
+      const auto& group = groups[machine];
+      players[group.front()]->game.m_state = At(players[0]->game.m_history, 240);
+      players[0]->session->SetGroup(group.front(), {group.begin() + 1, group.end()});
+      for (const int seat : group)
+      {
+        arrivals.push_back(seat);
+        players[0]->session->RequireValues(seat, 4);
+      }
+    }
+    players[0]->session->AddPeerBatch(arrivals, 300, 240);
+  }
+  void Play(int ticks)
+  {
+    for (int count = 0; count < ticks; ++count, ++mesh.tick)
+      for (auto& player : players)
+        if (player)
+          player->TickCo(mesh.tick, player->session->CatchingUp() ? 40 : 1);
+  }
+  void Compare(int first = 240)
+  {
+    int through = NEVER;
+    for (const auto& player : players)
+    {
+      if (!player)
+        continue;
+      ASSERT_TRUE(player->session->Error().empty()) << player->session->Error() << " "
+                                                   << player->session->Describe();
+      through = std::min(through, player->session->FinalFrame() - 1);
+      EXPECT_LE(player->session->GetStats().deepest_rollback, 7);
+      EXPECT_EQ(player->session->PeersInPlay(), static_cast<int>(groups.size()));
+      int seats = 0;
+      for (const auto& group : groups)
+        seats += static_cast<int>(group.size());
+      EXPECT_EQ(player->session->PlayersInPlay(), seats);
+    }
+    ASSERT_GT(through, first + 100) << players[0]->session->Describe();
+    for (int frame = first; frame <= through; ++frame)
+      for (const auto& player : players)
+      {
+        if (!player)
+          continue;
+        ASSERT_EQ(At(players[0]->game.m_history, frame), At(player->game.m_history, frame))
+            << "machine " << player->transport.seat << " frame " << frame;
+        ASSERT_EQ(At(players[0]->game.m_ran_pads, frame), At(player->game.m_ran_pads, frame))
+            << "machine " << player->transport.seat << " frame " << frame;
+        ASSERT_EQ(At(players[0]->ran_plugged, frame), At(player->ran_plugged, frame));
+      }
+    for (const auto& group : groups)
+      for (const auto& player : players)
+        if (player)
+          for (const int seat : group)
+          {
+            EXPECT_EQ(player->session->LeadOf(seat), group.front());
+            EXPECT_EQ(player->session->Plan()[seat].live_from,
+                      player->session->Plan()[group.front()].live_from);
+            EXPECT_EQ(player->session->Plan()[seat].plug_from,
+                      player->session->Plan()[group.front()].plug_from);
+          }
+    // Every wire packet belongs to a machine, and its sibling ranges stay aligned.
+    for (const std::string& wire : mesh.wire)
+    {
+      Packet packet;
+      ASSERT_TRUE(DecodePacket(wire, &packet));
+      ASSERT_TRUE(players[packet.seat]);
+      EXPECT_EQ(packet.co.size(), players[packet.seat]->co_seats.size());
+      for (const auto& [seat, pads] : packet.co)
+      {
+        EXPECT_EQ(pads.size(), packet.pads.size());
+        EXPECT_EQ(players[0]->session->LeadOf(seat), packet.seat);
+      }
+      for (const int seat : groups[0])
+        if (packet.seat == 0)
+          EXPECT_EQ(packet.ack[seat], -1);
+      if (packet.groups)
+        EXPECT_EQ(packet.seat, 0);
+      if (packet.history_seat >= 0)
+        ASSERT_TRUE(players[packet.history_seat]);
+    }
+  }
+  FriendsMesh mesh;
+  std::array<std::unique_ptr<CoMeshPlayer>, MAX_SEATS> players;
+  std::vector<std::vector<int>> groups;
+};
+
+const std::vector<std::vector<std::vector<int>>> CO_TOPOLOGIES{
+    {{0, 1}, {2}}, {{0, 1}, {2, 3}}, {{0, 1}, {2}, {3}}, {{0}, {1}, {2, 3}},
+    {{0, 3}, {1, 2}}};
+}  // namespace
+
+TEST(OrcaCoSeats, FixedGroupsAtEveryLatencyAndWorstPairs)
+{
+  for (const auto& groups : CO_TOPOLOGIES)
+    for (int latency = 0; latency <= 4; ++latency)
+    {
+      SCOPED_TRACE(fmt::format("host seats {} machines {} latency {}", groups[0].size(),
+                              groups.size(), latency));
+      CoSeatMesh friends(groups);
+      if (latency == 4)
+        friends.mesh.latency = {0, 1, 2, 3};
+      else
+        friends.mesh.latency.fill(latency);
+      friends.Play(1800);
+      friends.Compare();
+    }
+}
+
+TEST(OrcaCoSeats, SixPairWorstCaseStillAgrees)
+{
+  CoSeatMesh friends({{0}, {1}, {2}, {3}});
+  friends.mesh.latency = {0, 1, 2, 3};
+  friends.Play(1800);
+  friends.Compare();
+}
+
+TEST(OrcaCoSeats, EveryMachineCanBlackOutAndReturn)
+{
+  for (const auto& groups : CO_TOPOLOGIES)
+    for (const auto& dark : groups)
+    {
+      SCOPED_TRACE(fmt::format("host seats {} machines {} dark {}", groups[0].size(),
+                              groups.size(), dark.front()));
+      CoSeatMesh friends(groups);
+      friends.mesh.latency = {0, 1, 2, 3};
+      friends.Play(400);
+      friends.mesh.blackout[dark.front()] = true;
+      friends.Play(60);
+      std::array<int, MAX_SEATS> stopped{};
+      for (const auto& player : friends.players)
+        if (player)
+          stopped[player->transport.seat] = player->session->CurrentFrame();
+      friends.Play(30);
+      for (const auto& player : friends.players)
+        if (player)
+          EXPECT_EQ(player->session->CurrentFrame(), stopped[player->transport.seat]);
+      friends.mesh.blackout[dark.front()] = false;
+      friends.Play(600);
+      for (const auto& player : friends.players)
+        if (player)
+          EXPECT_GT(player->session->CurrentFrame(), stopped[player->transport.seat] + 400);
+      friends.Compare();
+    }
+}
+
+TEST(OrcaCoSeats, StartGateMasksEveryLocalPadUntilTheAtomicPlug)
+{
+  CoSeatMesh friends({{0, 1}, {2, 3}});
+  for (auto& player : friends.players)
+    if (player)
+      player->held_start = true;
+  friends.mesh.blackout[2] = true;
+  friends.Play(80);
+  EXPECT_EQ(friends.players[0]->session->Plan()[2].plug_from, NEVER);
+  for (int frame = 302; frame < friends.players[0]->completed; ++frame)
+    for (const int seat : {0, 1})
+      EXPECT_EQ(At(friends.players[0]->game.m_ran_pads, frame)[seat][0] & PAD_WIRE_START_HIGH, 0);
+  friends.mesh.blackout[2] = false;
+  friends.Play(600);
+  const int plug = friends.players[0]->session->Plan()[2].plug_from;
+  ASSERT_NE(plug, NEVER);
+  EXPECT_EQ(plug, friends.players[0]->session->Plan()[3].plug_from);
+  for (const int seat : {0, 1, 2, 3})
+    EXPECT_NE(At(friends.players[0]->game.m_ran_pads, plug + 30)[seat][0] & PAD_WIRE_START_HIGH, 0);
+  friends.Compare();
+}
+
+TEST(OrcaCoSeats, AnotherGroupsInputsEndForPeer)
+{
+  CoSeatMesh friends({{0, 1}, {2}, {3}});
+  friends.Play(400);
+  friends.Compare();
+  Packet packet = friends.mesh.last_sent[2];
+  packet.co = {{3, packet.pads}};
+  friends.mesh.pending[0].clear();
+  friends.mesh.pending[0].push_back({friends.mesh.tick, packet});
+  friends.players[0]->TickCo(friends.mesh.tick);
+  EXPECT_TRUE(friends.players[0]->session->ErrorFromPeer());
+}
+
+TEST(OrcaCoSeats, RosterGroupsMustComeFromTheHostAndMatchItsPlans)
+{
+  for (int invalid = 0; invalid < 5; ++invalid)
+  {
+    CoSeatMesh friends({{0, 1}, {2, 3}});
+    friends.Play(400);
+    friends.Compare();
+    const int sender = invalid == 0 ? 2 : 0;
+    const int recipient = sender == 0 ? 2 : 0;
+    Packet packet = friends.mesh.last_sent[sender];
+    packet.sequence += 100;
+    packet.roster = friends.players[0]->session->Plan();
+    packet.groups = std::array<int, MAX_SEATS>{0, 0, 2, 2};
+    if (invalid == 1)
+      ++(*packet.roster)[3].live_from;
+    if (invalid == 2)
+      ++(*packet.roster)[3].plug_from;
+    if (invalid == 3)
+      (*packet.groups)[1] = 2;
+    if (invalid == 4)
+      (*packet.groups)[3] = -1;
+    friends.mesh.pending[recipient].clear();
+    friends.mesh.pending[recipient].push_back({friends.mesh.tick, packet});
+    friends.players[recipient]->TickCo(friends.mesh.tick);
+    EXPECT_TRUE(friends.players[recipient]->session->ErrorFromPeer()) << invalid;
+  }
+}
+
+TEST(OrcaCoSeats, DelayChangesKeepEachSeatsHeldInputAndRange)
+{
+  CoSeatMesh friends({{0, 1}, {2, 3}});
+  friends.Play(400);
+  for (auto& player : friends.players)
+    if (player)
+      player->session->SetFixedDelay(6);
+  friends.Play(80);
+  for (auto& player : friends.players)
+    if (player)
+      player->session->SetFixedDelay(1);
+  friends.Play(400);
+  friends.Compare();
+  for (const auto& player : friends.players)
+    if (player)
+    {
+      const auto& pads = At(player->game.m_ran_pads, 300);
+      if (player->transport.seat == 0)
+      {
+        EXPECT_EQ(pads[0], CoMeshPlayer::Input(0, 299));
+        EXPECT_EQ(pads[1], CoMeshPlayer::Input(1, 299));
+      }
+    }
+}
+
+TEST(OrcaCoSeats, InputAcknowledgementUsesTheSlowestLocalSeat)
+{
+  CoSeatMesh friends({{0, 1}, {2}});
+  // Keep one local seat's acknowledgement behind the lead throughout admission and play.
+  // Its inputs still arrive, so repeating that older prefix must not change any run pad.
+  for (int tick = 0; tick < 400; ++tick)
+  {
+    const int through = std::max(299, friends.players[0]->session->CurrentFrame() - 30);
+    for (auto& pending : friends.mesh.pending[0])
+      pending.packet.ack[1] = std::min(pending.packet.ack[1], through);
+    friends.Play(1);
+  }
+  const int frame = friends.players[0]->session->CurrentFrame();
+  Packet packet = friends.mesh.last_sent[2];
+  packet.sequence = 0;
+  packet.ack[0] = frame + 1;
+  packet.ack[1] = frame - 30;
+  friends.mesh.pending[0].clear();
+  friends.mesh.pending[0].push_back({friends.mesh.tick, packet});
+  friends.players[0]->TickCo(friends.mesh.tick);
+  EXPECT_TRUE(friends.players[0]->session->Error().empty());
+  EXPECT_EQ(friends.mesh.last_sent[0].first_frame, frame - 29);
+  friends.Play(400);
+  friends.Compare();
+}
+
+TEST(OrcaCoSeats, DuplicateAndStaleCopiesKeepPadsAndMachineCounts)
+{
+  CoSeatMesh control({{0, 1}, {2, 3}});
+  CoSeatMesh repeated({{0, 1}, {2, 3}});
+  std::array<std::set<int>, MAX_SEATS> copied;
+  for (int tick = 0; tick < 900; ++tick)
+  {
+    for (int seat : {0, 2})
+    {
+      auto& pending = repeated.mesh.pending[seat];
+      const auto copies = pending;
+      for (auto it = copies.rbegin(); it != copies.rend(); ++it)
+        if (copied[seat].insert(it->packet.sequence).second)
+          pending.push_back({it->at + 2, it->packet});
+    }
+    control.Play(1);
+    repeated.Play(1);
+  }
+  control.Compare();
+  repeated.Compare();
+  for (int seat : {0, 2})
+  {
+    EXPECT_EQ(control.players[seat]->game.m_ran_pads, repeated.players[seat]->game.m_ran_pads);
+    EXPECT_EQ(control.players[seat]->session->GetStats().checksums_matched,
+              repeated.players[seat]->session->GetStats().checksums_matched);
+    EXPECT_EQ(control.players[seat]->session->GetStats().peer_hitches,
+              repeated.players[seat]->session->GetStats().peer_hitches);
+  }
+}
+
+TEST(OrcaCoSeats, EstablishedGroupsStayFixedEvenWhenPlansMatch)
+{
+  CoSeatMesh friends({{0}, {1}, {2}, {3}});
+  friends.Play(400);
+  friends.Compare();
+  Packet packet = friends.mesh.last_sent[0];
+  packet.sequence += 100;
+  packet.groups = std::array<int, MAX_SEATS>{0, 1, 2, 2};
+  friends.mesh.pending[1].clear();
+  friends.mesh.pending[1].push_back({friends.mesh.tick, packet});
+  friends.players[1]->TickCo(friends.mesh.tick);
+  EXPECT_TRUE(friends.players[1]->session->ErrorFromPeer());
+}
