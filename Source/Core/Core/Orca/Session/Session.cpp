@@ -825,8 +825,16 @@ bool Session::Settled() const
 
 std::vector<Pad> Session::PendingLocal() const
 {
+  return PendingLocal(m_config.local_seat);
+}
+
+std::vector<Pad> Session::PendingLocal(int seat) const
+{
   std::vector<Pad> pending;
-  for (auto it = m_local.lower_bound(m_frame); it != m_local.end(); ++it)
+  if (!IsLocal(seat))
+    return pending;
+  const auto& local = seat == m_config.local_seat ? m_local : m_co_local[seat];
+  for (auto it = local.lower_bound(m_frame); it != local.end(); ++it)
     pending.push_back(it->second);
   return pending;
 }

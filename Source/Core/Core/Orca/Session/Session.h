@@ -382,6 +382,7 @@ public:
   // Local inputs already sampled for frames from CurrentFrame() on (the host keeps them when it
   // goes back to solo play).
   std::vector<Pad> PendingLocal() const;
+  std::vector<Pad> PendingLocal(int seat) const;
   // Whether this seat's controller is plugged in at `frame`, including completed stays.
   bool Plugged(int seat, int frame) const;
   // The newest frame the host reported (a joining player catches up to it).

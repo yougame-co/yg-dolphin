@@ -554,6 +554,13 @@ FriendsPickStep DecideFriendsPick(const FriendsPickInputs& in);
 
 // True while this process plays online (solo in its room, or with friends).
 bool Active();
+// CPU thread: the lead's game port, including solo play after leaving a room.
+int LocalSeat();
+int LocalOrdinal(int seat);
+std::vector<Orca::Net::Pads> PumpSoloSeatsForTest(Core::System& system,
+    const std::vector<int>& co_seats, int frames, bool fresh_tail,
+    const std::function<Orca::Net::Pad(int)>& sample,
+    std::vector<Orca::Events::PortInfo>* ports);
 // Logs the session's stats.
 void LogStats(const char* when);
 // Logs the stats and the reason, ends the session and leaves the room. Safe to call more than once;

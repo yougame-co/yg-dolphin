@@ -535,6 +535,24 @@ int Seat()
   return room ? room->Seat() : -1;
 }
 
+std::vector<int> CoSeats()
+{
+  const auto room = Room();
+  return room ? room->CoSeats() : std::vector<int>{};
+}
+
+int LocalIndex(int seat)
+{
+  const auto room = Room();
+  return room ? room->LocalIndex(seat) : -1;
+}
+
+std::vector<int> GroupOf(int seat)
+{
+  const auto room = Room();
+  return room ? room->GroupOf(seat) : std::vector<int>{};
+}
+
 std::vector<Net::PeerEvent> TakePeerEvents()
 {
   const auto room = Room();
