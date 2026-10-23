@@ -1051,6 +1051,11 @@ struct YouGameRoom::Impl
   std::string leave_reason;
   std::string code;
   int seat = -1;
+  std::vector<int> my_co_seats;
+  std::array<int, MAX_SEATS> local_indices{-1, -1, -1, -1};
+  std::array<std::vector<int>, MAX_SEATS> seat_groups;
+  std::map<std::string, std::vector<int>> peer_co_slots;
+  bool co_malformed_logged = false;
   // Each seat's player name from the room's roster (the same bytes on every machine; under mutex).
   std::map<int, std::string> seat_names;
   int rtt = -1;
@@ -1150,6 +1155,7 @@ struct YouGameRoom::Impl
   struct Peer
   {
     int slot = -1;
+    std::vector<int> co_slots;
     std::string name;
     // It said hello with our compatibility key; it heard ours; it was reported as a player.
     bool heard = false;
@@ -4391,17 +4397,18 @@ struct YouGameRoom::Impl
   // A connection out of the game while the room still lists it (away, or replaced by a new socket):
   // a game player is unplugged, its keyframe offer and unread packets go, and anything it sends is
   // a stranger's until it says hello again.
+  void EmitLeft(const Peer& peer, const std::string& reason)
+  {
+    Emit({PeerEvent::Kind::Left, peer.slot, peer.drop_in_host, peer.name, {}, {}, reason});
+    for (int slot : peer.co_slots)
+      Emit({PeerEvent::Kind::Left, slot, peer.drop_in_host, {}, {}, {}, reason});
+  }
+
   void ResetPeer(std::map<std::string, Peer>::iterator p, const std::string& why = "")
   {
     if (p->second.announced || p->second.presence.suspended)
     {
-      Emit({PeerEvent::Kind::Left,
-            p->second.slot,
-            p->second.drop_in_host,
-            p->second.name,
-            {},
-            {},
-            why.empty() ? p->second.bye : why});
+      EmitLeft(p->second, why.empty() ? p->second.bye : why);
     }
     // All recovery rooms discard stale pending drops when a peer is reset.
     const bool recovery = RoomRecovery();
@@ -4422,8 +4429,11 @@ struct YouGameRoom::Impl
     // All recovery rooms retain the held seat across a peer handshake reset.
     const int slot = RoomRecovery() ? p->second.slot : -1;
     const auto resume_id = p->second.resume_requested ? p->second.resume_id : "";
+    // Reset the handshake, keeping the room's ownership until its next roster.
+    auto co_slots = std::move(p->second.co_slots);
     p->second = {};
     p->second.slot = slot;
+    p->second.co_slots = std::move(co_slots);
     p->second.resume_id = resume_id;
   }
 
@@ -4537,7 +4547,13 @@ struct YouGameRoom::Impl
     room_participants = it->second.get<picojson::array>();
     if (const auto rev = Int(m, "revision", 0, MAX_FRAME))
       revision = *rev;
-    std::map<std::string, std::pair<int, std::string>> present;
+    struct Participant
+    {
+      int slot;
+      std::string name;
+    };
+    // Order by localIndex, independent of participant/slot order in the roster.
+    std::map<std::string, std::map<int, Participant>> connections;
     std::map<int, std::string> names;
     for (const auto& p : room_participants)
     {
@@ -4546,32 +4562,66 @@ struct YouGameRoom::Impl
       const auto& o = p.get<picojson::object>();
       const std::string id = Str(o, "connectionId");
       const auto slot = Int(o, "slot", 0, MAX_SEATS - 1);
-      if (id.empty() || !slot)
+      const auto index = o.count("localIndex") ? Int(o, "localIndex", 0, MAX_SEATS - 1) :
+                                                std::optional<int>(0);
+      if (id.empty() || !slot || !index)
         continue;
       names[*slot] = CleanName(Str(o, "name"));
-      if (id == me)
-      {
-        std::lock_guard lock(mutex);
-        seat = *slot;
-        continue;
-      }
-      present[id] = {*slot, Str(o, "name")};
+      connections[id].emplace(*index, Participant{*slot, Str(o, "name")});
     }
+    struct Group
+    {
+      int slot;
+      std::string name;
+      std::vector<int> co_slots;
+    };
+    std::map<std::string, Group> present;
     int my_seat;
     bool friends_room;
     {
       std::lock_guard lock(mutex);
       seat_names = std::move(names);
       peer_ids.clear();
-      for (const auto& [id, info] : present)
-        peer_ids[info.first] = id;
+      peer_co_slots.clear();
+      my_co_seats.clear();
+      local_indices.fill(-1);
+      seat_groups = {};
+      for (const auto& [id, participants] : connections)
+      {
+        const auto lead = participants.find(0);
+        if (lead == participants.end())
+          continue;
+        Group group{lead->second.slot, lead->second.name, {}};
+        std::vector<int> slots;
+        for (const auto& [index, participant] : participants)
+        {
+          local_indices[participant.slot] = index;
+          slots.push_back(participant.slot);
+          if (index > 0)
+            group.co_slots.push_back(participant.slot);
+          if (id != me)
+            peer_ids[participant.slot] = id;
+        }
+        for (int slot : slots)
+          seat_groups[slot] = slots;
+        if (id == me)
+        {
+          seat = group.slot;
+          my_co_seats = group.co_slots;
+        }
+        else
+        {
+          peer_co_slots[id] = group.co_slots;
+          present.emplace(id, std::move(group));
+        }
+      }
       my_seat = seat;
       friends_room = queue_known && queue == "private";
     }
     // Reopening a friends room can find the friend back first. Keep this socket and use the
     // ordinary invite handshake; the emulation thread adopts the joining role before host work.
     if (!joining && options.join_if_taken && friends_room && my_seat > 0 &&
-        present.contains(host) && present.at(host).first == 0)
+        present.contains(host) && present.at(host).slot == 0)
     {
       std::lock_guard lock(mutex);
       joining = true;
@@ -4603,13 +4653,7 @@ struct YouGameRoom::Impl
       if (p->second.announced || p->second.presence.suspended)
       {
         RoomNotice(fmt::format("room-leave peer {} ended roster-removed", p->second.slot + 1));
-        Emit({PeerEvent::Kind::Left,
-              p->second.slot,
-              p->second.drop_in_host,
-              p->second.name,
-              {},
-              {},
-              p->second.bye});
+        EmitLeft(p->second, p->second.bye);
         OpponentGone(p->first);
       }
       {
@@ -4632,11 +4676,31 @@ struct YouGameRoom::Impl
     for (const auto& [id, info] : present)
     {
       auto [p, inserted] = peers.try_emplace(id);
-      // A link speaks for one seat: a different seat needs a different link.
-      if (p->second.linked && p->second.slot != info.first)
+      // A link speaks for the lead. Local adds/removes keep that link and handshake.
+      if (p->second.linked && p->second.slot != info.slot)
         UnlinkPeer(p->first, p->second);
-      p->second.slot = info.first;
-      p->second.name = info.second;
+      if (p->second.announced)
+      {
+        for (int slot : p->second.co_slots)
+        {
+          if (std::ranges::find(info.co_slots, slot) != info.co_slots.end())
+            continue;
+          PeerEvent event{PeerEvent::Kind::CoSeatLeft, slot};
+          event.lead = info.slot;
+          Emit(std::move(event));
+        }
+        for (int slot : info.co_slots)
+        {
+          if (std::ranges::find(p->second.co_slots, slot) != p->second.co_slots.end())
+            continue;
+          PeerEvent event{PeerEvent::Kind::CoSeatArrived, slot};
+          event.lead = info.slot;
+          Emit(std::move(event));
+        }
+      }
+      p->second.slot = info.slot;
+      p->second.name = info.name;
+      p->second.co_slots = info.co_slots;
       if (inserted)
         last_hello = {};
     }
@@ -5062,6 +5126,39 @@ struct YouGameRoom::Impl
     }
   }
 
+  // Current roster ownership, shared by relay and direct receive (under mutex).
+  bool CoSeatsOwned(const Packet& packet, const std::string& id)
+  {
+    const auto owned = peer_co_slots.find(id);
+    for (const auto& [slot, inputs] : packet.co)
+    {
+      if (owned != peer_co_slots.end() &&
+          std::ranges::find(owned->second, slot) != owned->second.end())
+        continue;
+      if (!std::exchange(co_malformed_logged, true))
+        WARN_LOG_FMT(NETPLAY, "Orca room: a co-seat packet for seat {} from seat {}",
+                     slot + 1, packet.seat + 1);
+      return false;
+    }
+    return true;
+  }
+
+  bool ReceiveDirect(const std::string& payload, int slot, const std::string& from, Packet* packet)
+  {
+    if (!DecodeDirectPacket(payload, slot, packet))
+    {
+      if (!std::exchange(direct_malformed_logged, true))
+        WARN_LOG_FMT(NETPLAY, "Orca room: a malformed direct packet from seat {}", slot + 1);
+      return false;
+    }
+    std::lock_guard lock(mutex);
+    if (!CoSeatsOwned(*packet, from))
+      return false;
+    if (!packet->pads.empty())
+      direct_inputs[from] = Now();
+    return true;
+  }
+
   void OnPeerMessage(const std::string& id, Peer& peer, const picojson::object& d)
   {
     if (peer.presence.suspended)
@@ -5241,10 +5338,12 @@ struct YouGameRoom::Impl
           room = code;
         }
         SetStatus(fmt::format("Room {}: {} is here", room, peer.name.empty() ? "a friend" : peer.name));
-        Emit(
-            {PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls,
-             {}, {}, peer.queue, false, peer.recovering_arrival,
-             d.count("doubles") && d.at("doubles").is<bool>() && d.at("doubles").get<bool>()});
+        PeerEvent event{
+            PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls,
+            {}, {}, peer.queue, false, peer.recovering_arrival,
+            d.count("doubles") && d.at("doubles").is<bool>() && d.at("doubles").get<bool>()};
+        event.co_seats = peer.co_slots;
+        Emit(std::move(event));
         // Refresh the page's lobby now, not at the next roster change.
         Publish();
       }
@@ -5350,6 +5449,11 @@ struct YouGameRoom::Impl
       WARN_LOG_FMT(NETPLAY, "Orca room: a malformed packet from seat {}", peer.slot + 1);
       return;
     }
+    {
+      std::lock_guard lock(mutex);
+      if (!CoSeatsOwned(packet, id))
+        return;
+    }
     peer.sent_packet = true;
     if (!joining)
       peer.resume_requested = false;
@@ -5422,6 +5526,23 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     case RoomTestStep::Kind::Stall:
       room.stall_pending = true;
       break;
+    case RoomTestStep::Kind::DirectPacket:
+    {
+      const int slot = static_cast<int>(step.close_code);
+      const auto id = room.peer_ids.find(slot);
+      Packet packet;
+      if (room.ReceiveDirect(step.text, slot,
+                             id == room.peer_ids.end() ? "" : id->second, &packet))
+      {
+        room.inbox.push_back(std::move(packet));
+        room.inbox_from.push_back(id == room.peer_ids.end() ? "" : id->second);
+      }
+      break;
+    }
+    case RoomTestStep::Kind::LinkPeer:
+      if (room.direct)
+        room.peers.at(step.text).linked = true;
+      break;
     case RoomTestStep::Kind::DirectInput:
       room.direct_inputs[step.text] = *room.test_now;
       break;
@@ -5465,6 +5586,19 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                      room.error_code, room.RoomRecovery(), room.known_games,
                      std::exchange(room.test_results, {}), room.WaitingDeadlineLocked(),
                      owner.RoomRecovering(*room.test_now), input_held});
+    auto& snapshot = trace.back();
+    snapshot.seat = owner.Seat();
+    snapshot.co_seats = owner.CoSeats();
+    for (int slot = 0; slot < MAX_SEATS; ++slot)
+    {
+      snapshot.local_indices[slot] = owner.LocalIndex(slot);
+      snapshot.groups[slot] = owner.GroupOf(slot);
+    }
+    for (const auto& [id, peer] : room.peers)
+    {
+      if (peer.linked)
+        snapshot.linked_seats.push_back(peer.slot);
+    }
     room.inbox_from.clear();
   }
   return trace;
@@ -5479,6 +5613,24 @@ int YouGameRoom::Seat() const
 {
   std::lock_guard lock(m_impl->mutex);
   return m_impl->seat;
+}
+
+std::vector<int> YouGameRoom::CoSeats() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->my_co_seats;
+}
+
+int YouGameRoom::LocalIndex(int seat) const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return seat >= 0 && seat < MAX_SEATS ? m_impl->local_indices[seat] : -1;
+}
+
+std::vector<int> YouGameRoom::GroupOf(int seat) const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return seat >= 0 && seat < MAX_SEATS ? m_impl->seat_groups[seat] : std::vector<int>{};
 }
 
 std::optional<bool> YouGameRoom::Joining() const
@@ -6067,17 +6219,8 @@ std::vector<Packet> YouGameRoom::Receive()
   for (DirectLink::Received& received : m_impl->direct->Receive())
   {
     Packet packet;
-    if (!DecodeDirectPacket(received.payload, received.slot, &packet))
-    {
-      if (!std::exchange(m_impl->direct_malformed_logged, true))
-        WARN_LOG_FMT(NETPLAY, "Orca room: a malformed direct packet from seat {}", received.slot + 1);
+    if (!m_impl->ReceiveDirect(received.payload, received.slot, received.from, &packet))
       continue;
-    }
-    if (!packet.pads.empty())
-    {
-      std::lock_guard lock(m_impl->mutex);
-      m_impl->direct_inputs[received.from] = Clock::now();
-    }
     packets.push_back(std::move(packet));
   }
   {
