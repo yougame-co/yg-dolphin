@@ -6967,3 +6967,27 @@ TEST(OrcaCoSeats, StepSessionReplaysThreeSeatRecordingThroughLoopback)
     EXPECT_EQ(At(replay.m_ran_pads, frame), recording[frame].pads) << frame;
   }
 }
+
+TEST(OrcaCoSeats, MissingCoSeatDropsItsWholeRemoteMachine)
+{
+  CoSeatMesh friends({{0}, {1, 2}, {3}});
+  friends.Play(500);
+  for (int tick = 0; tick < 40; ++tick)
+  {
+    for (auto& pending : friends.mesh.pending[0])
+      if (pending.packet.seat == 1)
+        pending.packet.co.clear();
+    friends.Play(1);
+  }
+  auto& host = *friends.players[0]->session;
+  ASSERT_EQ(host.MissingInputSeats(), (std::vector<int>{2}));
+  const auto dropped = Rollback::OnlineMatch::DropMissingFriends(host, true);
+  ASSERT_TRUE(dropped);
+  EXPECT_EQ(*dropped, (std::vector<int>{1, 2}));
+  EXPECT_EQ(host.Plan()[1].live_from, NEVER);
+  EXPECT_EQ(host.Plan()[2].live_from, NEVER);
+  EXPECT_NE(host.Plan()[3].live_from, NEVER);
+  friends.disabled[1] = true;
+  friends.Play(500);
+  CompareCoFrames(friends);
+}

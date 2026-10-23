@@ -136,6 +136,7 @@ struct Arrival
   Clock::time_point arrived_at = Clock::now();
   u64 arrived_boundary = 0;
   int next_keyframe_notice = 15;
+  int lead = -1;
 };
 
 struct Match
@@ -881,7 +882,8 @@ void DropFriends(Match& match, const std::string& reason, bool announce = true)
 {
   for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
   {
-    if (seat == match.local_seat || match.session->Plan()[seat].live_from == Orca::Net::NEVER)
+    if (IsLocal(match, seat) || match.session->LeadOf(seat) != seat ||
+        match.session->Plan()[seat].live_from == Orca::Net::NEVER)
       continue;
     Orca::Online::DropPeer(seat, reason);
     match.session->DropSeat(seat);
@@ -1485,7 +1487,8 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
           }) && std::ranges::all_of(match.menu_waiting, [&](const auto& entry) {
             return entry.first == event.seat || entry.second.doubles;
           });
-      if ((match.doubles && !event.doubles) || (!capable && (std::any_of(match.seated.begin(), match.seated.end(),
+      if ((!event.co_seats.empty() && !capable) ||
+          (match.doubles && !event.doubles) || (!capable && (std::any_of(match.seated.begin(), match.seated.end(),
                       [&event](int seat) { return seat != event.seat; }) ||
           std::any_of(match.waiting.begin(), match.waiting.end(),
                       [&event](const auto& waiting) { return waiting.first != event.seat; }) ||
@@ -1507,6 +1510,13 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
                           match.menu_waiting : match.waiting;
       arrivals[event.seat] = {event.name, event.controls, event.queue, event.recovering,
                               event.doubles, Clock::now(), match.host_boundaries};
+      arrivals[event.seat].lead = event.seat;
+      for (const int co : event.co_seats)
+      {
+        arrivals[co] = {test_room ? test_room->SeatName(co) : Orca::Online::SeatName(co), {}, {},
+                        event.recovering, event.doubles, Clock::now(), match.host_boundaries};
+        arrivals[co].lead = event.seat;
+      }
       if (event.recovering)
       {
         if (match.doubles && match.session)
@@ -1518,6 +1528,16 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
       match.keyframe_wanted = true;
       arrived = true;
       Orca::Status::State("friend-joining");
+    }
+    else if (event.kind == Orca::Net::PeerEvent::Kind::CoSeatLeft)
+    {
+      match.waiting.erase(event.seat);
+      match.menu_waiting.erase(event.seat);
+      match.plugging.erase(event.seat);
+      match.seated.erase(event.seat);
+      match.doubles_seats.erase(event.seat);
+      if (match.session)
+        match.session->UnplugSeat(event.seat);
     }
     else if (event.kind == Orca::Net::PeerEvent::Kind::Left)
     {
@@ -1667,7 +1687,8 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   });
   const bool batch_ready = !match.doubles || match.batch.Ready(
       on_menus, static_cast<int>(match.waiting.size()),
-      static_cast<int>(match.plugging.size()), recovering, Clock::now());
+      static_cast<int>(match.plugging.size()), recovering, Clock::now(),
+      1 + static_cast<int>(match.co_seats.size()));
   const bool hold = !match.waiting.empty() &&
       (Orca::UX::Game().Read().DropInHeld() || !batch_ready);
   const bool notice_hold = hold || !match.menu_waiting.empty();
@@ -1828,8 +1849,11 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
     for (const auto& [seat, arrival] : match.waiting)
       if (match.session->Plan()[seat].unplug_from != Orca::Net::NEVER)
         live_from = std::max(live_from, match.session->Plan()[seat].unplug_from);
-  const bool batch = match.doubles && !recovering &&
-                     (match.waiting.size() > 1 || !match.seated.empty());
+  const bool grouped = std::ranges::any_of(match.waiting, [](const auto& entry) {
+    return entry.second.lead >= 0 && entry.second.lead != entry.first;
+  });
+  const bool batch = match.doubles &&
+                     (grouped || (!recovering && (match.waiting.size() > 1 || !match.seated.empty())));
   std::vector<int> batch_seats;
   if (batch)
   {
@@ -1893,6 +1917,17 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
     }
     if (batch && !batch_seats.empty())
     {
+      for (const auto& [lead, arrival] : match.waiting)
+      {
+        if (arrival.lead != lead)
+          continue;
+        std::vector<int> co;
+        for (const auto& [member, member_arrival] : match.waiting)
+          if (member != lead && member_arrival.lead == lead)
+            co.push_back(member);
+        if (!co.empty())
+          match.session->SetGroup(lead, co);
+      }
       match.session->AddPeerBatch(batch_seats, live_from, keyframe_frame);
       batch_seats.clear();
     }
@@ -1913,15 +1948,18 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
     offer.names = AllNames(match);
     offer.names_version = match.names_version;
     // Others acknowledge the newcomer's values in their packets (Session::RequireValues).
-    if (test_room)
+    if (it->second.lead < 0 || it->second.lead == seat)
     {
-      test_room->BroadcastNames(offer.names, offer.names_version);
-      test_room->OfferKeyframe(seat, offer);
-    }
-    else
-    {
-      Orca::Online::BroadcastNames(offer.names, offer.names_version);
-      Orca::Online::OfferKeyframe(seat, offer);
+      if (test_room)
+      {
+        test_room->BroadcastNames(offer.names, offer.names_version);
+        test_room->OfferKeyframe(seat, offer);
+      }
+      else
+      {
+        Orca::Online::BroadcastNames(offer.names, offer.names_version);
+        Orca::Online::OfferKeyframe(seat, offer);
+      }
     }
     NOTICE_LOG_FMT(ROLLBACK,
                    "Drop-in: port {} replays from keyframe frame {}, live from frame {}", seat + 1,
@@ -4659,6 +4697,9 @@ static std::optional<int> SessionBoundary(
       }
       if (error.empty())
       {
+        std::array<int, Orca::Net::MAX_SEATS> leads{};
+        for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+          leads[seat] = match.session->LeadOf(seat);
         const auto missing = DropMissingFriends(*match.session, doubles);
         if (missing)
         {
@@ -4667,7 +4708,8 @@ static std::optional<int> SessionBoundary(
             match.seated.erase(seat);
             match.plugging.erase(seat);
             match.doubles_seats.erase(seat);
-            Orca::Online::DropPeer(seat, "stalled");
+            if (leads[seat] == seat)
+              Orca::Online::DropPeer(seat, "stalled");
           }
           match.friend_left_told = true;
           Orca::Status::State("friend-left stalled");
@@ -5342,8 +5384,11 @@ static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGa
                                           int current_frame, bool session_alive,
                                           const std::vector<int>& seated, std::optional<bool> menus,
                                           std::unique_ptr<Orca::Net::KeyframeStore> store,
-                                          bool host_requested = false)
+                                          bool host_requested = false,
+                                          const std::function<void(const std::function<void()>&)>&
+                                              after_admit = {})
 {
+  const Common::ScopeGuard reset_count([] { Orca::UX::SetLocalPadCount(1); });
   // This adapter supplies a headless game's history to the actual HostEvents/StartKeyframe path.
   // The room runs its real I/O thread; packing, encryption and keyframe offers are unchanged.
   Match match;
@@ -5363,6 +5408,7 @@ static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGa
   match.log_base = match.origin_frame;
   match.log.resize(current_frame - match.log_base);
   match.seated.insert(seated.begin(), seated.end());
+  match.co_seats = room.CoSeats();
   if (room.Doubles())
     match.doubles_seats = match.seated;
   if (session_alive)
@@ -5371,10 +5417,13 @@ static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGa
     config.seats = Orca::Net::MAX_SEATS;
     config.per_peer_inputs = room.Doubles();
     config.local_seat = 0;
+    config.co_seats = match.co_seats;
     config.authority_seat = 0;
     config.start_frame = current_frame;
     std::array<Orca::Net::SeatPlan, Orca::Net::MAX_SEATS> plan{};
     plan[0] = {0, Orca::Net::NEVER, 0};
+    for (const int local : match.co_seats)
+      plan[local] = {0, Orca::Net::NEVER, 0};
     for (const int seat : seated)
       plan[seat] = {0, Orca::Net::NEVER, 0};
     config.plan = plan;
@@ -5391,6 +5440,15 @@ static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGa
     if (match.job->done && match.job->ok)
       result.keyframe_frame = match.job->info.frame;
     HostEvents(system, match, &room, menus);
+  }
+  if (after_admit)
+    after_admit([&] { HostEvents(system, match, &room, menus); });
+  if (match.session)
+  {
+    result.plan = match.session->Plan();
+    for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+      result.groups[seat] = match.session->LeadOf(seat);
+    result.error = match.session->Error();
   }
   result.fresh_start = match.fresh_pending.has_value();
   result.seated = match.waiting.empty() && match.seated.contains(1);
@@ -5413,10 +5471,12 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
                                          int current_frame, const std::vector<int>& seated,
                                          bool on_menus,
                                          std::unique_ptr<Orca::Net::KeyframeStore> store,
-                                         bool host_requested)
+                                         bool host_requested,
+                                         const std::function<void(const std::function<void()>&)>&
+                                             after_admit)
 {
   return PumpHostForTest(system, room, game, std::move(replay), current_frame, !seated.empty(),
-                         seated, on_menus, std::move(store), host_requested);
+                         seated, on_menus, std::move(store), host_requested, after_admit);
 }
 
 int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,
@@ -5451,10 +5511,29 @@ std::optional<std::vector<int>> FriendsMissingInputs(const Orca::Net::Session& s
 std::optional<std::vector<int>> DropMissingFriends(Orca::Net::Session& session, bool doubles)
 {
   auto seats = FriendsMissingInputs(session, doubles);
-  if (seats)
+  if (!seats)
+    return seats;
+  bool grouped = false;
+  for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+    grouped |= session.LeadOf(seat) != seat;
+  if (!grouped)
+  {
     for (const int seat : *seats)
       session.DropSeat(seat);
-  return seats;
+    return seats;
+  }
+  std::set<int> leads;
+  for (const int seat : *seats)
+    if (!session.IsLocal(seat))
+      leads.insert(session.LeadOf(seat));
+  std::vector<int> group_seats;
+  for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+    if (!session.IsLocal(seat) && leads.contains(session.LeadOf(seat)) &&
+        session.Plan()[seat].live_from != Orca::Net::NEVER)
+      group_seats.push_back(seat);
+  for (const int lead : leads)
+    session.DropSeat(lead);
+  return group_seats;
 }
 
 int WaitingFriendSeat(int local_seat, const std::vector<int>& missing, bool joining,
@@ -5477,7 +5556,7 @@ bool WaitForFriendsRoster(const Orca::Net::Session& session, bool joining, bool 
 }
 
 bool FriendsBatch::Ready(bool on_menus, int waiting, int plugging, bool recovering,
-                         std::chrono::steady_clock::time_point now)
+                         std::chrono::steady_clock::time_point now, int local_seats)
 {
   if (waiting == 0)
   {
@@ -5493,7 +5572,7 @@ bool FriendsBatch::Ready(bool on_menus, int waiting, int plugging, bool recoveri
   }
   if (!m_until)
     m_until = now + std::chrono::seconds(2);
-  return waiting >= Orca::Net::MAX_SEATS - 1 || now >= *m_until;
+  return waiting >= Orca::Net::MAX_SEATS - local_seats || now >= *m_until;
 }
 
 std::optional<JoinCapture> ChooseJoinCapture(const Orca::Net::Session* session, bool doubles,

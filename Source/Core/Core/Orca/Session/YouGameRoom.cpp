@@ -4593,8 +4593,10 @@ struct YouGameRoom::Impl
     std::map<std::string, Group> present;
     int my_seat;
     bool friends_room;
+    std::vector<int> removed_local;
     {
       std::lock_guard lock(mutex);
+      const auto previous_local = my_co_seats;
       seat_names = std::move(names);
       peer_ids.clear();
       peer_co_slots.clear();
@@ -4632,8 +4634,17 @@ struct YouGameRoom::Impl
           present.emplace(id, std::move(group));
         }
       }
+      for (const int previous : previous_local)
+        if (std::ranges::find(my_co_seats, previous) == my_co_seats.end())
+          removed_local.push_back(previous);
       my_seat = seat;
       friends_room = queue_known && queue == "private";
+    }
+    for (const int removed : removed_local)
+    {
+      PeerEvent event{PeerEvent::Kind::CoSeatLeft, removed};
+      event.lead = my_seat;
+      Emit(std::move(event));
     }
     // Reopening a friends room can find the friend back first. Keep this socket and use the
     // ordinary invite handshake; the emulation thread adopts the joining role before host work.

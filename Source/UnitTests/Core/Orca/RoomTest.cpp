@@ -7144,3 +7144,106 @@ TEST(OrcaRoom, VacantCoSeatInputsStopWhenTheSlotIsTakenAgain)
     EXPECT_TRUE(trace[12].packets.empty());
   }
 }
+
+TEST(OrcaRoom, OwnCoSeatRemovalReachesTheHostEventPath)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, CoRoster("welcome", false, true, true)},
+      {RK::Message, 1, CoRoster("lobby", false, false, true)}});
+  ASSERT_EQ(trace.back().events.size(), 1u);
+  EXPECT_EQ(trace.back().events[0].kind, PeerEvent::Kind::CoSeatLeft);
+  EXPECT_EQ(trace.back().events[0].seat, 2);
+  EXPECT_EQ(trace.back().events[0].lead, 0);
+}
+
+TEST_F(OrcaRoomRuntime, CoSeatArrivalUsesOneGroupAndOneKeyframeOffer)
+{
+  FriendsHeadlessCore core;
+  for (const bool recovering : {false, true})
+  {
+    const std::string code = recovering ? "corecover" : "cogroup";
+    auto room = Open(code,
+        R"({"joining":false,"doubles":true,"co_seats":{"me":[2],"peer":[3]}})", false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->ArrivalPending(); }));
+    if (recovering)
+    {
+      room->TakePeerEvents();
+      Action(code, R"({"message":{"t":"msg","from":"peer","d":{"k":"hello","c":"test",
+          "r":true,"h":false,"doubles":true,"ct":"01","resume":true,"resume_id":"co-cycle"}}})");
+      ASSERT_TRUE(Wait([&] { return room->ArrivalPending(); }));
+    }
+    RoomHashGame game;
+    auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                          std::string* error) {
+      return room->FreshTicket(fresh, ticket, server, error);
+    });
+    const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(core.system, *room, game,
+        FriendsReplay(1524, 1600), 1600, {}, true, std::move(store));
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.seats, (std::vector<int>{1, 3}));
+    EXPECT_EQ(result.groups, (std::array<int, MAX_SEATS>{0, 1, 0, 1}));
+    EXPECT_EQ(result.plan[2], (SeatPlan{0, NEVER, 0}));
+    EXPECT_EQ(result.plan[1].live_from, 1600);
+    EXPECT_EQ(result.plan[3].live_from, 1600);
+    EXPECT_EQ(result.plan[1].plug_from, result.plan[3].plug_from);
+    ASSERT_TRUE(Wait([&] { return Sent(code, "msg", "kf"); }));
+    int offers = 0;
+    const auto state = Request("/state/" + code);
+    for (const auto& message : state.get("messages").get<picojson::array>())
+      if (message.get("d").is<picojson::object>() && message.get("d").get("k").to_str() == "kf")
+      {
+        ++offers;
+        EXPECT_EQ(message.get("to").to_str(), "peer");
+      }
+    EXPECT_EQ(offers, 1);
+  }
+}
+
+
+TEST_F(OrcaRoomRuntime, HostSchedulesOwnCoSeatLeaveAhead)
+{
+  FriendsHeadlessCore core;
+  const std::string code = "coownleave";
+  auto room = Open(code,
+      R"({"joining":false,"doubles":true,"co_seats":{"me":[2],"peer":[3]}})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->ArrivalPending(); }));
+  room->TakePeerEvents();
+  RoomHashGame game;
+  const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(core.system, *room, game,
+      FriendsReplay(1524, 1600, 3), 1600, {1, 3}, true, nullptr, false,
+      [&](const std::function<void()>& pump) {
+        Action(code, fmt::format(R"({{"message":{}}})", CoRoster("lobby", false, false, true)));
+        ASSERT_TRUE(Wait([&] { return room->CoSeats().empty(); }));
+        pump();
+      });
+  ASSERT_TRUE(result.error.empty()) << result.error;
+  EXPECT_EQ(result.plan[2].unplug_from, 1600 + 7 + 2 * 6 + 4);
+  EXPECT_EQ(result.plan[0].unplug_from, NEVER);
+  EXPECT_EQ(result.groups[2], 0);
+}
+
+TEST_F(OrcaRoomRuntime, HostRetiresWaitingCoSeatAndKeepsItsLead)
+{
+  FriendsHeadlessCore core;
+  const std::string code = "cowaitleave";
+  auto room = Open(code,
+      R"({"joining":false,"doubles":true,"co_seats":{"me":[2],"peer":[3]}})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->ArrivalPending(); }));
+  RoomHashGame game;
+  auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                        std::string* error) {
+    return room->FreshTicket(fresh, ticket, server, error);
+  });
+  const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(core.system, *room, game,
+      FriendsReplay(1524, 1600), 1600, {}, true, std::move(store), false,
+      [&](const std::function<void()>& pump) {
+        Action(code, fmt::format(R"({{"message":{}}})", CoRoster("lobby", false, true, false)));
+        ASSERT_TRUE(Wait([&] { return room->GroupOf(3).empty(); }));
+        pump();
+      });
+  ASSERT_TRUE(result.error.empty()) << result.error;
+  EXPECT_EQ(result.plan[3].live_from, NEVER);
+  EXPECT_EQ(result.plan[1].live_from, 1600);
+  EXPECT_EQ(result.plan[1].unplug_from, NEVER);
+  EXPECT_EQ(result.groups[1], 1);
+}

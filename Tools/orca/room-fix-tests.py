@@ -41,6 +41,11 @@ def roster(code, cfg, kind="welcome"):
             result["players"].append({"id": f"peer{slot}", "name": f"Friend{slot}"})
             result["participants"].append({"id": f"peer{slot}", "connectionId": f"peer{slot}",
                                             "slot": slot, "name": f"Friend{slot}"})
+    for connection, slots in cfg.get("co_seats", {}).items():
+        for ordinal, slot in enumerate(slots, 1):
+            result["participants"].append({"id": f"{connection}:co:{slot}",
+                "connectionId": connection, "slot": slot, "localIndex": ordinal,
+                "name": f"{connection} local {ordinal + 1}"})
     return result
 
 
