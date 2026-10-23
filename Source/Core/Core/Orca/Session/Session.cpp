@@ -310,6 +310,11 @@ int Session::LeadOf(int seat) const
   return seat >= 0 && seat < m_config.seats ? m_lead[seat] : seat;
 }
 
+bool Session::SameMachine(int a, int b) const
+{
+  return LeadOf(a) == LeadOf(b);
+}
+
 int Session::PeersInPlay() const
 {
   std::array<bool, MAX_SEATS> seen{};
@@ -596,7 +601,7 @@ void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int his
     if (m_start_gate->second > LogEnd())
       return true;
     for (int peer = 0; peer < m_config.seats; ++peer)
-      if (InPlay(peer) && m_acked[peer] < m_start_gate->second)
+      if (InPlay(peer) && LeadOf(peer) == peer && m_acked[peer] < m_start_gate->second)
         return true;
     return false;
   };
@@ -948,8 +953,8 @@ void Session::AppendConfirmedToLog()
     // The host also retains the prefix for every seated peer that has not confirmed it yet.
     if (m_config.local_seat == m_config.authority_seat)
       for (int peer = 0; peer < m_config.seats; ++peer)
-        if (InPlay(peer) && m_peer_ack[peer][seat] < stay.until - 1 &&
-            !(peer == seat && m_plan[seat].live_from >= stay.until))
+        if (InPlay(peer) && LeadOf(peer) == peer && m_peer_ack[peer][seat] < stay.until - 1 &&
+            !(SameMachine(peer, seat) && m_plan[seat].live_from >= stay.until))
           return false;
     return true;
   });
@@ -1226,7 +1231,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
   int oldest_unacked = INT_MAX;
   for (int s = 0; s < m_config.seats; ++s)
   {
-    if (InPlay(s))
+    if (InPlay(s) && LeadOf(s) == s)
       oldest_unacked = std::min(oldest_unacked, m_acked[s] + 1);
   }
   // A seated friend hears the batch after its live frame was chosen. Keep a replay-sized prefix
@@ -1879,10 +1884,11 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
            frame < std::min({stay.first_frame, stay.until, m_frame + HISTORY_AHEAD}) &&
            seeded < MAX_PADS_IN_PACKET; ++frame, ++seeded)
       {
+        const auto& local = seat == m_config.local_seat ? m_local : m_co_local[seat];
         if (frame < m_plan[seat].plug_from || frame >= m_plan[seat].unplug_from)
           held.pads.push_back(UNPLUGGED_PAD);
-        else if (seat == m_config.local_seat && m_local.contains(frame))
-          held.pads.push_back(m_local.at(frame));
+        else if (IsLocal(seat) && local.contains(frame))
+          held.pads.push_back(local.at(frame));
         else if (m_remote[seat].contains(frame))
           held.pads.push_back(m_remote[seat].at(frame));
         else
@@ -2149,9 +2155,9 @@ void Session::AddDeparted(Packet* packet, int recipient) const
   for (const auto& [seat, stay] : m_departed)
   {
     int first = stay.first_frame;
-    if (recipient == seat)
+    if (recipient >= 0 && SameMachine(recipient, seat))
       first = std::max({first, std::min(m_plan[seat].live_from, stay.until),
-                        m_peer_ack[seat][seat] + 1});
+                        m_peer_ack[recipient][seat] + 1});
     else if (recipient >= 0)
       first = std::max(first, m_peer_ack[recipient][seat] + 1);
     else
@@ -2159,10 +2165,11 @@ void Session::AddDeparted(Packet* packet, int recipient) const
       int needed = stay.until;
       for (int peer = 0; peer < m_config.seats; ++peer)
       {
-        if (!InPlay(peer))
+        if (!InPlay(peer) || LeadOf(peer) != peer)
           continue;
         const int ack = m_peer_ack[peer][seat] + 1;
-        needed = std::min(needed, peer == seat ? std::max(ack, m_plan[seat].live_from) : ack);
+        needed = std::min(needed, SameMachine(peer, seat) ?
+                                     std::max(ack, m_plan[seat].live_from) : ack);
       }
       first = std::max(first, needed);
     }
@@ -2313,6 +2320,17 @@ void Session::SendPacket()
   if (m_config.per_peer_inputs && completed != m_departed.end())
     packet.ack[m_config.local_seat] =
         std::min(DepartedThrough(m_config.local_seat), completed->second.until - 1);
+  if (m_config.per_peer_inputs)
+    for (const int seat : m_config.co_seats)
+    {
+      const auto prefix = m_departed.find(seat);
+      if (prefix != m_departed.end())
+        packet.ack[seat] = std::min(DepartedThrough(seat), prefix->second.until - 1);
+      else if (m_plan[seat].live_from == NEVER && m_plan[seat].unplug_from != NEVER &&
+               LogEnd() >= m_plan[seat].unplug_from)
+        // A removed local co-seat can already be entirely in the log when the host retires it.
+        packet.ack[seat] = m_plan[seat].unplug_from - 1;
+    }
   packet.current_frame = m_frame;
   packet.resimulated = m_last_resimulated;
   packet.stalls = m_link_stalls;

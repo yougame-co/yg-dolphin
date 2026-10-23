@@ -6439,3 +6439,66 @@ TEST(OrcaCoSeats, RemovingAnAdmittedCoSeatBeforePlugDoesNotKeepItsMachineCatchin
   CompareCoFrames(friends);
   CheckCoCounts(friends, 3, 3);
 }
+
+TEST(OrcaCoSeats, RebuildAfterPartialLeaveReleasesPrefixAfterGroupAcknowledges)
+{
+  CoSeatMesh friends({{0}, {1, 2}, {3}});
+  friends.mesh.latency = {0, 1, 0, 2};
+  friends.Play(600);
+  friends.players[1]->neutral_seats[2] = true;
+  friends.players[0]->session->UnplugSeat(2);
+  const int unplug = friends.players[0]->session->Plan()[2].unplug_from;
+  const int first = RebuildCoMachine(friends, 3, {});
+  for (int tick = 0; tick < 100; ++tick)
+  {
+    for (auto& pending : friends.mesh.pending[0])
+      if (pending.packet.seat == 1)
+        pending.packet.ack[2] = -1;
+    friends.Play(1);
+  }
+  EXPECT_TRUE(friends.mesh.last_sent[0].departed.contains(2));
+  EXPECT_GE(friends.mesh.last_sent[1].ack[2], unplug - 1);
+  const size_t wire_from = friends.mesh.wire.size();
+  const int before = friends.players[0]->session->CurrentFrame();
+  friends.Play(3600);
+  CompareCoFrames(friends, first);
+  CheckCoCounts(friends, 3, 3);
+  EXPECT_GT(friends.players[0]->session->CurrentFrame(), before + 3400);
+  EXPECT_TRUE(friends.mesh.last_sent[0].departed.empty());
+  int empty_prefix_packets = 0;
+  for (size_t index = wire_from; index < friends.mesh.wire.size(); ++index)
+  {
+    const auto& wire = friends.mesh.wire[index];
+    EXPECT_LT(wire.size(), 16384u);
+    Packet packet;
+    ASSERT_TRUE(DecodePacket(wire, &packet));
+    for (const auto& [seat, prefix] : packet.departed)
+      EXPECT_LE(prefix.pads.size(), static_cast<size_t>(MAX_PADS_IN_PACKET));
+    if (packet.seat == 0 && packet.departed.empty())
+      ++empty_prefix_packets;
+  }
+  EXPECT_GT(empty_prefix_packets, 3000);
+}
+
+TEST(OrcaCoSeats, RepeatedGroupRebuildsPreserveCompletedLocalPrefixes)
+{
+  for (const bool three_machines : {false, true})
+  {
+    CoSeatMesh friends(three_machines ? std::vector<std::vector<int>>{{0}, {1}, {2, 3}} :
+                                       std::vector<std::vector<int>>{{0, 1}, {2, 3}});
+    friends.mesh.latency = {0, 1, 2, 0};
+    friends.Play(500);
+    friends.mesh.reported_rtt[2] = 2000;
+    int first = RebuildCoMachine(friends, 2, {3});
+    for (int tick = 0; tick < 200 && friends.players[0]->session->Plan()[2].plug_from == NEVER; ++tick)
+      friends.Play(1);
+    ASSERT_NE(friends.players[0]->session->Plan()[2].plug_from, NEVER);
+    ASSERT_GT(friends.players[0]->session->Plan()[2].plug_from -
+                  friends.players[0]->session->CurrentFrame(), MAX_PADS_IN_PACKET * 2);
+    first = RebuildCoMachine(friends, 2, {3});
+    friends.Play(1800);
+    CompareCoFrames(friends, first);
+    CheckCoCounts(friends, 4, three_machines ? 3 : 2);
+    EXPECT_TRUE(friends.mesh.last_sent[0].departed.empty());
+  }
+}

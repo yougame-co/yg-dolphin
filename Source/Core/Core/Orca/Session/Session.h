@@ -357,6 +357,7 @@ public:
   void SetGroup(int lead, const std::vector<int>& co_seats);
   bool IsLocal(int seat) const;
   int LeadOf(int seat) const;
+  bool SameMachine(int a, int b) const;
   int PeersInPlay() const;
   // Host: the player at `seat` is gone (left or stopped answering); its controller unplugs after
   // its last received input.
