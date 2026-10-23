@@ -16,6 +16,7 @@
 #include <SFML/Network/UdpSocket.hpp>
 #include <SFML/System/Time.hpp>
 #include <gtest/gtest.h>
+#include <fmt/format.h>
 
 #include "Common/Analytics.h"
 #include "Common/FileUtil.h"
@@ -498,4 +499,76 @@ TEST(OrcaOfflineReplay, CoSeatSessionRecordsFourPortsAndFilePlaybackKeepsEveryHa
   EXPECT_EQ(played, end);
   EXPECT_EQ(replay_hash, recording.at(end).checksum);
   EXPECT_NE(stopped.find("The replay is over"), std::string::npos);
+}
+
+TEST(OrcaOfflineReplay, SingleSeatMachinesReplayFileMatchesPreCoSeatsBytes)
+{
+  using namespace Orca::Net;
+  ReplayArchive archive;
+  archive.first_frame = 100;
+  archive.origin_hash = 0x123456789abcdef0ull;
+  const auto ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+      std::vector<Orca::Events::PortInfo>{{0, "P1", false}, {1, "P2", false}});
+  for (int frame = 0; frame < 12; ++frame)
+  {
+    ReplayFrame entry;
+    entry.pads.fill(UNPLUGGED_PAD);
+    for (int seat = 0; seat < 2; ++seat)
+      entry.pads[seat] = Pad{static_cast<u8>(seat + 1), static_cast<u8>(frame / 3),
+                             static_cast<u8>(frame + seat), 0, 0, 0, 0, 0};
+    entry.ports = ports;
+    if (frame == 0)
+    {
+      entry.seed = 0x31415926;
+      entry.menu_exit = MENU_EXIT_FRIENDS;
+    }
+    entry.clear_ready = frame == 6;
+    archive.frames.push_back(entry);
+  }
+  // Fixed provenance makes the entire file comparable across build revisions.
+  ReplayStreamInfo info;
+  info.compat = "single-seat-golden";
+  info.build = "80448a9e1f";
+  info.game_id = "RSBE01";
+  info.origin_hash = archive.origin_hash;
+  info.first_frame = archive.first_frame;
+  info.segment = 1;
+  info.seat_labels = true;
+  const std::map<int, u64> checksums{{106, 0x9876543210abcdefull}, {112, 0x1020304050607080ull}};
+  const auto encoded = PackReplayStream(info, archive, checksums);
+  ASSERT_FALSE(encoded.empty());
+  const std::string directory = File::CreateTempDir();
+  const Common::ScopeGuard cleanup([&] { File::DeleteDirRecursively(directory); });
+  const std::string path = directory + "/single-seat.ygr";
+  {
+    File::IOFile file(path, "wb");
+    ASSERT_TRUE(file.WriteBytes(encoded.data(), encoded.size()));
+  }
+  File::IOFile file(path, "rb");
+  ASSERT_TRUE(file);
+  std::vector<u8> bytes(file.GetSize());
+  ASSERT_TRUE(file.ReadBytes(bytes.data(), bytes.size()));
+  std::string actual;
+  for (const u8 byte : bytes)
+    actual += fmt::format("{:02x}", byte);
+  // Captured as a file using the replay codec from detached 80448a9e1f.
+  const std::string_view expected =
+      "5947525301000000a60000007b226275696c64223a2238303434386139653166222c22636f6d706174223a2273696e67"
+      "6c652d736561742d676f6c64656e222c2266697273745f6672616d65223a3130302c2267616d65223a22525342453031"
+      "222c226f726967696e5f68617368223a2231323334353637383961626364656630222c22726f6f6d223a22222c227365"
+      "61745f6c6162656c73223a747275652c227365676d656e74223a312c2276223a327d59475243640000000c0000007000"
+      "000002000000ba0000004a00af969da0a01e28b52ffd6028048505000405010002000100800002503100503219000000"
+      "26594131010280010200038001030104040505060206020701070801020209800309030a02030b02030c6a000000efcd"
+      "ab103254769870706050403020103220608324ba06c187299c91819c00ce9c19f813ab0165118605e3ab3367769170e8"
+      "5c66168e300cff649900e95c06a436ace58db6627c7de624f91a117d79102c5880f84e1e570b3bef5a701bd8102ce0b8"
+      "7f05f4a9e686048303192616";
+  EXPECT_EQ(actual, expected);
+  ReplayStreamReader reader(info.compat);
+  std::string error;
+  ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size(), &error)) << error;
+  ASSERT_TRUE(reader.Complete());
+  ASSERT_EQ(reader.Archive().frames.size(), archive.frames.size());
+  EXPECT_EQ(reader.Checksums(), checksums);
+  for (size_t frame = 0; frame < archive.frames.size(); ++frame)
+    EXPECT_EQ(reader.Archive().frames[frame].pads, archive.frames[frame].pads);
 }

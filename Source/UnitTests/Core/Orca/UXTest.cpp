@@ -5156,7 +5156,7 @@ TEST(OrcaUXYgOrb, FeedbackRequestsCanRaceRendererTeardown)
   EXPECT_TRUE(std::filesystem::is_empty(dir));
 }
 
-TEST(OrcaUXControllers, OneOrdinalKeepsEveryLegacyChoice)
+TEST(OrcaUXControllers, OneOrdinalMatchesRecordedPreCoSeatsChoices)
 {
   const std::array<std::string, 4> snapshots{{
       Event(false, "", ""),
@@ -5164,6 +5164,51 @@ TEST(OrcaUXControllers, OneOrdinalKeepsEveryLegacyChoice)
       Event(true, FourPorts(PortJson(0, 2, "wired", 0x101)),
             PadJson(0, "standard", "[0,-1,0,0]", Buttons17(1))),
       Event(true, FourPorts(), PadJson(2, "standard", "[0,0,0,0]", Buttons17(2)))}};
+  // Filled from ChooseLocalPad compiled from detached 80448a9e1f, before co-seat input wiring.
+  const std::array<std::string_view, 32> expected{{
+      "-",
+      "-",
+      "-",
+      "-",
+      "-",
+      "-",
+      "-",
+      "-",
+      "1,3,false,256,255,128,128,128,0,0,0,0,0,true",
+      "1,3,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,3,false,256,255,128,128,128,0,0,0,0,0,true",
+      "1,3,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,3,false,256,255,128,128,128,0,0,0,0,0,true",
+      "1,3,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,3,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,3,true,0,128,128,128,128,0,0,0,0,0,true",
+      "0,0,false,4352,128,128,128,128,0,0,0,0,0,true",
+      "0,0,true,0,128,128,128,128,0,0,0,0,0,true",
+      "0,0,false,4352,128,128,128,128,0,0,0,0,0,true",
+      "0,0,true,0,128,128,128,128,0,0,0,0,0,true",
+      "0,0,true,0,128,128,128,128,0,0,0,0,0,true",
+      "0,0,true,0,128,128,128,128,0,0,0,0,0,true",
+      "0,0,true,0,128,128,128,128,0,0,0,0,0,true",
+      "0,0,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,2,false,512,128,128,128,128,0,0,0,0,0,true",
+      "1,2,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,2,false,512,128,128,128,128,0,0,0,0,0,true",
+      "1,2,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,2,false,512,128,128,128,128,0,0,0,0,0,true",
+      "1,2,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,2,true,0,128,128,128,128,0,0,0,0,0,true",
+      "1,2,true,0,128,128,128,128,0,0,0,0,0,true",
+  }};
+  const auto record = [](const std::optional<LocalChoice>& choice) {
+    if (!choice)
+      return std::string("-");
+    const auto& p = choice->pad;
+    return fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        static_cast<int>(choice->source), choice->index, choice->neutral, p.button,
+        p.stickX, p.stickY, p.substickX, p.substickY, p.triggerLeft, p.triggerRight,
+        p.analogA, p.analogB, p.switches, p.isConnected);
+  };
+  size_t index = 0;
   for (const auto& json : snapshots)
   for (const double age : {0.0, 100.0, 250.0, 251.0})
   for (const bool suspended : {false, true})
@@ -5171,17 +5216,10 @@ TEST(OrcaUXControllers, OneOrdinalKeepsEveryLegacyChoice)
     auto snapshot = ParseSnapshotEvent(json);
     ASSERT_TRUE(snapshot);
     snapshot->suspended = suspended;
-    const auto legacy = ChooseLocalPad(*snapshot, age);
     const auto choices = ChooseLocalPads(*snapshot, age, 1);
-    ASSERT_EQ(choices[0].has_value(), legacy.has_value());
     EXPECT_FALSE(choices[1]);
-    if (legacy)
-    {
-      EXPECT_EQ(choices[0]->source, legacy->source);
-      EXPECT_EQ(choices[0]->index, legacy->index);
-      EXPECT_EQ(choices[0]->neutral, legacy->neutral);
-      ExpectSame(choices[0]->pad, legacy->pad);
-    }
+    const auto actual = record(choices[0]);
+    EXPECT_EQ(actual, expected[index++]);
   }
 }
 
