@@ -184,12 +184,7 @@ std::optional<StandardPad> ParsePad(const picojson::value& v)
     return std::nullopt;
   }
   StandardPad pad;
-  if (Field(o, "seat"))
-  {
-    pad.seat = Integer(o, "seat", 0, 3);
-    if (!pad.seat)
-      return std::nullopt;
-  }
+  pad.seat = Integer(o, "seat", 0, 3);
   if (mapping->get<std::string>() != "standard")
   {
     pad.index = -1;

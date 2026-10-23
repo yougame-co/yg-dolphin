@@ -5221,7 +5221,7 @@ TEST(OrcaUXControllers, MultipleOrdinalsRequireExplicitUniqueDevices)
   EXPECT_FALSE(choices[1]);
 }
 
-TEST(OrcaUXControllers, ParsesExplicitPadSeatsAndRejectsInvalidOnes)
+TEST(OrcaUXControllers, ParsesExplicitPadSeatsAndIgnoresInvalidAssignments)
 {
   const auto assigned = [](const char* seat) {
     auto pad = PadJson(3, "standard", "[0,0,0,0]", Buttons17(0));
@@ -5232,7 +5232,13 @@ TEST(OrcaUXControllers, ParsesExplicitPadSeatsAndRejectsInvalidOnes)
   ASSERT_TRUE(snapshot);
   EXPECT_EQ(snapshot->pads[0].seat, 1);
   for (const char* bad : {"-1", "4", "0.5", "null", "true"})
-    EXPECT_FALSE(ParseSnapshotEvent(assigned(bad)));
+  {
+    const auto unassigned = ParseSnapshotEvent(assigned(bad));
+    ASSERT_TRUE(unassigned);
+    ASSERT_EQ(unassigned->pads.size(), 1u);
+    EXPECT_FALSE(unassigned->pads[0].seat);
+    ExpectSame(MapStandardPad(unassigned->pads[0]), MapStandardPad(snapshot->pads[0]));
+  }
 }
 
 TEST(OrcaUXControllers, ExplicitSeatsIgnorePadIndexAndOrder)
@@ -5276,4 +5282,26 @@ TEST(OrcaUXOrbCombo, CoSeatShortcutHasOnlyTheRecordedMask)
   pad.button = PAD_BUTTON_START;
   EXPECT_EQ(FilterCoSeatPad(pad, combo, true, true).button, PAD_BUTTON_START);
   EXPECT_TRUE(testing::internal::GetCapturedStdout().empty());
+}
+
+TEST(OrcaUXControllers, InvalidOptionalSeatKeepsTheSnapshotAndItsOtherAssignments)
+{
+  for (const char* value : {"null", "-1", "4", "1.5", "false", "\"none\""})
+  {
+    auto unassigned = PadJson(1, "standard", "[1,0,0,0]", Buttons17(0));
+    unassigned.insert(1, std::string("\"seat\":") + value + ",");
+    auto assigned = PadJson(3, "standard", "[0,0,0,0]", Buttons17(1));
+    assigned.insert(1, "\"seat\":0,");
+    const auto snapshot = ParseSnapshotEvent(Event(false, "", unassigned + "," + assigned));
+    ASSERT_TRUE(snapshot) << value;
+    ASSERT_EQ(snapshot->pads.size(), 2u);
+    EXPECT_FALSE(snapshot->pads[0].seat);
+    const auto single = ChooseLocalPads(*snapshot, 0, 1);
+    ASSERT_TRUE(single[0]);
+    EXPECT_EQ(single[0]->index, 1);
+    const auto multiple = ChooseLocalPads(*snapshot, 0, 2);
+    ASSERT_TRUE(multiple[0]);
+    EXPECT_EQ(multiple[0]->index, 3);
+    EXPECT_FALSE(multiple[1]);
+  }
 }
