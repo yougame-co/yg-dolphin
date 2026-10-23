@@ -333,6 +333,9 @@ int Session::PeersInPlay() const
 
 void Session::SetGroup(int lead, const std::vector<int>& co_seats)
 {
+  PrepareAdmission(lead);
+  for (const int seat : co_seats)
+    PrepareAdmission(seat);
   if (m_config.authority_seat != m_config.local_seat || lead < 0 || lead >= m_config.seats ||
       IsLocal(lead) || LeadOf(lead) != lead)
   {
@@ -372,6 +375,16 @@ bool Session::ApplyGroups(const Packet& packet)
     const SeatPlan& plan = (*packet.roster)[seat];
     const bool present = plan.live_from != NEVER;
     groups[seat] = packet.groups ? (*packet.groups)[seat] : (present ? seat : -1);
+  }
+  for (const int seat : m_config.co_seats)
+  {
+    const SeatPlan& next = (*packet.roster)[seat];
+    const auto completed = std::ranges::find_if(packet.departed,
+        [seat](const auto& entry) { return entry.first == seat; });
+    if (IsLocal(seat) && m_own_live_from[seat] != NEVER &&
+        next.live_from != NEVER && next.live_from != m_own_live_from[seat] &&
+        completed != packet.departed.end() && completed->second.until <= next.live_from)
+      m_local_retired[seat] = true;
   }
   const SeatPlan& own = (*packet.roster)[m_config.local_seat];
   if (own.live_from != NEVER && own.live_from >= m_config.start_frame)
@@ -546,6 +559,7 @@ std::vector<Pads> Session::TakeLog(int* base)
 
 void Session::AddPeer(int seat, int live_from, int history_from)
 {
+  PrepareAdmission(seat);
   if (seat < 0 || seat >= m_config.seats || IsLocal(seat))
     return;
   for (int sibling = 0; sibling < m_config.seats; ++sibling)
@@ -557,12 +571,21 @@ void Session::AddPeer(int seat, int live_from, int history_from)
   AdmitSeat(seat, live_from, history_from);
 }
 
+void Session::PrepareAdmission(int seat)
+{
+  if (m_config.authority_seat == m_config.local_seat && seat >= 0 && seat < m_config.seats &&
+      LeadOf(seat) != seat && m_plan[seat].live_from != NEVER &&
+      m_plan[seat].unplug_from != NEVER)
+    RetireSeat(seat);
+}
+
 void Session::AdmitSeat(int seat, int live_from, int history_from)
 {
   if (m_config.per_peer_inputs && InPlay(seat))
     DropSeat(seat);
   SeatPlan& plan = m_plan[seat];
   plan = {NEVER, NEVER, live_from};
+  m_previous_lead[seat] = -1;
   m_peer_ack[seat].fill(-1);
   m_acked[seat] = live_from - 1;
   m_received[seat] = -1;
@@ -595,6 +618,8 @@ void Session::RequireValues(int seat, int version)
 
 void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int history_from)
 {
+  for (const int seat : seats)
+    PrepareAdmission(seat);
   int gate_from = std::max(m_frame, m_last_sent_newest + 1);
   const auto gate_needed = [&] {
     if (!m_start_gate)
@@ -683,8 +708,10 @@ void Session::RetireSeat(int seat)
   SeatPlan& plan = m_plan[seat];
   if (plan.plug_from != NEVER)
   {
-    const int last = IsLocal(seat) ? plan.unplug_from :
-                                    std::max(plan.plug_from, m_received[seat] + 1);
+    const int last = IsLocal(seat) ?
+        std::max(plan.plug_from, m_co_local[seat].empty() ? m_frame :
+                                                        m_co_local[seat].rbegin()->first + 1) :
+        std::max(plan.plug_from, m_received[seat] + 1);
     if (last < plan.unplug_from)
     {
       plan.unplug_from = last;

@@ -6839,3 +6839,55 @@ TEST(OrcaCoSeats, SingleSeatLeaveGoldens)
   EXPECT_EQ(SingleSeatLeaveGolden(false), expected[0]);
   EXPECT_EQ(SingleSeatLeaveGolden(true), expected[1]);
 }
+
+TEST(OrcaCoSeats, PendingCoSeatUnplugCanBeReplacedThroughEveryAdmissionPath)
+{
+  for (const bool local : {false, true})
+  for (int method = 0; method < 3; ++method)
+  {
+    SCOPED_TRACE(local);
+    SCOPED_TRACE(method);
+    CoSeatMesh friends(local ? std::vector<std::vector<int>>{{0, 2}, {1}} :
+                               std::vector<std::vector<int>>{{0}, {1, 2}});
+    friends.Play(600);
+    auto& host = *friends.players[0];
+    friends.players[local ? 0 : 1]->neutral_seats[2] = true;
+    host.session->UnplugSeat(2);
+    const int live = host.session->Plan()[2].unplug_from;
+    const int first = host.session->CurrentFrame() - 30;
+    const auto lead_plan = host.session->Plan()[local ? 0 : 1];
+    ASSERT_GT(live, host.session->CurrentFrame());
+    if (method == 0)
+      host.session->AddPeer(2, live, first);
+    else if (method == 1)
+      host.session->AddPeerBatch({2}, live, first);
+    else
+    {
+      host.session->SetGroup(2, {3});
+      host.session->AddPeerBatch({2, 3}, live, first);
+    }
+    ASSERT_TRUE(host.session->Error().empty()) << host.session->Error();
+    EXPECT_EQ(host.session->Plan()[local ? 0 : 1], lead_plan);
+    EXPECT_EQ(host.session->LeadOf(2), 2);
+    EXPECT_EQ(host.session->Plan()[2].live_from, live);
+    if (method == 2)
+      EXPECT_EQ(host.session->LeadOf(3), 2);
+    friends.players[2] = std::make_unique<CoMeshPlayer>(friends.mesh, 2,
+        method == 2 ? std::vector<int>{3} : std::vector<int>{}, std::vector<int>{0}, first);
+    friends.players[2]->game.m_state = At(host.game.m_history, first);
+    friends.mesh.pending[2].clear();
+    // The room filters old co packets once the replacement occupies this slot.
+    for (auto& queue : friends.mesh.pending)
+      std::erase_if(queue, [](const auto& pending) { return !pending.packet.co.empty(); });
+    for (int tick = 0; tick < 900; ++tick)
+    {
+      for (auto& queue : friends.mesh.pending)
+        std::erase_if(queue, [local](const auto& pending) {
+          return pending.packet.seat == (local ? 0 : 1) && !pending.packet.co.empty();
+        });
+      friends.Play(1);
+    }
+    CompareCoFrames(friends, first);
+    EXPECT_TRUE(host.session->Error().empty()) << host.session->Error();
+  }
+}

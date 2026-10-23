@@ -434,6 +434,7 @@ public:
   const std::map<int, u64>& LocalChecksums() const { return m_local_checksums; }
 
 private:
+  void PrepareAdmission(int seat);
   void AdmitSeat(int seat, int live_from, int history_from);
   void RetireSeat(int seat);
   void ReceivePackets();
