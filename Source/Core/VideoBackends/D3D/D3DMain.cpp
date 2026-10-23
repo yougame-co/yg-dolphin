@@ -11,6 +11,8 @@
 #include "Common/MsgHandler.h"
 #include "Common/StringUtil.h"
 
+#include "Core/Orca/BootPhase.h"
+
 #include "VideoBackends/D3D/D3DBase.h"
 #include "VideoBackends/D3D/D3DBoundingBox.h"
 #include "VideoBackends/D3D/D3DGfx.h"
@@ -145,6 +147,8 @@ bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
   if (!D3D::Create(g_Config.iAdapter, g_Config.bEnableValidationLayer))
     return false;
 
+  Orca::BootPhase::Mark(Orca::BootPhase::Phase::VideoDevice);
+
   FillBackendInfo();
   UpdateActiveConfig();
 
@@ -156,6 +160,9 @@ bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
     D3D::Destroy();
     return false;
   }
+
+  if (swap_chain)
+    Orca::BootPhase::Mark(Orca::BootPhase::Phase::VideoSwapchain);
 
   auto gfx = std::make_unique<DX11::Gfx>(std::move(swap_chain), wsi.render_surface_scale);
   auto vertex_manager = std::make_unique<VertexManager>();
