@@ -7019,3 +7019,44 @@ TEST_F(OrcaRoomRuntime, FreshTicketKeepsTicketLobbyWithoutWelcomeLobby)
   ASSERT_TRUE(picojson::parse(expected, lobby).empty());
   EXPECT_EQ(lobbies.get<picojson::array>()[1], expected);
 }
+
+TEST(OrcaRoom, CoHostLeaveIsReportedOnce)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
+      {RK::Message, 0, CoRoster("welcome", true, true, true)},
+      {RK::Message, 0, PeerHello(true)},
+      {RK::Message, 1, CoRoster("leave", true, true, false, false)}});
+  ASSERT_EQ(trace.back().events.size(), 2u);
+  EXPECT_EQ(trace.back().events[0].seat, 0);
+  EXPECT_TRUE(trace.back().events[0].host);
+  EXPECT_EQ(trace.back().events[1].seat, 3);
+  EXPECT_FALSE(trace.back().events[1].host);
+}
+
+TEST(OrcaRoom, MissingCoSeatHoldsItsHostGroup)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
+      {RK::Message, 0, CoRoster("welcome", true, true, true)},
+      {RK::Message, 0, PeerHello(true)},
+      {RK::InputSilence, 1000, "3", 1000}});
+  ASSERT_TRUE(trace.back().input_held);
+  EXPECT_TRUE(*trace.back().input_held);
+  ASSERT_TRUE(trace.back().host_input_deadline);
+  EXPECT_EQ(*trace.back().host_input_deadline, RoomClock::time_point{} + 1000ms + ROOM_HOLD);
+}
+
+TEST(OrcaRoom, RetryCoSeatResetsItsWholeGroupOnce)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
+      {RK::Message, 0, CoRoster("welcome", true, true, true)},
+      {RK::Message, 0, PeerHello(true)},
+      {RK::RetryPeer, 1000, "", 0}, {RK::RetryPeer, 1000, "", 3}, {RK::Tick, 1001}});
+  const auto& events = trace.back().events;
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].kind, PeerEvent::Kind::Left);
+  EXPECT_EQ(events[0].seat, 0);
+  EXPECT_TRUE(events[0].host);
+  EXPECT_EQ(events[1].kind, PeerEvent::Kind::Left);
+  EXPECT_EQ(events[1].seat, 3);
+  EXPECT_FALSE(events[1].host);
+}

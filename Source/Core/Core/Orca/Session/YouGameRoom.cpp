@@ -4415,7 +4415,7 @@ struct YouGameRoom::Impl
   {
     Emit({PeerEvent::Kind::Left, peer.slot, peer.drop_in_host, peer.name, {}, {}, reason});
     for (int slot : peer.co_slots)
-      Emit({PeerEvent::Kind::Left, slot, peer.drop_in_host, {}, {}, {}, reason});
+      Emit({PeerEvent::Kind::Left, slot, false, {}, {}, {}, reason});
   }
 
   void ResetPeer(std::map<std::string, Peer>::iterator p, const std::string& why = "")
@@ -5533,7 +5533,10 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     }
     case RoomTestStep::Kind::InputSilence:
       input_held = owner.HoldInputSilence(
-          Clock::time_point{} + std::chrono::milliseconds(step.close_code), *room.test_now);
+          Clock::time_point{} + std::chrono::milliseconds(step.close_code), *room.test_now,
+          step.text.empty() ? std::nullopt :
+                             std::optional<std::vector<int>>(
+                                 std::vector<int>{std::atoi(step.text.c_str())}));
       break;
     case RoomTestStep::Kind::SocketConnected:
       room.public_socket_reachable = true;
@@ -5572,11 +5575,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                             step.text.empty() ? "no reason given" : step.text);
       break;
     case RoomTestStep::Kind::RetryPeer:
-      for (const auto& [slot, id] : room.peer_ids)
-      {
-        if (slot == static_cast<int>(step.close_code))
-          room.pending_retries.push_back(id);
-      }
+      owner.RetryPeer(static_cast<int>(step.close_code));
       break;
     case RoomTestStep::Kind::PollReconnect:
       room.PollReconnect();
@@ -5605,6 +5604,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                      std::exchange(room.test_results, {}), room.WaitingDeadlineLocked(),
                      owner.RoomRecovering(*room.test_now), input_held});
     auto& snapshot = trace.back();
+    snapshot.host_input_deadline = owner.HostAwayDeadline();
     snapshot.seat = owner.Seat();
     snapshot.co_seats = owner.CoSeats();
     for (int slot = 0; slot < MAX_SEATS; ++slot)
@@ -5708,7 +5708,8 @@ std::optional<std::chrono::steady_clock::time_point> YouGameRoom::HostAwayDeadli
 void YouGameRoom::RetryPeer(int seat)
 {
   std::lock_guard lock(m_impl->mutex);
-  if (const auto id = m_impl->peer_ids.find(seat); id != m_impl->peer_ids.end())
+  if (const auto id = m_impl->peer_ids.find(seat); id != m_impl->peer_ids.end() &&
+      std::ranges::find(m_impl->pending_retries, id->second) == m_impl->pending_retries.end())
     m_impl->pending_retries.push_back(id->second);
 }
 
@@ -5721,9 +5722,17 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
       m_impl->peer_ids.empty())
     return false;
   bool held = false;
-  for (const auto& [slot, id] : m_impl->peer_ids)
+  std::set<std::string> visited;
+  for (const auto& [group_seat, id] : m_impl->peer_ids)
   {
-    if (missing && std::ranges::find(*missing, slot) == missing->end())
+    if (!visited.insert(id).second)
+      continue;
+    const auto& group = m_impl->seat_groups[group_seat];
+    const int slot = group.empty() ? group_seat : group.front();
+    if (missing && std::ranges::none_of(*missing, [&](int seat) {
+          const auto peer = m_impl->peer_ids.find(seat);
+          return peer != m_impl->peer_ids.end() && peer->second == id;
+        }))
       continue;
     held = true;
     // A real departure (or a requested resync) interrupts the stall immediately.

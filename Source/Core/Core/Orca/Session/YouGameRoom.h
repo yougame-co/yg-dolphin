@@ -494,6 +494,7 @@ struct RoomTestSnapshot
   std::array<int, MAX_SEATS> local_indices{-1, -1, -1, -1};
   std::array<std::vector<int>, MAX_SEATS> groups;
   std::vector<int> linked_seats;
+  std::optional<std::chrono::steady_clock::time_point> host_input_deadline;
 };
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                              const std::vector<RoomTestStep>& steps);
