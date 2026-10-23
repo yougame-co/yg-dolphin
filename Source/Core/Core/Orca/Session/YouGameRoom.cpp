@@ -516,15 +516,15 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
           std::floor(entry[0].get<double>()) != entry[0].get<double>() ||
           !entry[1].is<std::string>() || entry[1].get<std::string>().size() != pads.size())
         return false;
-      const int seat = static_cast<int>(entry[0].get<double>());
+      const int co_seat = static_cast<int>(entry[0].get<double>());
       std::vector<u8> input;
-      if (seen[seat] || !FromHex(entry[1].get<std::string>(), &input))
+      if (seen[co_seat] || !FromHex(entry[1].get<std::string>(), &input))
         return false;
-      seen[seat] = true;
+      seen[co_seat] = true;
       std::vector<Pad> inputs(input.size() / sizeof(Pad));
       for (size_t i = 0; i < inputs.size(); ++i)
         std::copy_n(input.begin() + i * sizeof(Pad), sizeof(Pad), inputs[i].begin());
-      out.co.emplace_back(seat, std::move(inputs));
+      out.co.emplace_back(co_seat, std::move(inputs));
     }
   }
   const auto& acks = ack->second.get<picojson::array>();
