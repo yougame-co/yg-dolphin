@@ -572,3 +572,21 @@ TEST(OrcaFreshStart, SoloCoSeatsKeepSeparatePadsPortsAndNeutralTails)
     EXPECT_TRUE(ports[1].controls.empty());
   }
 }
+
+TEST(OrcaCoSeats, SetOverButtonsKeepTheLeadSample)
+{
+  for (const int lead : {0, 1})
+  {
+    for (const bool lead_b : {false, true})
+    {
+      const auto seen = PumpSeenLocalPadForTest(lead, {2, 3}, [&](int seat) {
+        GCPadStatus pad;
+        if ((seat == lead) == lead_b)
+          pad.button = PAD_BUTTON_B;
+        return Orca::Net::EncodePad(pad);
+      });
+      ASSERT_TRUE(seen);
+      EXPECT_EQ(Orca::Net::DecodePad(*seen).button, lead_b ? PAD_BUTTON_B : 0);
+    }
+  }
+}

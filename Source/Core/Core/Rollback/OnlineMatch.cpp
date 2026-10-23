@@ -4921,6 +4921,17 @@ void SetOverLeave(Match& match)
 }
 }  // namespace
 
+namespace
+{
+Pad SeenLocalPad(const Match& match, const std::function<Pad(int)>& sample, int seat)
+{
+  const Pad pad = sample(seat);
+  if (seat == LeadSeat(match))
+    s_local_pad = pad;
+  return pad;
+}
+}
+
 std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
                               const FrameHook& on_frame,
@@ -4931,9 +4942,7 @@ std::optional<int> OnBoundary(Core::System& system,
   const bool was_replaying = TheMatch().replaying != nullptr;
   // The local pad as this boundary read it for the game (for SetOverLeave).
   const std::function<Orca::Net::Pad(int)> seen = [&local_pad](int local_seat) {
-    const Orca::Net::Pad pad = local_pad(local_seat);
-    s_local_pad = pad;
-    return pad;
+    return SeenLocalPad(TheMatch(), local_pad, local_seat);
   };
   const std::optional<int> rewound_to = Boundary(system, seen, on_frame, local_pad_waiting);
   if (TheMatch().replaying || (was_replaying && !TheMatch().session))
@@ -5378,6 +5387,19 @@ std::vector<Pads> PumpSoloSeatsForTest(Core::System& system, const std::vector<i
   if (ports)
     *ports = PortsAt(match, frames);
   return match.log;
+}
+
+std::optional<Pad> PumpSeenLocalPadForTest(int lead, const std::vector<int>& co_seats,
+    const std::function<Pad(int)>& sample)
+{
+  const auto previous = std::exchange(s_local_pad, std::nullopt);
+  const Common::ScopeGuard restore([&] { s_local_pad = previous; });
+  Match match;
+  match.local_seat = lead;
+  SeenLocalPad(match, sample, lead);
+  for (const int seat : co_seats)
+    SeenLocalPad(match, sample, seat);
+  return s_local_pad;
 }
 
 int PumpLeadSeatForTest(std::unique_ptr<Orca::Net::Session> session, int solo_seat)
