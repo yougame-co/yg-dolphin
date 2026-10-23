@@ -431,6 +431,7 @@ public:
   const std::map<int, u64>& LocalChecksums() const { return m_local_checksums; }
 
 private:
+  void AdmitSeat(int seat, int live_from, int history_from);
   void ReceivePackets();
   void ReceiveOne(const Packet& packet, bool input_only = false);
   bool ApplyGroups(const Packet& packet);

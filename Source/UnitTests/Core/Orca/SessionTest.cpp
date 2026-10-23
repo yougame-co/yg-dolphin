@@ -6193,3 +6193,29 @@ TEST(OrcaCoSeats, DeparturesReleaseGroupOwnershipAndPresence)
   singles.players[0]->session->SetGroup(2, {3});
   EXPECT_TRUE(singles.players[0]->session->Error().empty());
 }
+
+TEST(OrcaCoSeats, GroupedLeadRequiresBatchAdmission)
+{
+  FriendsMesh mesh;
+  CoMeshPlayer host(mesh, 0, {}, {0});
+  host.session->SetGroup(2, {3});
+  host.session->AddPeer(2, 300, 240);
+  EXPECT_FALSE(host.session->Error().empty());
+  EXPECT_EQ(host.session->Plan()[2].live_from, NEVER);
+  EXPECT_EQ(host.session->Plan()[3].live_from, NEVER);
+}
+
+TEST(OrcaCoSeats, BatchReplacementKeepsTheDeclaredGroup)
+{
+  CoSeatMesh friends({{0, 1}, {2, 3}});
+  friends.Play(400);
+  auto& host = *friends.players[0];
+  const int live = host.session->CurrentFrame();
+  host.session->AddPeerBatch({2}, live, live - 20);
+  EXPECT_TRUE(host.session->Error().empty());
+  EXPECT_EQ(host.session->LeadOf(3), 2);
+  EXPECT_EQ(host.session->Plan()[2].live_from, live);
+  EXPECT_EQ(host.session->Plan()[3].live_from, live);
+  EXPECT_EQ(host.session->Plan()[2].plug_from, NEVER);
+  EXPECT_EQ(host.session->Plan()[3].plug_from, NEVER);
+}

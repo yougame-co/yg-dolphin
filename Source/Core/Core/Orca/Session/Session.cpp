@@ -527,6 +527,17 @@ void Session::AddPeer(int seat, int live_from, int history_from)
 {
   if (seat < 0 || seat >= m_config.seats || IsLocal(seat))
     return;
+  for (int sibling = 0; sibling < m_config.seats; ++sibling)
+    if (sibling != seat && LeadOf(sibling) == LeadOf(seat))
+    {
+      Fail("Grouped seats must be admitted with AddPeerBatch");
+      return;
+    }
+  AdmitSeat(seat, live_from, history_from);
+}
+
+void Session::AdmitSeat(int seat, int live_from, int history_from)
+{
   if (m_config.per_peer_inputs && InPlay(seat))
     DropSeat(seat);
   SeatPlan& plan = m_plan[seat];
@@ -588,13 +599,22 @@ void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int his
       if (LeadOf(sibling) == LeadOf(seat) &&
           std::ranges::find(batch, sibling) == batch.end())
         batch.push_back(sibling);
+  const auto leads = m_lead;
+  const auto known = m_group_known;
   for (const int seat : batch)
   {
     if (seat < 0 || seat >= m_config.seats || IsLocal(seat))
       continue;
-    AddPeer(seat, live_from, history_from);
+    AdmitSeat(seat, live_from, history_from);
     m_plug_batch.insert(seat);
   }
+  // Replacing a live group retires its previous stay before admitting this one.
+  for (const int seat : batch)
+    if (seat >= 0 && seat < m_config.seats && !IsLocal(seat))
+    {
+      m_lead[seat] = leads[seat];
+      m_group_known[seat] = known[seat];
+    }
   m_start_gate = {gate_from, NEVER};
   // Extending a confirmed gate may cover a gap already run with Start up. Only changed,
   // unconfirmed pads need a rollback; confirmed log entries retain their exact inputs.
