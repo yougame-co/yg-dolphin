@@ -358,17 +358,17 @@ bool Session::ApplyGroups(const Packet& packet)
     FailPeer("Invalid roster groups");
     return false;
   }
-  std::array<int, MAX_SEATS> groups;
+  std::array<int, MAX_SEATS> groups{};
   for (int seat = 0; seat < MAX_SEATS; ++seat)
   {
     const SeatPlan& plan = (*packet.roster)[seat];
-    const bool present = plan.live_from != NEVER || plan.plug_from != NEVER;
+    const bool present = plan.live_from != NEVER;
     groups[seat] = packet.groups ? (*packet.groups)[seat] : (present ? seat : -1);
   }
   for (int seat = 0; seat < MAX_SEATS; ++seat)
   {
     const SeatPlan& plan = (*packet.roster)[seat];
-    const bool present = plan.live_from != NEVER || plan.plug_from != NEVER;
+    const bool present = plan.live_from != NEVER;
     const int lead = groups[seat];
     if ((!present && lead != -1) || (present && (seat >= m_config.seats || lead < 0 || lead >= m_config.seats)))
     {
@@ -382,7 +382,8 @@ bool Session::ApplyGroups(const Packet& packet)
         plan.plug_from != leader.plug_from ||
         (IsLocal(seat) && lead != m_config.local_seat) ||
         (!IsLocal(seat) && IsLocal(lead)) ||
-        (m_group_known[seat] && LeadOf(seat) != lead) ||
+        (m_group_known[seat] && m_plan[seat].live_from == plan.live_from &&
+         LeadOf(seat) != lead) ||
         (seat == m_config.authority_seat && lead != seat))
     {
       FailPeer("Invalid roster groups");
@@ -394,6 +395,13 @@ bool Session::ApplyGroups(const Packet& packet)
     {
       m_lead[seat] = groups[seat];
       m_group_known[seat] = true;
+    }
+    else
+    {
+      if (m_group_known[seat])
+        m_previous_lead[seat] = LeadOf(seat);
+      m_lead[seat] = seat;
+      m_group_known[seat] = false;
     }
   return true;
 }
@@ -602,7 +610,10 @@ void Session::SetValuesHeld(int version)
 
 void Session::DropSeat(int seat)
 {
-  if (LeadOf(seat) == seat)
+  if (seat < 0 || seat >= m_config.seats || IsLocal(seat))
+    return;
+  const int lead = LeadOf(seat);
+  if (lead == seat)
     for (int sibling = 0; sibling < m_config.seats; ++sibling)
       if (sibling != seat && LeadOf(sibling) == seat)
         DropSeat(sibling);
@@ -614,7 +625,13 @@ void Session::DropSeat(int seat)
       m_start_gate->second = std::max(m_start_gate->second, gate.second);
   }
   if (!InPlay(seat))
+  {
+    if (m_group_known[seat])
+      m_previous_lead[seat] = lead;
+    m_lead[seat] = seat;
+    m_group_known[seat] = false;
     return;
+  }
   SeatPlan& plan = m_plan[seat];
   if (plan.plug_from != NEVER)
   {
@@ -658,6 +675,9 @@ void Session::DropSeat(int seat)
     }
   }
   plan.live_from = NEVER;
+  m_previous_lead[seat] = lead;
+  m_lead[seat] = seat;
+  m_group_known[seat] = false;
 }
 
 void Session::DropAllPeers()
@@ -1685,12 +1705,20 @@ void Session::ReceivePackets()
     for (const auto& [seat, inputs] : packet.co)
     {
       if (seat < 0 || seat >= m_config.seats || seen[seat] || IsLocal(seat) ||
-          !InPlay(seat) || LeadOf(seat) != lead || inputs.size() != packet.pads.size())
+          inputs.size() != packet.pads.size())
       {
         FailPeer("Invalid input group");
         return;
       }
       seen[seat] = true;
+      // A roster can retire a co-seat before the last copy of its inputs arrives.
+      if (!InPlay(seat) && m_previous_lead[seat] == lead)
+        continue;
+      if (!InPlay(seat) || LeadOf(seat) != lead)
+      {
+        FailPeer("Invalid input group");
+        return;
+      }
       Packet input;
       input.seat = seat;
       input.sequence = packet.sequence;
@@ -2192,11 +2220,11 @@ void Session::SendPacket()
     if (m_config.authority_seat == m_config.local_seat)
     {
       packet.roster = m_plan;
-      std::array<int, MAX_SEATS> groups;
+      std::array<int, MAX_SEATS> groups{};
       bool grouped = false;
       for (int seat = 0; seat < MAX_SEATS; ++seat)
       {
-        groups[seat] = m_plan[seat].live_from == NEVER && m_plan[seat].plug_from == NEVER ?
+        groups[seat] = m_plan[seat].live_from == NEVER ?
                            -1 : LeadOf(seat);
         grouped = grouped || (groups[seat] >= 0 && groups[seat] != seat);
       }

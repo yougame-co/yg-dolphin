@@ -6156,3 +6156,40 @@ TEST(OrcaCoSeats, WiderSingleSeatGoldens)
     EXPECT_EQ(SingleSeatGolden(scenario), expected[scenario]);
   }
 }
+
+TEST(OrcaCoSeats, DeparturesReleaseGroupOwnershipAndPresence)
+{
+  for (const bool whole_group : {false, true})
+  {
+    SCOPED_TRACE(whole_group);
+    CoSeatMesh friends({{0}, {1}, {2, 3}});
+    friends.Play(400);
+    auto& host = *friends.players[0];
+    host.session->DropSeat(whole_group ? 2 : 3);
+    EXPECT_EQ(host.session->LeadOf(3), 3);
+    if (whole_group)
+      friends.players[2].reset();
+    // The remaining machine must accept the roster after a co-seat or its group departs.
+    friends.Play(40);
+    EXPECT_TRUE(host.session->Error().empty()) << host.session->Error();
+    ASSERT_TRUE(friends.players[1]->session->Error().empty())
+        << friends.players[1]->session->Error();
+    EXPECT_EQ(friends.players[1]->session->LeadOf(3), 3);
+    if (friends.mesh.last_sent[0].groups)
+      EXPECT_EQ((*friends.mesh.last_sent[0].groups)[3], -1);
+    if (whole_group)
+    {
+      const int live = host.session->CurrentFrame();
+      host.session->AddPeerBatch({2}, live, live - 20);
+      EXPECT_EQ(host.session->Plan()[3].live_from, NEVER);
+      host.session->DropSeat(2);
+      host.session->SetGroup(2, {3});
+      EXPECT_TRUE(host.session->Error().empty()) << host.session->Error();
+    }
+  }
+  CoSeatMesh singles({{0}, {1}, {2}, {3}});
+  singles.Play(400);
+  singles.players[0]->session->DropSeat(3);
+  singles.players[0]->session->SetGroup(2, {3});
+  EXPECT_TRUE(singles.players[0]->session->Error().empty());
+}
