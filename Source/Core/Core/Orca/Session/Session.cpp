@@ -384,19 +384,35 @@ bool Session::ApplyGroups(const Packet& packet)
     if (IsLocal(seat) && m_own_live_from[seat] != NEVER &&
         next.live_from != NEVER && next.live_from != m_own_live_from[seat] &&
         completed != packet.departed.end() && completed->second.until <= next.live_from)
+    {
       m_local_retired[seat] = true;
+      m_local_co_until[seat] = completed->second.until;
+    }
   }
   const SeatPlan& own = (*packet.roster)[m_config.local_seat];
   if (own.live_from != NEVER && own.live_from >= m_config.start_frame)
     for (const int seat : m_config.co_seats)
-      if (m_own_live_from[seat] == NEVER &&
-          ((*packet.roster)[seat].live_from != own.live_from ||
-           (*packet.roster)[seat].plug_from != own.plug_from ||
-           groups[seat] != m_config.local_seat))
+    {
+      if (m_own_live_from[seat] != NEVER)
+        continue;
+      const SeatPlan& co = (*packet.roster)[seat];
+      // A never-plugged co-seat carries its cancelled admission in the unplug frame. This
+      // distinguishes cancellation before our first roster from an incomplete admission.
+      if (co.live_from == NEVER && co.plug_from == NEVER && co.unplug_from == own.live_from &&
+          groups[seat] == -1)
+      {
+        m_own_live_from[seat] = own.live_from;
+        m_local_retired[seat] = true;
+        m_local_co_until[seat] = own.live_from;
+        continue;
+      }
+      if (co.live_from != own.live_from || co.plug_from != own.plug_from ||
+          groups[seat] != m_config.local_seat)
       {
         FailPeer("The host admitted this player without its co-seat");
         return false;
       }
+    }
   for (int seat = 0; seat < MAX_SEATS; ++seat)
   {
     const SeatPlan& plan = (*packet.roster)[seat];
@@ -425,6 +441,8 @@ bool Session::ApplyGroups(const Packet& packet)
   for (int seat = 0; seat < MAX_SEATS; ++seat)
     if (groups[seat] >= 0)
     {
+      if (m_plan[seat].live_from != (*packet.roster)[seat].live_from)
+        m_previous_lead[seat] = -1;
       m_lead[seat] = groups[seat];
       m_group_known[seat] = true;
     }
@@ -576,7 +594,7 @@ void Session::PrepareAdmission(int seat)
   if (m_config.authority_seat == m_config.local_seat && seat >= 0 && seat < m_config.seats &&
       LeadOf(seat) != seat && m_plan[seat].live_from != NEVER &&
       m_plan[seat].unplug_from != NEVER)
-    RetireSeat(seat);
+    RetireSeat(seat, true);
 }
 
 void Session::AdmitSeat(int seat, int live_from, int history_from)
@@ -676,9 +694,23 @@ void Session::SetValuesHeld(int version)
 
 void Session::DropSeat(int seat)
 {
+  m_plug_batch.erase(seat);
+  CloseEmptyBatch();
   if (seat < 0 || seat >= m_config.seats || IsLocal(seat))
     return;
   const int lead = LeadOf(seat);
+  if (lead == seat)
+    for (auto& [departed_seat, stay] : m_departed)
+      if (m_departed_owner[departed_seat] == lead)
+      {
+        const int first = stay.first_frame + static_cast<int>(stay.pads.size());
+        stay.pads.resize(stay.until - stay.first_frame, UNPLUGGED_PAD);
+        for (int frame = first; frame < std::min(stay.until, m_frame); ++frame)
+          if (const auto used = m_used.find(frame); used != m_used.end() &&
+              used->second[departed_seat] != PadsFor(frame)[departed_seat])
+            m_dirty = std::min(m_dirty, frame);
+        m_departed_owner[departed_seat] = -1;
+      }
   if (lead == seat)
     for (int sibling = 0; sibling < m_config.seats; ++sibling)
       if (sibling != seat && LeadOf(sibling) == seat)
@@ -686,17 +718,22 @@ void Session::DropSeat(int seat)
   RetireSeat(seat);
 }
 
-void Session::RetireSeat(int seat)
+void Session::CloseEmptyBatch()
 {
-  const int lead = LeadOf(seat);
-  const bool local_co = IsLocal(seat) && seat != m_config.local_seat;
-  m_plug_batch.erase(seat);
   if (m_start_gate && m_start_gate->second == NEVER && m_plug_batch.empty())
   {
     m_start_gate->second = std::max({m_frame, m_last_sent_newest + 1, m_start_gate->first});
     for (const auto& gate : m_previous_start_gates)
       m_start_gate->second = std::max(m_start_gate->second, gate.second);
   }
+}
+
+void Session::RetireSeat(int seat, bool preserve_unplug)
+{
+  const int lead = LeadOf(seat);
+  const bool local_co = IsLocal(seat) && seat != m_config.local_seat;
+  m_plug_batch.erase(seat);
+  CloseEmptyBatch();
   if (!InPlay(seat) && !(IsLocal(seat) && m_plan[seat].live_from != NEVER))
   {
     if (m_group_known[seat])
@@ -708,10 +745,8 @@ void Session::RetireSeat(int seat)
   SeatPlan& plan = m_plan[seat];
   if (plan.plug_from != NEVER)
   {
-    const int last = IsLocal(seat) ?
-        std::max(plan.plug_from, m_co_local[seat].empty() ? m_frame :
-                                                        m_co_local[seat].rbegin()->first + 1) :
-        std::max(plan.plug_from, m_received[seat] + 1);
+    const int last = preserve_unplug ? plan.unplug_from :
+        (IsLocal(seat) ? plan.unplug_from : std::max(plan.plug_from, m_received[seat] + 1));
     if (last < plan.unplug_from)
     {
       plan.unplug_from = last;
@@ -741,19 +776,35 @@ void Session::RetireSeat(int seat)
           const auto input = inputs.find(frame);
           if (input == inputs.end())
           {
-            Fail("Missing completed seat input");
-            return;
+            if (preserve_unplug && local_co && frame >= m_frame)
+              pad = Pad{};  // after the remove request, future samples are connected neutral
+            else if (preserve_unplug)
+            {
+              m_departed_owner[seat] = lead;
+              break;  // the former owner's reply completes this scheduled stay
+            }
+            else
+            {
+              Fail("Missing completed seat input");
+              return;
+            }
           }
-          pad = input->second;
+          else
+            pad = input->second;
         }
         prefix.pads.push_back(pad);
       }
       m_departed[seat] = std::move(prefix);
     }
   }
+  if (plan.plug_from == NEVER && lead != seat)
+    plan.unplug_from = plan.live_from;
   plan.live_from = NEVER;
   if (local_co)
+  {
     m_local_retired[seat] = true;
+    m_local_co_until[seat] = plan.unplug_from;
+  }
   m_previous_lead[seat] = lead;
   m_lead[seat] = seat;
   m_group_known[seat] = false;
@@ -920,7 +971,10 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
     mine = now;
     if (IsLocal(s) && s != m_config.local_seat && now.live_from == NEVER &&
         m_own_live_from[s] != NEVER)
+    {
       m_local_retired[s] = true;
+      m_local_co_until[s] = now.unplug_from;
+    }
     AdvanceReceived(s);
   }
 }
@@ -1815,10 +1869,7 @@ void Session::ReceivePackets()
     if (lead < 0 || lead >= m_config.seats || IsLocal(lead) || !InPlay(lead))
       continue;
     if (LeadOf(lead) != lead)
-    {
-      FailPeer("Invalid input group");
-      return;
-    }
+      continue;
     ReceiveOne(packet);
     if (!m_error.empty())
       return;
@@ -1927,7 +1978,9 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
            seeded < MAX_PADS_IN_PACKET; ++frame, ++seeded)
       {
         const auto& local = seat == m_config.local_seat ? m_local : m_co_local[seat];
-        if (frame < m_plan[seat].plug_from || frame >= m_plan[seat].unplug_from)
+        if (m_local_retired[seat] && frame < m_local_co_until[seat] && local.contains(frame))
+          held.pads.push_back(local.at(frame));
+        else if (frame < m_plan[seat].plug_from || frame >= m_plan[seat].unplug_from)
           held.pads.push_back(UNPLUGGED_PAD);
         else if ((IsLocal(seat) || m_local_retired[seat]) && local.contains(frame))
           held.pads.push_back(local.at(frame));
@@ -1982,6 +2035,8 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
     if (!m_error.empty())
       return;
   }
+  if (from_authority && !stale)
+    PrepareCoPrefixReplies(packet);
   if (from_authority && packet.history_seat == m_config.local_seat && !packet.history.empty())
   {
     ReceiveHistory(packet);
@@ -1990,6 +2045,9 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
   }
   if (!input_only && m_config.authority_seat == m_config.local_seat)
   {
+    ReceiveCoPrefixReplies(packet);
+    if (!m_error.empty())
+      return;
     if (packet.history_ack > m_history_acked[s])
     {
       m_history_acked[s] = std::min(packet.history_ack, LogEnd() - 1);
@@ -2189,10 +2247,75 @@ void Session::CheckChecksums()
   }
 }
 
+void Session::PrepareCoPrefixReplies(const Packet& packet)
+{
+  m_co_prefix_replies.clear();
+  for (const int seat : m_config.co_seats)
+  {
+    const auto request = packet.departed.find(seat);
+    if (!m_local_retired[seat] || request == packet.departed.end())
+      continue;
+    const DepartedInputs& stay = request->second;
+    if (!stay.pads.empty() || stay.until != m_local_co_until[seat] ||
+        stay.first_frame >= stay.until)
+      continue;
+    DepartedInputs reply{stay.from, stay.until, stay.first_frame, {}};
+    const int end = std::min({stay.until, stay.first_frame + MAX_PADS_IN_PACKET,
+                              m_frame + HISTORY_AHEAD});
+    for (int frame = stay.first_frame; frame < end; ++frame)
+    {
+      if (frame >= m_log_base && frame < LogEnd())
+        reply.pads.push_back(m_log[frame - m_log_base][seat]);
+      else if (const auto input = m_co_local[seat].find(frame); input != m_co_local[seat].end())
+        reply.pads.push_back(input->second);
+      else if (frame >= m_frame)
+        reply.pads.push_back(Pad{});
+      else
+        break;
+    }
+    if (!reply.pads.empty())
+      m_co_prefix_replies.emplace(seat, std::move(reply));
+  }
+}
+
+void Session::ReceiveCoPrefixReplies(const Packet& packet)
+{
+  for (const auto& [seat, reply] : packet.departed)
+  {
+    if (seat < 0 || seat >= m_config.seats || m_departed_owner[seat] != packet.seat)
+      continue;
+    const auto held = m_departed.find(seat);
+    if (held == m_departed.end())
+      continue;
+    DepartedInputs& stay = held->second;
+    const int end = stay.first_frame + static_cast<int>(stay.pads.size());
+    if (reply.from != stay.from || reply.until != stay.until || reply.first_frame > end ||
+        reply.first_frame < stay.first_frame || reply.pads.size() > MAX_PADS_IN_PACKET ||
+        reply.first_frame + static_cast<int>(reply.pads.size()) > stay.until)
+      continue;
+    for (size_t index = 0; index < reply.pads.size(); ++index)
+    {
+      const int frame = reply.first_frame + static_cast<int>(index);
+      if (frame == stay.first_frame + static_cast<int>(stay.pads.size()))
+        stay.pads.push_back(reply.pads[index]);
+      if (const auto used = m_used.find(frame); used != m_used.end() &&
+          used->second[seat] != PadsFor(frame)[seat])
+        m_dirty = std::min(m_dirty, frame);
+    }
+    if (stay.first_frame + static_cast<int>(stay.pads.size()) == stay.until)
+      m_departed_owner[seat] = -1;
+  }
+}
+
 void Session::AddDeparted(Packet* packet, int recipient) const
 {
-  if (!m_config.per_peer_inputs || m_config.authority_seat != m_config.local_seat)
+  if (!m_config.per_peer_inputs)
     return;
+  if (m_config.authority_seat != m_config.local_seat)
+  {
+    packet->departed = m_co_prefix_replies;
+    return;
+  }
   for (const auto& [seat, stay] : m_departed)
   {
     int first = stay.first_frame;
@@ -2215,6 +2338,10 @@ void Session::AddDeparted(Packet* packet, int recipient) const
       first = std::max(first, needed);
     }
     first = std::min(first, stay.until);
+    const int known_end = stay.first_frame + static_cast<int>(stay.pads.size());
+    if (m_departed_owner[seat] >= 0 && known_end < stay.until &&
+        (recipient < 0 || recipient == m_departed_owner[seat]))
+      first = known_end;
     const int offset = first - stay.first_frame;
     const int count = std::min(MAX_PADS_IN_PACKET, static_cast<int>(stay.pads.size()) - offset);
     DepartedInputs copy{stay.from, stay.until, first, {}};

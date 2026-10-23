@@ -438,7 +438,10 @@ public:
 private:
   void PrepareAdmission(int seat);
   void AdmitSeat(int seat, int live_from, int history_from);
-  void RetireSeat(int seat);
+  void RetireSeat(int seat, bool preserve_unplug = false);
+  void CloseEmptyBatch();
+  void ReceiveCoPrefixReplies(const Packet& packet);
+  void PrepareCoPrefixReplies(const Packet& packet);
   void ReceivePackets();
   void ReceiveOne(const Packet& packet, bool input_only = false);
   bool ApplyGroups(const Packet& packet);
@@ -504,6 +507,10 @@ private:
   std::array<bool, MAX_SEATS> m_local_retired{};
   // Only to discard late inputs after retirement; never used for admission or routing.
   std::array<int, MAX_SEATS> m_previous_lead{-1, -1, -1, -1};
+  // A scheduled co-seat stay can outlive room ownership while its slot is being replaced.
+  std::array<int, MAX_SEATS> m_departed_owner{-1, -1, -1, -1};
+  std::array<int, MAX_SEATS> m_local_co_until{NEVER, NEVER, NEVER, NEVER};
+  std::map<int, DepartedInputs> m_co_prefix_replies;
   std::array<std::map<int, Pad>, MAX_SEATS> m_remote;
   // Highest frame of each seat's input received contiguously.
   std::array<int, MAX_SEATS> m_received{-1, -1, -1, -1};

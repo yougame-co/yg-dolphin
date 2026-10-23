@@ -6854,16 +6854,31 @@ TEST(OrcaCoSeats, SingleSeatLeaveGoldens)
 
 TEST(OrcaCoSeats, PendingCoSeatUnplugCanBeReplacedThroughEveryAdmissionPath)
 {
+  for (const bool lagged : {false, true})
   for (const bool local : {false, true})
   for (int method = 0; method < 3; ++method)
   {
+    SCOPED_TRACE(lagged);
     SCOPED_TRACE(local);
     SCOPED_TRACE(method);
     CoSeatMesh friends(local ? std::vector<std::vector<int>>{{0, 2}, {1}} :
                                std::vector<std::vector<int>>{{0}, {1, 2}});
+    if (lagged)
+    {
+      friends.mesh.latency = {0, 3, 1, 2};
+      friends.mesh.pair_latency[0][1] = friends.mesh.pair_latency[1][0] = 8;
+      for (auto& player : friends.players)
+        if (player)
+        {
+          friends.mesh.reported_rtt[player->transport.seat] = 400;
+          for (int sample = 0; sample < 3; ++sample)
+            player->session->OnRoundTrip(400);
+        }
+    }
     friends.Play(600);
     auto& host = *friends.players[0];
     friends.players[local ? 0 : 1]->neutral_seats[2] = true;
+    ASSERT_NE(host.session->Plan()[2].plug_from, NEVER);
     host.session->UnplugSeat(2);
     const int live = host.session->Plan()[2].unplug_from;
     const int first = host.session->CurrentFrame() - 30;
@@ -6901,6 +6916,28 @@ TEST(OrcaCoSeats, PendingCoSeatUnplugCanBeReplacedThroughEveryAdmissionPath)
     }
     CompareCoFrames(friends, first);
     EXPECT_TRUE(host.session->Error().empty()) << host.session->Error();
+    if (!local)
+    {
+      EXPECT_TRUE(friends.mesh.last_sent[1].departed.empty());
+      bool replied = false;
+      for (const auto& wire : friends.mesh.wire)
+      {
+        Packet packet;
+        ASSERT_TRUE(DecodePacket(wire, &packet));
+        if (packet.seat != 1 || packet.departed.empty())
+          continue;
+        replied = true;
+        for (const auto& [departed_seat, prefix] : packet.departed)
+        {
+          EXPECT_EQ(departed_seat, 2);
+          EXPECT_EQ(prefix.until, live);
+          EXPECT_LE(prefix.pads.size(), static_cast<size_t>(MAX_PADS_IN_PACKET));
+          EXPECT_LE(prefix.first_frame + static_cast<int>(prefix.pads.size()), live);
+        }
+      }
+      if (lagged)
+        EXPECT_TRUE(replied);
+    }
   }
 }
 
@@ -6990,4 +7027,54 @@ TEST(OrcaCoSeats, MissingCoSeatDropsItsWholeRemoteMachine)
   friends.disabled[1] = true;
   friends.Play(500);
   CompareCoFrames(friends);
+}
+
+TEST(OrcaCoSeats, CoSeatCancelledBeforePlugAcceptsTheFirstAdmissionRoster)
+{
+  for (const bool saw_roster : {false, true})
+  {
+    CoSeatMesh friends({{0}, {1, 2}});
+    if (saw_roster)
+      friends.Play(1);
+    auto& host = *friends.players[0]->session;
+    ASSERT_EQ(host.Plan()[2].plug_from, NEVER);
+    host.UnplugSeat(2);
+    EXPECT_EQ(host.Plan()[2].live_from, NEVER);
+    EXPECT_EQ(host.Plan()[2].unplug_from, host.Plan()[1].live_from);
+    friends.Play(900);
+    CompareCoFrames(friends);
+    CheckCoCounts(friends, 2, 2);
+    EXPECT_FALSE(friends.players[1]->session->IsLocal(2));
+    EXPECT_NE(host.Plan()[1].plug_from, NEVER);
+    EXPECT_EQ(host.Plan()[1].unplug_from, NEVER);
+  }
+}
+
+TEST(OrcaCoSeats, InvalidOrLocalDropStillClosesAnEmptyBatchGate)
+{
+  for (const int seat : {-1, 0, MAX_SEATS})
+  {
+    FriendsMesh mesh;
+    CoMeshPlayer host(mesh, 0, {}, {0});
+    host.session->AddPeerBatch({}, 300, 240);
+    host.session->DropSeat(seat);
+    host.TickCo(0);
+    ASSERT_TRUE(mesh.last_sent[0].start_gate);
+    EXPECT_NE(mesh.last_sent[0].start_gate->second, NEVER);
+    EXPECT_TRUE(host.session->Error().empty()) << host.session->Error();
+  }
+}
+
+TEST(OrcaCoSeats, ReplacementLeadCanArriveBeforeItsAuthorityRoster)
+{
+  CoSeatMesh friends({{0}, {1, 2}});
+  friends.Play(500);
+  Packet replacement;
+  replacement.seat = 2;
+  replacement.sequence = 1;
+  replacement.current_frame = friends.players[0]->session->CurrentFrame();
+  friends.mesh.pending[0].push_back({friends.mesh.tick, replacement});
+  friends.players[0]->TickCo(friends.mesh.tick);
+  EXPECT_TRUE(friends.players[0]->session->Error().empty());
+  EXPECT_EQ(friends.players[0]->session->LeadOf(2), 1);
 }
