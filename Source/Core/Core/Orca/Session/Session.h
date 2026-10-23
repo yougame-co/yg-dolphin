@@ -364,6 +364,8 @@ public:
   // its last received input.
   void DropSeat(int seat);
   // Host: schedule a co-seat's unplug ahead of the rollback window; a lead takes its group.
+  // Retire a scheduled co-seat while preserving its agreed input prefix and unplug frame.
+  void PrepareAdmission(int seat);
   void UnplugSeat(int seat);
   // A joining player: ask the host to unplug this controller. LeftDone() once it has.
   void RequestLeave();
@@ -436,7 +438,6 @@ public:
   const std::map<int, u64>& LocalChecksums() const { return m_local_checksums; }
 
 private:
-  void PrepareAdmission(int seat);
   void AdmitSeat(int seat, int live_from, int history_from);
   void RetireSeat(int seat, bool preserve_unplug = false);
   void CloseEmptyBatch();

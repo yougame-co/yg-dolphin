@@ -143,6 +143,10 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
                                          const std::function<void(const std::function<void()>&)>&
                                              after_admit = {});
 
+// Runs room events while friends admission is held off the menus.
+bool PumpHeldFriendsEventsForTest(Orca::Net::YouGameRoom& room,
+    std::unique_ptr<Orca::Net::Session>& session, const std::vector<int>& seated);
+
 // Runs Boundary's session loop with a supplied session and short silence window.
 int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,
                                    const std::vector<int>& seated,

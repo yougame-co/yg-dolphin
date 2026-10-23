@@ -1450,6 +1450,23 @@ void EndQueueForFriend(Match& match, bool arrived, bool invited)
   Orca::Status::Menu("cancel");
 }
 
+void RetireReassignedCoSeats(Match& match, Orca::Net::YouGameRoom* test_room = nullptr)
+{
+  if (!match.session || match.joining)
+    return;
+  for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+  {
+    if (match.session->LeadOf(seat) == seat)
+      continue;
+    const auto group = test_room ? test_room->GroupOf(seat) : Orca::Online::GroupOf(seat);
+    if (!group.empty() && group.front() != match.session->LeadOf(seat))
+    {
+      match.session->UnplugSeat(seat);
+      match.session->PrepareAdmission(seat);
+    }
+  }
+}
+
 void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test_room = nullptr,
                 std::optional<bool> test_menus = std::nullopt)
 {
@@ -1687,6 +1704,8 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
       }
     }
   }
+
+  RetireReassignedCoSeats(match, test_room);
 
   // A host in a single-player mode (Classic, Training, Events...) holds waiting friends until its
   // game is back in the menus (Games/Brawl/OnlineMenu.h SequenceHoldsDropIn).
@@ -4467,6 +4486,7 @@ static std::optional<int> SessionBoundary(
           // Host only: it reads the pad without recording or sending it (UX/OrbCombo.h).
           if (local_pad_waiting)
             local_pad_waiting(match.local_seat);
+          RetireReassignedCoSeats(match);
           const auto poll_time = Clock::now();
           if (poll_time - stall_published > std::chrono::milliseconds(10))
           {
@@ -5519,6 +5539,20 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
 {
   return PumpHostForTest(system, room, game, std::move(replay), current_frame, !seated.empty(),
                          seated, on_menus, std::move(store), host_requested, after_admit);
+}
+
+bool PumpHeldFriendsEventsForTest(Orca::Net::YouGameRoom& room,
+    std::unique_ptr<Orca::Net::Session>& session, const std::vector<int>& seated)
+{
+  Match match;
+  match.running = session->CurrentFrame() - 1;
+  match.origin_frame = 0;
+  match.session = std::move(session);
+  match.seated.insert(seated.begin(), seated.end());
+  match.doubles_seats = match.seated;
+  HostEvents(Core::System::GetInstance(), match, &room, false);
+  session = std::move(match.session);
+  return match.holding;
 }
 
 int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,

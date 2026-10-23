@@ -1078,6 +1078,7 @@ struct YouGameRoom::Impl
   std::array<std::vector<int>, MAX_SEATS> seat_groups;
   std::map<std::string, std::vector<int>> peer_co_slots;
   std::array<std::string, MAX_SEATS> last_co_owner{};
+  std::array<std::set<std::string>, MAX_SEATS> former_co_owners{};
   bool co_malformed_logged = false;
   // Each seat's player name from the room's roster (the same bytes on every machine; under mutex).
   std::map<int, std::string> seat_names;
@@ -4613,8 +4614,12 @@ struct YouGameRoom::Impl
         for (const auto& [index, participant] : participants)
         {
           local_indices[participant.slot] = index;
-          // Keep the last co owner while vacant; any new occupant replaces that ownership.
-          last_co_owner[participant.slot] = index > 0 ? id : std::string{};
+          // A removed co-seat can have packets in flight after another connection takes it.
+          auto& previous = last_co_owner[participant.slot];
+          const std::string current = index > 0 ? id : std::string{};
+          if (!previous.empty() && previous != current)
+            former_co_owners[participant.slot].insert(previous);
+          previous = current;
           slots.push_back(participant.slot);
           if (index > 0)
             group.co_slots.push_back(participant.slot);
@@ -4634,6 +4639,8 @@ struct YouGameRoom::Impl
           present.emplace(id, std::move(group));
         }
       }
+      for (auto& owners : former_co_owners)
+        std::erase_if(owners, [&](const std::string& id) { return !connections.contains(id); });
       for (const int previous : previous_local)
         if (std::ranges::find(my_co_seats, previous) == my_co_seats.end())
           removed_local.push_back(previous);
@@ -5159,7 +5166,7 @@ struct YouGameRoom::Impl
   }
 
   // Current roster ownership, shared by relay and direct receive (under mutex).
-  bool CoSeatsOwned(const Packet& packet, const std::string& id)
+  bool CoSeatsOwned(Packet& packet, const std::string& id)
   {
     if (packet.groups)
     {
@@ -5170,18 +5177,32 @@ struct YouGameRoom::Impl
         const int lead = (*packet.groups)[slot];
         // Absent room participants may still have a host-scheduled unplug in the session.
         if (lead >= 0 && !seat_groups[slot].empty() && seat_groups[slot].front() != lead)
-          return false;
+        {
+          const auto owner = peer_ids.find(lead);
+          const std::string previous = lead == seat ? me :
+              (owner == peer_ids.end() ? std::string{} : owner->second);
+          if ((*packet.roster)[slot].unplug_from == NEVER ||
+              !former_co_owners[slot].contains(previous))
+            return false;
+        }
       }
     }
     const auto owned = peer_co_slots.find(id);
-    for (const auto& [slot, inputs] : packet.co)
+    for (auto it = packet.co.begin(); it != packet.co.end();)
     {
-      if (owned != peer_co_slots.end() &&
-          std::ranges::find(owned->second, slot) != owned->second.end())
+      const int slot = it->first;
+      if ((owned != peer_co_slots.end() &&
+           std::ranges::find(owned->second, slot) != owned->second.end()) ||
+          (!id.empty() && seat_groups[slot].empty() && last_co_owner[slot] == id))
+      {
+        ++it;
         continue;
-      // A removed participant still sends neutral input until the session's scheduled unplug.
-      if (!id.empty() && seat_groups[slot].empty() && last_co_owner[slot] == id)
+      }
+      if (former_co_owners[slot].contains(id))
+      {
+        it = packet.co.erase(it);
         continue;
+      }
       if (!std::exchange(co_malformed_logged, true))
         WARN_LOG_FMT(NETPLAY, "Orca room: a co-seat packet for seat {} from seat {}",
                      slot + 1, packet.seat + 1);
