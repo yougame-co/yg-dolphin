@@ -3602,7 +3602,8 @@ void PublishStats(Match& match)
                  std::round(double(input.reports - input_last.reports) / input_frames * 10) / 10 :
                  -1);
   if (!match.co_seats.empty())
-    num("local", 1 + match.co_seats.size());
+    num("local", 1 + std::ranges::count_if(match.co_seats,
+        [&](int seat) { return IsLocal(match, seat); }));
   Orca::Status::Stats(picojson::value(o).serialize());
   match.stats_time = now;
   match.stats_frame = match.running;
@@ -4958,6 +4959,15 @@ void ReportJoinFailure(std::string_view code, std::string_view sentence)
 int LocalSeat()
 {
   return TheMatch().local_seat;
+}
+
+int LocalSeatCount()
+{
+  const Match& match = TheMatch();
+  if (!match.started || match.finished)
+    return 1;
+  return 1 + static_cast<int>(std::ranges::count_if(match.co_seats,
+      [&](int seat) { return IsLocal(match, seat); }));
 }
 
 int LocalOrdinal(int seat)

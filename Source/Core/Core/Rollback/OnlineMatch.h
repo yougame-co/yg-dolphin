@@ -562,6 +562,7 @@ bool Active();
 // CPU thread: the lead's game port, including solo play after leaving a room.
 int LocalSeat();
 int LocalOrdinal(int seat);
+int LocalSeatCount();
 std::vector<Orca::Net::Pads> PumpSoloSeatsForTest(Core::System& system,
     const std::vector<int>& co_seats, int frames, bool fresh_tail,
     const std::function<Orca::Net::Pad(int)>& sample,

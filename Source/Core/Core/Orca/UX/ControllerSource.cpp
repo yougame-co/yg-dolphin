@@ -577,6 +577,7 @@ struct Teardown
 constexpr int NO_DEVICE = -1;
 std::array<std::atomic<int>, MAX_LOCAL> s_local_devices{NO_DEVICE, NO_DEVICE};
 std::atomic<int> s_local_count{1};
+std::array<std::atomic<bool>, MAX_LOCAL> s_assignment_known{false, false};
 
 int PackDevice(PadSource source, int index)
 {
@@ -686,7 +687,13 @@ void StartControllerStreamFromEnvironment()
 
 void SetLocalPadCount(int n)
 {
-  s_local_count.store(std::clamp(n, 1, MAX_LOCAL), std::memory_order_relaxed);
+  if (s_local_count.exchange(std::clamp(n, 1, MAX_LOCAL), std::memory_order_relaxed) !=
+      std::clamp(n, 1, MAX_LOCAL))
+    for (int ordinal = 0; ordinal < MAX_LOCAL; ++ordinal)
+    {
+      s_local_devices[ordinal].store(NO_DEVICE, std::memory_order_relaxed);
+      s_assignment_known[ordinal].store(false, std::memory_order_relaxed);
+    }
 }
 
 std::optional<GCPadStatus> LocalPad(bool for_frame)
@@ -704,7 +711,8 @@ std::optional<GCPadStatus> LocalPad(int ordinal, bool for_frame)
   {
     const int device = choice ? PackDevice(choice->source, choice->index) : NO_DEVICE;
     const int previous = s_local_devices[ordinal].exchange(device, std::memory_order_relaxed);
-    if (s_local_count.load(std::memory_order_relaxed) > 1 && previous != device)
+    const bool known = s_assignment_known[ordinal].exchange(true, std::memory_order_relaxed);
+    if (s_local_count.load(std::memory_order_relaxed) > 1 && (!known || previous != device))
     {
       std::string line = "orca seats";
       for (int index = 0; index < MAX_LOCAL; ++index)
