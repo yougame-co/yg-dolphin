@@ -7247,3 +7247,24 @@ TEST_F(OrcaRoomRuntime, HostRetiresWaitingCoSeatAndKeepsItsLead)
   EXPECT_EQ(result.plan[1].unplug_from, NEVER);
   EXPECT_EQ(result.groups[1], 1);
 }
+
+TEST_F(OrcaRoomRuntime, CoSeatOrdinalStopsAtLocalOwnership)
+{
+  const std::string code = "coordinal";
+  auto room = Open(code,
+      R"({"joining":false,"doubles":true,"co_seats":{"me":[2],"peer":[3]}})", false);
+  ASSERT_TRUE(Wait([&] { return room->CoSeats() == std::vector<int>{2}; }));
+  EXPECT_EQ(room->LocalIndex(2, true), 1);
+  EXPECT_EQ(room->LocalIndex(3), 1);
+  EXPECT_EQ(room->LocalIndex(3, true), -1);
+  picojson::value roster;
+  ASSERT_TRUE(picojson::parse(roster, CoRoster("lobby", false, false, true)).empty());
+  roster.get<picojson::object>()["participants"].get<picojson::array>().emplace_back(
+      picojson::object{{"connectionId", picojson::value("replacement")},
+                      {"slot", picojson::value(2.0)}, {"localIndex", picojson::value(0.0)}});
+  Action(code, fmt::format(R"({{"message":{}}})", roster.serialize()));
+  ASSERT_TRUE(Wait([&] { return room->GroupOf(2) == std::vector<int>{2}; }));
+  EXPECT_EQ(room->LocalIndex(2), 0);
+  EXPECT_EQ(room->LocalIndex(2, true), -1);
+  EXPECT_EQ(room->LocalIndex(0, true), 0);
+}

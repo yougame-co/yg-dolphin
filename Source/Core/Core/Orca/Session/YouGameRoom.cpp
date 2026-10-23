@@ -5668,10 +5668,14 @@ std::vector<int> YouGameRoom::CoSeats() const
   return m_impl->my_co_seats;
 }
 
-int YouGameRoom::LocalIndex(int seat) const
+int YouGameRoom::LocalIndex(int seat, bool only_mine) const
 {
   std::lock_guard lock(m_impl->mutex);
-  return seat >= 0 && seat < MAX_SEATS ? m_impl->local_indices[seat] : -1;
+  if (seat < 0 || seat >= MAX_SEATS ||
+      (only_mine && (m_impl->seat_groups[seat].empty() ||
+                     m_impl->seat_groups[seat].front() != m_impl->seat)))
+    return -1;
+  return m_impl->local_indices[seat];
 }
 
 std::vector<int> YouGameRoom::GroupOf(int seat) const

@@ -544,7 +544,7 @@ std::vector<int> CoSeats()
 int LocalIndex(int seat)
 {
   const auto room = Room();
-  return room ? room->LocalIndex(seat) : -1;
+  return room ? room->LocalIndex(seat, true) : -1;
 }
 
 std::vector<int> GroupOf(int seat)

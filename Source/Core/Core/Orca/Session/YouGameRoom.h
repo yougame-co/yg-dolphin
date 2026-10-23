@@ -213,7 +213,7 @@ public:
   // Our other seats, ordered by localIndex. Empty until the roster names any.
   std::vector<int> CoSeats() const;
   // The roster's local ordinal (-1 for an absent/invalid seat).
-  int LocalIndex(int seat) const;
+  int LocalIndex(int seat, bool only_mine = false) const;
   // A seat's machine group, lead first then co-seats by localIndex (empty if absent).
   std::vector<int> GroupOf(int seat) const;
   // Whether this Orca joins someone else's game, once the ticket is in (nullopt before, or if the
