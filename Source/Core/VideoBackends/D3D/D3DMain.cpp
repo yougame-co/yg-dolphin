@@ -12,6 +12,7 @@
 #include "Common/StringUtil.h"
 
 #include "Core/Orca/BootPhase.h"
+#include "Core/Orca/Profile.h"
 
 #include "VideoBackends/D3D/D3DBase.h"
 #include "VideoBackends/D3D/D3DBoundingBox.h"
@@ -77,6 +78,10 @@ void VideoBackend::InitBackendInfo(const WindowSystemInfo& wsi)
 
 void VideoBackend::FillBackendInfo()
 {
+  // Session boots query device-dependent caps once, using the real device in Initialize.
+  // Desktop configuration dialogs still need the temporary-device probes.
+  const bool query_device = D3D::device || !Orca::SessionActive();
+
   g_backend_info.api_type = APIType::D3D;
   g_backend_info.MaxTextureSize = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
   g_backend_info.bUsesLowerLeftOrigin = false;
@@ -113,7 +118,7 @@ void VideoBackend::FillBackendInfo()
   g_backend_info.bSupportsCoarseDerivatives = true;
   g_backend_info.bSupportsTextureQueryLevels = true;
   g_backend_info.bSupportsLodBiasInSampler = true;
-  g_backend_info.bSupportsLogicOp = D3D::SupportsLogicOp(g_Config.iAdapter);
+  g_backend_info.bSupportsLogicOp = query_device && D3D::SupportsLogicOp(g_Config.iAdapter);
   g_backend_info.bSupportsSettingObjectNames = true;
   g_backend_info.bSupportsPartialMultisampleResolve = true;
   g_backend_info.bSupportsDynamicVertexLoader = false;
@@ -121,7 +126,11 @@ void VideoBackend::FillBackendInfo()
 
   g_backend_info.Adapters = D3DCommon::GetAdapterNames();
   g_backend_info.DriverVersion = D3DCommon::GetAdapterDriverVersion(g_Config.iAdapter);
-  g_backend_info.AAModes = D3D::GetAAModes(g_Config.iAdapter);
+  g_backend_info.bAAModesReady = query_device;
+  if (query_device)
+    g_backend_info.AAModes = D3D::GetAAModes(g_Config.iAdapter);
+  else
+    g_backend_info.AAModes.clear();
 
   // Override optional features if we are actually booting.
   if (D3D::device)
@@ -150,6 +159,9 @@ bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
   Orca::BootPhase::Mark(Orca::BootPhase::Phase::VideoDevice);
 
   FillBackendInfo();
+  // Validate deferred AA modes before copying the config or creating any renderer resources.
+  if (Orca::SessionActive())
+    g_Config.VerifyValidity();
   UpdateActiveConfig();
 
   std::unique_ptr<SwapChain> swap_chain;
