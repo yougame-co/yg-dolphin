@@ -6970,7 +6970,8 @@ TEST(OrcaRoom, CoPacketsFollowTheCurrentRosterOnRelayAndDirect)
     ASSERT_EQ(trace[2].packets.size(), 1u);
     EXPECT_EQ(trace[2].packets[0].co, valid.co);
     EXPECT_TRUE(trace[3].packets.empty());
-    EXPECT_TRUE(trace[5].packets.empty());
+    ASSERT_EQ(trace[5].packets.size(), 1u);
+    EXPECT_EQ(trace[5].packets[0].co, valid.co);
   }
 }
 TEST_F(OrcaRoomRuntime, FreshTicketReusesTheOriginalLobby)
@@ -7081,7 +7082,6 @@ TEST(OrcaRoom, HostGroupsFollowCurrentRoomOwnershipOnRelayAndDirect)
     Packet wrong_local = valid;
     (*wrong_local.groups)[2] = 0;
     Packet scheduled = valid;
-    scheduled.co.clear();
     (*scheduled.roster)[3].unplug_from = 60;
     const auto trace = TraceRoomForTest(TraceOptions(true), {
         {RK::Message, 0, CoRoster("welcome", true, true, true)},
@@ -7107,4 +7107,40 @@ TEST(OrcaRoom, OnlyTheRoomHostSuppliesGroups)
       {RK::Message, 0, PeerHello(false)},
       {RK::Message, 1, fmt::format(R"({{"t":"msg","from":"peer","d":{}}})", EncodePacket(packet))}});
   EXPECT_TRUE(trace.back().packets.empty());
+}
+
+TEST(OrcaRoom, VacantCoSeatInputsStopWhenTheSlotIsTakenAgain)
+{
+  for (const bool direct : {false, true})
+  {
+    Packet packet = Frames(1, 20, 3);
+    packet.co = {{3, Frames(3, 40, 3).pads}};
+    const auto step = [direct](const Packet& value, int time) {
+      return RoomTestStep{direct ? RK::DirectPacket : RK::Message, time,
+          direct ? EncodePacket(value) : fmt::format(
+              R"({{"t":"msg","from":"peer","d":{}}})", EncodePacket(value)), 1};
+    };
+    picojson::value replacement;
+    ASSERT_TRUE(picojson::parse(replacement, CoRoster("lobby", false, true, false)).empty());
+    replacement.get<picojson::object>()["participants"].get<picojson::array>().emplace_back(
+        picojson::object{{"connectionId", picojson::value("replacement")},
+                        {"slot", picojson::value(3.0)}, {"localIndex", picojson::value(0.0)}});
+    Packet lead_only = packet;
+    lead_only.co.clear();
+    const auto trace = TraceRoomForTest(TraceOptions(false), {
+        {RK::Message, 0, CoRoster("welcome", false, true, false)},
+        {RK::Message, 0, PeerHello(false)}, step(packet, 1),
+        {RK::Message, 2, CoRoster("lobby", false, true, true)}, step(packet, 3),
+        {RK::Message, 4, CoRoster("lobby", false, true, false)}, step(packet, 5),
+        {RK::Message, 6, replacement.serialize()}, step(packet, 7), step(packet, 8),
+        step(lead_only, 9),
+        {RK::Message, 10, CoRoster("lobby", false, true, false)}, step(packet, 11)});
+    EXPECT_TRUE(trace[2].packets.empty());
+    EXPECT_EQ(trace[4].packets.size(), 1u);
+    EXPECT_EQ(trace[6].packets.size(), 1u);
+    EXPECT_TRUE(trace[8].packets.empty());
+    EXPECT_TRUE(trace[9].packets.empty());
+    EXPECT_EQ(trace[10].packets.size(), 1u);
+    EXPECT_TRUE(trace[12].packets.empty());
+  }
 }

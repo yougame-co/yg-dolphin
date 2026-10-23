@@ -1077,6 +1077,7 @@ struct YouGameRoom::Impl
   std::array<int, MAX_SEATS> local_indices{-1, -1, -1, -1};
   std::array<std::vector<int>, MAX_SEATS> seat_groups;
   std::map<std::string, std::vector<int>> peer_co_slots;
+  std::array<std::string, MAX_SEATS> last_co_owner{};
   bool co_malformed_logged = false;
   // Each seat's player name from the room's roster (the same bytes on every machine; under mutex).
   std::map<int, std::string> seat_names;
@@ -4610,6 +4611,8 @@ struct YouGameRoom::Impl
         for (const auto& [index, participant] : participants)
         {
           local_indices[participant.slot] = index;
+          // Keep the last co owner while vacant; any new occupant replaces that ownership.
+          last_co_owner[participant.slot] = index > 0 ? id : std::string{};
           slots.push_back(participant.slot);
           if (index > 0)
             group.co_slots.push_back(participant.slot);
@@ -5164,6 +5167,9 @@ struct YouGameRoom::Impl
     {
       if (owned != peer_co_slots.end() &&
           std::ranges::find(owned->second, slot) != owned->second.end())
+        continue;
+      // A removed participant still sends neutral input until the session's scheduled unplug.
+      if (!id.empty() && seat_groups[slot].empty() && last_co_owner[slot] == id)
         continue;
       if (!std::exchange(co_malformed_logged, true))
         WARN_LOG_FMT(NETPLAY, "Orca room: a co-seat packet for seat {} from seat {}",
