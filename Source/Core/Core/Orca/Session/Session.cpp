@@ -315,7 +315,9 @@ int Session::PeersInPlay() const
   std::array<bool, MAX_SEATS> seen{};
   int peers = 0;
   for (int seat = 0; seat < m_config.seats; ++seat)
-    if ((IsLocal(seat) || InPlay(seat)) && !seen[LeadOf(seat)])
+    if ((seat == m_config.local_seat ||
+         (IsLocal(seat) && m_plan[seat].live_from != NEVER) || InPlay(seat)) &&
+        !seen[LeadOf(seat)])
     {
       seen[LeadOf(seat)] = true;
       ++peers;
@@ -440,7 +442,9 @@ bool Session::CatchingUp() const
   if (m_config.authority_seat < 0 || IsLocal(m_config.authority_seat))
     return false;
   for (int seat = 0; seat < m_config.seats; ++seat)
-    if (IsLocal(seat) && m_plan[seat].plug_from == NEVER)
+    if (IsLocal(seat) && m_plan[seat].plug_from == NEVER &&
+        (seat == m_config.local_seat || m_plan[seat].live_from != NEVER ||
+         m_own_live_from[seat] == NEVER))
       return true;
   return false;
 }
@@ -648,6 +652,12 @@ void Session::DropSeat(int seat)
     for (int sibling = 0; sibling < m_config.seats; ++sibling)
       if (sibling != seat && LeadOf(sibling) == seat)
         DropSeat(sibling);
+  RetireSeat(seat);
+}
+
+void Session::RetireSeat(int seat)
+{
+  const int lead = LeadOf(seat);
   m_plug_batch.erase(seat);
   if (m_start_gate && m_start_gate->second == NEVER && m_plug_batch.empty())
   {
@@ -655,7 +665,7 @@ void Session::DropSeat(int seat)
     for (const auto& gate : m_previous_start_gates)
       m_start_gate->second = std::max(m_start_gate->second, gate.second);
   }
-  if (!InPlay(seat))
+  if (!InPlay(seat) && !(IsLocal(seat) && m_plan[seat].live_from != NEVER))
   {
     if (m_group_known[seat])
       m_previous_lead[seat] = lead;
@@ -666,7 +676,8 @@ void Session::DropSeat(int seat)
   SeatPlan& plan = m_plan[seat];
   if (plan.plug_from != NEVER)
   {
-    const int last = std::max(plan.plug_from, m_received[seat] + 1);
+    const int last = IsLocal(seat) ? plan.unplug_from :
+                                    std::max(plan.plug_from, m_received[seat] + 1);
     if (last < plan.unplug_from)
     {
       plan.unplug_from = last;
@@ -692,8 +703,9 @@ void Session::DropSeat(int seat)
           pad = *previous;
         else if (frame >= plan.plug_from && frame < plan.unplug_from)
         {
-          const auto input = m_remote[seat].find(frame);
-          if (input == m_remote[seat].end())
+          const auto& inputs = IsLocal(seat) ? m_co_local[seat] : m_remote[seat];
+          const auto input = inputs.find(frame);
+          if (input == inputs.end())
           {
             Fail("Missing completed seat input");
             return;
@@ -709,6 +721,36 @@ void Session::DropSeat(int seat)
   m_previous_lead[seat] = lead;
   m_lead[seat] = seat;
   m_group_known[seat] = false;
+}
+
+void Session::UnplugSeat(int seat)
+{
+  if (m_config.authority_seat != m_config.local_seat || seat < 0 || seat >= m_config.seats ||
+      seat == m_config.local_seat ||
+      (!InPlay(seat) && !(IsLocal(seat) && m_plan[seat].live_from != NEVER)))
+    return;
+  if (m_plan[seat].plug_from == NEVER)
+  {
+    if (LeadOf(seat) == seat)
+      DropSeat(seat);
+    else
+      RetireSeat(seat);
+    return;
+  }
+  const int unplug = std::max(m_frame, m_plan[seat].plug_from) + m_config.max_rollback +
+                     2 * m_config.max_delay + 4;
+  for (int member = 0; member < m_config.seats; ++member)
+  {
+    if (member != seat && !(LeadOf(seat) == seat && LeadOf(member) == seat))
+      continue;
+    SeatPlan& plan = m_plan[member];
+    if (plan.live_from == NEVER)
+      continue;
+    if (plan.plug_from == NEVER)
+      RetireSeat(member);
+    else if (plan.unplug_from == NEVER)
+      plan.unplug_from = unplug;
+  }
 }
 
 void Session::DropAllPeers()
@@ -1165,10 +1207,14 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
     for (int s = 0; s < m_config.seats; ++s)
     {
       const SeatPlan& plan = m_plan[s];
-      if (InPlay(s) && plan.unplug_from != NEVER && m_frame > plan.unplug_from &&
-          m_received[s] >= plan.unplug_from - 1)
+      const bool local_co = IsLocal(s) && s != m_config.local_seat && plan.live_from != NEVER;
+      if ((InPlay(s) || local_co) && plan.unplug_from != NEVER && m_frame > plan.unplug_from &&
+          (local_co || m_received[s] >= plan.unplug_from - 1))
       {
-        DropSeat(s);
+        if (local_co)
+          RetireSeat(s);
+        else
+          DropSeat(s);
       }
     }
   }
@@ -1903,34 +1949,27 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
     }
     m_values_acked[s] = std::max(m_values_acked[s], packet.values_ack);
     // A player asks to leave: its controller unplugs a little ahead, so every machine hears of it
-    // first. One still catching up just goes.
+    // first. A lead's request takes its entire group.
     if (packet.leaving)
     {
       if (m_plan[s].plug_from == NEVER)
       {
         bool grouped = false;
         for (int seat = 0; seat < m_config.seats; ++seat)
-          grouped = grouped || LeadOf(seat) != seat;
+          grouped = grouped || (seat != s && LeadOf(seat) == s);
         if (grouped)
           DropSeat(s);
         else
+        {
+          // Preserve the single-seat pre-admission leave path.
           m_plan[s].live_from = NEVER;
+          m_previous_lead[s] = LeadOf(s);
+          m_lead[s] = s;
+          m_group_known[s] = false;
+        }
         return;
       }
-      const int unplug = std::max(m_frame, m_plan[s].plug_from) + m_config.max_rollback +
-                         2 * m_config.max_delay + 4;
-      for (int seat = 0; seat < m_config.seats; ++seat)
-      {
-        if (LeadOf(seat) != s)
-          continue;
-        SeatPlan& plan = m_plan[seat];
-        if (plan.plug_from == NEVER)
-        {
-          plan.live_from = NEVER;
-        }
-        else if (plan.unplug_from == NEVER)
-          plan.unplug_from = unplug;
-      }
+      UnplugSeat(s);
     }
   }
   for (size_t i = 0; i < packet.pads.size(); ++i)
@@ -2184,6 +2223,8 @@ void Session::AddCoPads(Packet* packet) const
 {
   for (const int seat : m_config.co_seats)
   {
+    if (m_plan[seat].live_from == NEVER && m_own_live_from[seat] != NEVER)
+      continue;
     std::vector<Pad> inputs;
     for (size_t i = 0; i < packet->pads.size(); ++i)
     {

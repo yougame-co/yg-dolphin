@@ -361,6 +361,8 @@ public:
   // Host: the player at `seat` is gone (left or stopped answering); its controller unplugs after
   // its last received input.
   void DropSeat(int seat);
+  // Host: schedule a co-seat's unplug ahead of the rollback window; a lead takes its group.
+  void UnplugSeat(int seat);
   // A joining player: ask the host to unplug this controller. LeftDone() once it has.
   void RequestLeave();
   bool LeftDone() const;
@@ -432,6 +434,7 @@ public:
 
 private:
   void AdmitSeat(int seat, int live_from, int history_from);
+  void RetireSeat(int seat);
   void ReceivePackets();
   void ReceiveOne(const Packet& packet, bool input_only = false);
   bool ApplyGroups(const Packet& packet);
