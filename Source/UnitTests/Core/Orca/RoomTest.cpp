@@ -1,6 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -6642,4 +6643,145 @@ TEST_F(OrcaRoomRuntime, SceneGameOneStartStillPrecedesTheForfeitingLeave)
   }
   EXPECT_EQ(began, 1);
   EXPECT_EQ(left, 1);
+}
+
+TEST(OrcaRoom, CoSeatPacketRoundTrips)
+{
+  Packet sent = Sample();
+  sent.co = {{3, Frames(3, 10, 3).pads}, {0, Frames(0, 20, 3).pads},
+             {2, std::vector<Pad>(3, UNPLUGGED_PAD)}};
+  sent.roster = std::array<SeatPlan, MAX_SEATS>{};
+  sent.groups = std::array<int, MAX_SEATS>{1, 1, 1, 1};
+  Packet got;
+  ASSERT_TRUE(DecodePacket(EncodePacket(sent), &got));
+  ExpectSame(sent, got);
+  EXPECT_EQ(got.co, sent.co);
+  EXPECT_EQ(got.groups, sent.groups);
+  EXPECT_EQ(got.roster, sent.roster);
+  sent.groups = std::array<int, MAX_SEATS>{0, 1, -1, 3};
+  EXPECT_EQ(EncodePacket(sent).find("\"rg\""), std::string::npos);
+}
+
+TEST(OrcaRoom, MalformedCoSeatPacketsAreRefused)
+{
+  const std::string pad = "0000000000000000";
+  for (const std::string& co : std::vector<std::string>{
+      "null", "{}", "[1]", "[[2]]", "[[2,0]]", "[[1,\"" + pad + "\"]]",
+      "[[-1,\"" + pad + "\"]]", "[[4,\"" + pad + "\"]]",
+      "[[2.5,\"" + pad + "\"]]", "[[2,\"0000\"]]",
+      "[[2,\"000000000000000z\"]]", "[[2,\"\"]]",
+      "[[2,\"" + pad + pad + "\"]]",
+      "[[2,\"" + pad + "\"],[2,\"" + pad + "\"]]",
+      "[[0,\"" + pad + "\"],[2,\"" + pad + "\"],[3,\"" + pad +
+          "\"],[0,\"" + pad + "\"]]"})
+  {
+    Packet got = Sample();
+    const auto before = EncodePacket(got);
+    EXPECT_FALSE(DecodePacket(fmt::format(
+        R"({{"k":"p","s":1,"f":0,"c":1,"p":"{}","a":[-1,-1,-1,-1],"co":{}}})",
+        pad, co), &got)) << co;
+    EXPECT_EQ(EncodePacket(got), before);
+  }
+  Packet empty;
+  empty.seat = 1;
+  empty.co = {{2, {}}};
+  Packet got;
+  ASSERT_TRUE(DecodePacket(EncodePacket(empty), &got));
+  EXPECT_EQ(got.co, empty.co);
+}
+
+TEST(OrcaRoom, RosterGroupsAreBounded)
+{
+  for (const char* groups : {"null", "{}", "[0,1,2]", "[0,1,2,3,0]",
+                                   "[0,1,2,4]", "[0,1,2,-2]", "[0,1,2,1.5]",
+                                   "[0,1,2,\"1\"]"})
+  {
+    Packet got;
+    EXPECT_FALSE(DecodePacket(fmt::format(
+        R"({{"k":"p","s":0,"f":0,"c":0,"p":"","a":[-1,-1,-1,-1],"ro":[[-1,-1,-1],[-1,-1,-1],[-1,-1,-1],[-1,-1,-1]],"rg":{}}})",
+        groups), &got)) << groups;
+  }
+  Packet got;
+  EXPECT_FALSE(DecodePacket(
+      R"({"k":"p","s":0,"f":0,"c":0,"p":"","a":[-1,-1,-1,-1],"rg":[0,0,-1,-1]})", &got));
+}
+
+namespace
+{
+Packet CoFrames(int first, int count)
+{
+  Packet packet = Frames(0, first, count);
+  packet.co = {{2, Frames(2, first + 20, count).pads},
+               {3, Frames(3, first + 40, count).pads}};
+  return packet;
+}
+}  // namespace
+
+TEST(OrcaRoom, CoalesceKeepsEverySeatsEarlierFrames)
+{
+  for (const auto& [first, count] : {std::pair{104, 4}, {108, 4}, {106, 60}})
+  {
+    const Packet old = CoFrames(100, 8);
+    const Packet next = CoFrames(first, count);
+    std::optional<Packet> pending = old;
+    CoalescePacket(&pending, next);
+    ASSERT_TRUE(pending);
+    const int from = std::max(100, first + count - MAX_PADS_IN_PACKET);
+    const auto expected = CoFrames(from, first + count - from);
+    EXPECT_EQ(pending->first_frame, expected.first_frame);
+    EXPECT_EQ(pending->pads, expected.pads);
+    EXPECT_EQ(pending->co, expected.co);
+    Packet got;
+    ASSERT_TRUE(DecodePacket(EncodePacket(*pending), &got));
+    EXPECT_EQ(got.co, expected.co);
+  }
+}
+
+TEST(OrcaRoom, CoalesceSeatChangesStayAligned)
+{
+  Packet old = CoFrames(100, 8);
+  old.co.erase(old.co.begin() + 1);
+  Packet next = CoFrames(104, 4);
+  next.co.erase(next.co.begin());
+  std::optional<Packet> pending = old;
+  CoalescePacket(&pending, next);
+  ASSERT_TRUE(pending);
+  EXPECT_EQ(pending->first_frame, 100);
+  std::map<int, std::vector<Pad>> expected;
+  expected[2] = Frames(2, 120, 4).pads;
+  expected[2].insert(expected[2].end(), 4, UNPLUGGED_PAD);
+  expected[3] = std::vector<Pad>(4, UNPLUGGED_PAD);
+  const auto tail = Frames(3, 144, 4).pads;
+  expected[3].insert(expected[3].end(), tail.begin(), tail.end());
+  const std::map<int, std::vector<Pad>> got(pending->co.begin(), pending->co.end());
+  EXPECT_EQ(got, expected);
+  Packet decoded;
+  EXPECT_TRUE(DecodePacket(EncodePacket(*pending), &decoded));
+}
+
+TEST(OrcaRoom, CoalesceBroadcastAndAddressedKeepEverySeat)
+{
+  for (bool addressed_first : {false, true})
+  {
+    std::optional<Packet> broadcast;
+    std::map<int, std::optional<Packet>> addressed;
+    const auto old = CoFrames(100, 8), next = CoFrames(104, 8);
+    if (addressed_first)
+    {
+      CoalesceToSeats(&broadcast, &addressed, {{1, old}, {2, old}});
+      CoalesceBroadcast(&broadcast, &addressed, next);
+    }
+    else
+    {
+      CoalesceBroadcast(&broadcast, &addressed, old);
+      CoalesceToSeats(&broadcast, &addressed, {{1, next}, {2, next}});
+    }
+    for (int seat : {1, 2})
+    {
+      ASSERT_TRUE(addressed.at(seat));
+      EXPECT_EQ(addressed.at(seat)->first_frame, 100);
+      EXPECT_EQ(addressed.at(seat)->pads, CoFrames(100, 12).pads);
+      EXPECT_EQ(addressed.at(seat)->co, CoFrames(100, 12).co);
+    }
+  }
 }

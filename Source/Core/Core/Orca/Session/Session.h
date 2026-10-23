@@ -121,6 +121,8 @@ struct Packet
   // pads[i] is the input for frame first_frame + i.
   int first_frame = 0;
   std::vector<Pad> pads;
+  // Other seats on this connection, with exactly the same frame range as pads.
+  std::vector<std::pair<int, std::vector<Pad>>> co;
   // Highest contiguous input received for each seat (-1: none). The sender's own seat stays -1,
   // except for completed-seat history during a doubles rebuild.
   std::array<int, MAX_SEATS> ack{-1, -1, -1, -1};
@@ -152,6 +154,8 @@ struct Packet
 
   // Drop-in (see SeatPlan): which seats are plugged in when. Only the host's roster counts.
   std::optional<std::array<SeatPlan, MAX_SEATS>> roster;
+  // Host-owned machine groups beside the roster: each seat's lead, or -1 for no seat.
+  std::optional<std::array<int, MAX_SEATS>> groups;
   // Multi-peer pre-match batch: suppress Start during [first, second).
   std::optional<std::pair<int, int>> start_gate;
   // The host's final seat history through completed stays (opted-in friends rooms only).

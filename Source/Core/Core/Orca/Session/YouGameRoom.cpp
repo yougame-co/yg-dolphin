@@ -334,6 +334,19 @@ picojson::object PacketToJson(const Packet& packet)
   for (const Pad& pad : packet.pads)
     pads += ToHex(pad.data(), pad.size());
   d["p"] = picojson::value(pads);
+  if (!packet.co.empty())
+  {
+    picojson::array co;
+    for (const auto& [seat, inputs] : packet.co)
+    {
+      std::string hex;
+      for (const Pad& pad : inputs)
+        hex += ToHex(pad.data(), pad.size());
+      co.emplace_back(picojson::array{picojson::value(static_cast<double>(seat)),
+                                     picojson::value(hex)});
+    }
+    d["co"] = picojson::value(co);
+  }
   picojson::array ack;
   for (int a : packet.ack)
     ack.emplace_back(static_cast<double>(a));
@@ -381,6 +394,19 @@ picojson::object PacketToJson(const Packet& packet)
       roster.emplace_back(entry);
     }
     d["ro"] = picojson::value(roster);
+    if (packet.groups)
+    {
+      bool grouped = false;
+      picojson::array groups;
+      for (int s = 0; s < MAX_SEATS; ++s)
+      {
+        const int lead = (*packet.groups)[s];
+        grouped = grouped || (lead >= 0 && lead != s);
+        groups.emplace_back(static_cast<double>(lead));
+      }
+      if (grouped)
+        d["rg"] = picojson::value(groups);
+    }
   }
   if (packet.history_ack >= 0)
     d["ha"] = picojson::value(static_cast<double>(packet.history_ack));
@@ -473,6 +499,34 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     std::copy_n(bytes.begin() + i, pad.size(), pad.begin());
     out.pads.push_back(pad);
   }
+  if (const auto co = d.find("co"); co != d.end())
+  {
+    if (!co->second.is<picojson::array>() ||
+        co->second.get<picojson::array>().size() > MAX_SEATS - 1)
+      return false;
+    std::array<bool, MAX_SEATS> seen{};
+    seen[out.seat] = true;
+    for (const auto& value : co->second.get<picojson::array>())
+    {
+      if (!value.is<picojson::array>() || value.get<picojson::array>().size() != 2)
+        return false;
+      const auto& entry = value.get<picojson::array>();
+      if (!entry[0].is<double>() || !std::isfinite(entry[0].get<double>()) ||
+          entry[0].get<double>() < 0 || entry[0].get<double>() >= MAX_SEATS ||
+          std::floor(entry[0].get<double>()) != entry[0].get<double>() ||
+          !entry[1].is<std::string>() || entry[1].get<std::string>().size() != pads.size())
+        return false;
+      const int seat = static_cast<int>(entry[0].get<double>());
+      std::vector<u8> input;
+      if (seen[seat] || !FromHex(entry[1].get<std::string>(), &input))
+        return false;
+      seen[seat] = true;
+      std::vector<Pad> inputs(input.size() / sizeof(Pad));
+      for (size_t i = 0; i < inputs.size(); ++i)
+        std::copy_n(input.begin() + i * sizeof(Pad), sizeof(Pad), inputs[i].begin());
+      out.co.emplace_back(seat, std::move(inputs));
+    }
+  }
   const auto& acks = ack->second.get<picojson::array>();
   for (int s = 0; s < MAX_SEATS; ++s)
   {
@@ -549,6 +603,23 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
       roster[s] = {values[0], values[1], values[2]};
     }
     out.roster = roster;
+  }
+  if (const auto rg = d.find("rg"); rg != d.end())
+  {
+    if (!out.roster || !rg->second.is<picojson::array>() ||
+        rg->second.get<picojson::array>().size() != MAX_SEATS)
+      return false;
+    std::array<int, MAX_SEATS> groups;
+    for (int s = 0; s < MAX_SEATS; ++s)
+    {
+      const auto& lead = rg->second.get<picojson::array>()[s];
+      if (!lead.is<double>() || !std::isfinite(lead.get<double>()) ||
+          lead.get<double>() < -1 || lead.get<double>() >= MAX_SEATS ||
+          std::floor(lead.get<double>()) != lead.get<double>())
+        return false;
+      groups[s] = static_cast<int>(lead.get<double>());
+    }
+    out.groups = groups;
   }
   if (d.count("sg"))
   {
@@ -5701,6 +5772,32 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
     {
       const auto from = pending->pads.begin() + (merged.first_frame - extra - pending->first_frame);
       merged.pads.insert(merged.pads.begin(), from, from + extra);
+      // The same prefix belongs to every co-seat. A seat absent from either packet was
+      // unplugged there; retain old-only seats and pad new-only prefixes explicitly.
+      for (auto& [seat, inputs] : merged.co)
+      {
+        const auto old = std::ranges::find_if(pending->co,
+            [seat](const auto& entry) { return entry.first == seat; });
+        if (old == pending->co.end())
+          inputs.insert(inputs.begin(), extra, UNPLUGGED_PAD);
+        else
+        {
+          const auto co_from = old->second.begin() +
+                              (merged.first_frame - extra - pending->first_frame);
+          inputs.insert(inputs.begin(), co_from, co_from + extra);
+        }
+      }
+      for (const auto& [seat, inputs] : pending->co)
+      {
+        if (std::ranges::any_of(merged.co,
+                               [seat](const auto& entry) { return entry.first == seat; }))
+          continue;
+        const auto co_from = inputs.begin() +
+                             (merged.first_frame - extra - pending->first_frame);
+        std::vector<Pad> joined(co_from, co_from + extra);
+        joined.insert(joined.end(), packet.pads.size(), UNPLUGGED_PAD);
+        merged.co.emplace_back(seat, std::move(joined));
+      }
       merged.first_frame -= extra;
     }
   }
