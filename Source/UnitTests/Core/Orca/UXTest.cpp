@@ -5155,3 +5155,109 @@ TEST(OrcaUXYgOrb, FeedbackRequestsCanRaceRendererTeardown)
   EXPECT_EQ(accepted.load(), cancelled.load());
   EXPECT_TRUE(std::filesystem::is_empty(dir));
 }
+
+TEST(OrcaUXControllers, OneOrdinalKeepsEveryLegacyChoice)
+{
+  const std::array<std::string, 4> snapshots{{
+      Event(false, "", ""),
+      Event(false, "", PadJson(3, "standard", "[1,0,0,0]", Buttons17(0))),
+      Event(true, FourPorts(PortJson(0, 2, "wired", 0x101)),
+            PadJson(0, "standard", "[0,-1,0,0]", Buttons17(1))),
+      Event(true, FourPorts(), PadJson(2, "standard", "[0,0,0,0]", Buttons17(2)))}};
+  for (const auto& json : snapshots)
+  for (const double age : {0.0, 100.0, 250.0, 251.0})
+  for (const bool suspended : {false, true})
+  {
+    auto snapshot = ParseSnapshotEvent(json);
+    ASSERT_TRUE(snapshot);
+    snapshot->suspended = suspended;
+    const auto legacy = ChooseLocalPad(*snapshot, age);
+    const auto choices = ChooseLocalPads(*snapshot, age, 1);
+    ASSERT_EQ(choices[0].has_value(), legacy.has_value());
+    EXPECT_FALSE(choices[1]);
+    if (legacy)
+    {
+      EXPECT_EQ(choices[0]->source, legacy->source);
+      EXPECT_EQ(choices[0]->index, legacy->index);
+      EXPECT_EQ(choices[0]->neutral, legacy->neutral);
+      ExpectSame(choices[0]->pad, legacy->pad);
+    }
+  }
+}
+
+TEST(OrcaUXControllers, MultipleOrdinalsRequireExplicitUniqueDevices)
+{
+  auto snapshot = ParseSnapshotEvent(Event(true, FourPorts(PortJson(0, 1, "wired", 1)),
+      PadJson(0, "standard", "[0,-1,0,0]", Buttons17(1))));
+  ASSERT_TRUE(snapshot);
+  auto choices = ChooseLocalPads(*snapshot, 0, 2);
+  EXPECT_FALSE(choices[0]);
+  ASSERT_TRUE(choices[1]);
+  EXPECT_EQ(choices[1]->source, PadSource::Adapter);
+  snapshot->pads[0].seat = 0;
+  choices = ChooseLocalPads(*snapshot, 0, 2);
+  ASSERT_TRUE(choices[0]);
+  EXPECT_EQ(choices[0]->source, PadSource::Gamepad);
+  EXPECT_EQ(choices[0]->pad.button, PAD_BUTTON_X);
+  EXPECT_EQ(choices[1]->pad.button, PAD_BUTTON_A);
+  for (const bool suspended : {false, true})
+  {
+    snapshot->suspended = suspended;
+    choices = ChooseLocalPads(*snapshot, suspended ? 0 : 251, 2);
+    for (const auto& choice : choices)
+    {
+      ASSERT_TRUE(choice);
+      ExpectSame(choice->pad, NeutralPad());
+      EXPECT_TRUE(choice->neutral);
+    }
+  }
+  snapshot->suspended = false;
+  snapshot->owned = false;
+  auto duplicate = snapshot->pads[0];
+  duplicate.seat = 1;
+  snapshot->pads.push_back(duplicate);
+  choices = ChooseLocalPads(*snapshot, 0, 2);
+  EXPECT_TRUE(choices[0]);
+  EXPECT_FALSE(choices[1]);
+}
+
+TEST(OrcaUXControllers, ParsesExplicitPadSeatsAndRejectsInvalidOnes)
+{
+  const auto assigned = [](const char* seat) {
+    auto pad = PadJson(3, "standard", "[0,0,0,0]", Buttons17(0));
+    pad.insert(1, std::string("\"seat\":") + seat + ",");
+    return Event(false, "", pad);
+  };
+  const auto snapshot = ParseSnapshotEvent(assigned("1"));
+  ASSERT_TRUE(snapshot);
+  EXPECT_EQ(snapshot->pads[0].seat, 1);
+  for (const char* bad : {"-1", "4", "0.5", "null", "true"})
+    EXPECT_FALSE(ParseSnapshotEvent(assigned(bad)));
+}
+
+TEST(OrcaUXControllers, ExplicitSeatsIgnorePadIndexAndOrder)
+{
+  Snapshot snapshot;
+  StandardPad first;
+  first.index = 7;
+  first.seat = 0;
+  first.axes[0] = 1;
+  StandardPad second;
+  second.index = 0;
+  second.seat = 1;
+  second.axes[0] = -1;
+  snapshot.pads = {second, first};
+  const auto before = ChooseLocalPads(snapshot, 0, 2);
+  snapshot.pads[0].index = 5;
+  snapshot.pads[1].index = 0;
+  std::reverse(snapshot.pads.begin(), snapshot.pads.end());
+  const auto after = ChooseLocalPads(snapshot, 0, 2);
+  for (int ordinal = 0; ordinal < MAX_LOCAL; ++ordinal)
+  {
+    ASSERT_TRUE(before[ordinal]);
+    ASSERT_TRUE(after[ordinal]);
+    ExpectSame(before[ordinal]->pad, after[ordinal]->pad);
+  }
+  EXPECT_EQ(after[0]->pad.stickX, 255);
+  EXPECT_EQ(after[1]->pad.stickX, 1);
+}
