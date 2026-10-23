@@ -7138,11 +7138,11 @@ TEST(OrcaRoom, VacantCoSeatInputsStopWhenTheSlotIsTakenAgain)
     EXPECT_TRUE(trace[2].packets.empty());
     EXPECT_EQ(trace[4].packets.size(), 1u);
     EXPECT_EQ(trace[6].packets.size(), 1u);
-    for (const int step : {8, 9, 12})
+    for (const int index : {8, 9, 12})
     {
-      ASSERT_EQ(trace[step].packets.size(), 1u);
-      EXPECT_EQ(trace[step].packets[0].pads, packet.pads);
-      EXPECT_TRUE(trace[step].packets[0].co.empty());
+      ASSERT_EQ(trace[index].packets.size(), 1u);
+      EXPECT_EQ(trace[index].packets[0].pads, packet.pads);
+      EXPECT_TRUE(trace[index].packets[0].co.empty());
     }
     EXPECT_EQ(trace[10].packets.size(), 1u);
   }
@@ -7373,4 +7373,28 @@ TEST(OrcaRoom, RetakenCoSeatKeepsTheHostsScheduledRoster)
   ASSERT_EQ(trace.back().packets.size(), 1u);
   EXPECT_EQ(trace.back().packets[0].groups, packet.groups);
   EXPECT_EQ(trace.back().packets[0].roster, packet.roster);
+}
+
+TEST_F(OrcaRoomRuntime, LocalOrdinalUsesPositionAfterRemoveAndReadd)
+{
+  const ScopedEnv enabled("ORCA_SESSION", "1");
+  const Common::ScopeGuard cleanup([] { Orca::Online::Shutdown(); });
+  const std::string code = "coindex";
+  Request("/configure/" + code, fmt::format(
+      R"({{"joining":false,"doubles":true,"co_seats":{{"me":[2]}},"compatibility":"{}"}})",
+      Orca::Online::CompatibilityKey()));
+  Orca::Online::StartRoom(code, false, true);
+  ASSERT_TRUE(Wait([] { return Orca::Online::CoSeats() == std::vector<int>{2}; }));
+  auto roster = picojson::value{};
+  ASSERT_TRUE(picojson::parse(roster, CoRoster("lobby", false, true, false)).empty());
+  for (auto& participant : roster.get<picojson::object>()["participants"].get<picojson::array>())
+    if (participant.get("slot").get<double>() == 2)
+      participant.get<picojson::object>()["localIndex"] = picojson::value(2.0);
+  Action(code, fmt::format(R"({{"message":{}}})", roster.serialize()));
+  auto* room = static_cast<YouGameRoom*>(Orca::Online::Transport());
+  ASSERT_TRUE(Wait([&] { return room->LocalIndex(2) == 2; }));
+  EXPECT_EQ(Orca::Online::LocalIndex(0), 0);
+  EXPECT_EQ(Orca::Online::LocalIndex(2), 1);
+  EXPECT_EQ(Orca::Online::LocalIndex(1), -1);
+  EXPECT_EQ(Orca::Online::LocalIndex(-1), -1);
 }

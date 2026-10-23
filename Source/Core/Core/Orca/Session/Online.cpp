@@ -544,7 +544,13 @@ std::vector<int> CoSeats()
 int LocalIndex(int seat)
 {
   const auto room = Room();
-  return room ? room->LocalIndex(seat, true) : -1;
+  if (!room || seat < 0)
+    return -1;
+  if (seat == room->Seat())
+    return 0;
+  const auto co_seats = room->CoSeats();
+  const auto co = std::ranges::find(co_seats, seat);
+  return co == co_seats.end() ? -1 : static_cast<int>(co - co_seats.begin()) + 1;
 }
 
 std::vector<int> GroupOf(int seat)
