@@ -36,6 +36,7 @@
 #include "Core/Orca/Session/Session.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 #include "Core/Rollback/OnlineMatch.h"
+#include "Core/Rollback/Loopback.h"
 
 namespace Rollback
 {
@@ -47,6 +48,17 @@ class StallBudget;
 // `Config` namespace that clashes with this file's Config.
 Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
                             const std::function<Orca::Net::Pad()>& sample_local,
+                            const std::function<bool()>& stopping,
+                            std::chrono::microseconds stall_wait,
+                            std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr,
+                            std::chrono::nanoseconds* waited = nullptr,
+                            const std::function<bool(std::chrono::steady_clock::time_point)>&
+                                hold_silence = {},
+                            OnlineMatch::StallBudget* stall_budget = nullptr,
+                            const std::function<bool(std::chrono::steady_clock::time_point)>&
+                                room_recovering = {});
+Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
+                            const std::function<Orca::Net::Pad(int)>& sample_local,
                             const std::function<bool()>& stopping,
                             std::chrono::microseconds stall_wait,
                             std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr,
@@ -6889,5 +6901,69 @@ TEST(OrcaCoSeats, PendingCoSeatUnplugCanBeReplacedThroughEveryAdmissionPath)
     }
     CompareCoFrames(friends, first);
     EXPECT_TRUE(host.session->Error().empty()) << host.session->Error();
+  }
+}
+
+TEST(OrcaCoSeats, StepSessionReplaysThreeSeatRecordingThroughLoopback)
+{
+  FakeGame original;
+  std::vector<Rollback::Loopback::RecordedFrame> recording;
+  for (int frame = 0; frame < 600; ++frame)
+  {
+    Pads pads{};
+    pads.fill(UNPLUGGED_PAD);
+    for (int seat = 0; seat < 3; ++seat)
+      pads[seat] = Pad{static_cast<u8>(frame / 11 + seat), 0, 0, 0,
+                       static_cast<u8>(seat + 1), 0, 0, 0};
+    recording.push_back({pads, original.m_state});
+    original.SetPads(frame, pads);
+    original.Run();
+  }
+  FakeGame replay;
+  Rollback::Loopback::VirtualRemote remote(recording, {1}, 0, 9, 2, 2, 10, {2});
+  Config config;
+  config.seats = MAX_SEATS;
+  config.local_seat = 0;
+  config.co_seats = {2};
+  config.time_sync = false;
+  config.fixed_delay = 2;
+  config.checksum_every = 10;
+  config.snapshot_every = 1;
+  config.start_pad = recording[0].pads[0];
+  config.start_pads[2] = recording[0].pads[2];
+  std::array<SeatPlan, MAX_SEATS> plan{};
+  for (int seat = 0; seat < 3; ++seat)
+    plan[seat] = {0, NEVER, 0};
+  config.plan = plan;
+  Session session(config, replay, remote);
+  int completed = -1;
+  int calls = 0;
+  int polls = 0;
+  for (int guard = 0; guard < 4000 && completed < 350; ++guard)
+  {
+    if (!session.Resimulating())
+      remote.Tick();
+    std::array<int, MAX_SEATS> sampled{};
+    const Step step = Rollback::StepSession(session, replay, completed,
+        std::function<Pad(int)>([&](int seat) {
+          ++sampled[seat];
+          return recording.at(session.CurrentFrame() + session.Delay()).pads[seat];
+        }), [&] { ++polls; remote.TickWhileWaiting(); return polls > 4000; },
+        std::chrono::microseconds(0));
+    EXPECT_EQ(sampled, (std::array<int, MAX_SEATS>{1, 0, 1, 0}));
+    ++calls;
+    ASSERT_NE(step.kind, StepKind::Ended) << session.Error();
+    completed = replay.Run();
+  }
+  ASSERT_GE(completed, 350);
+  EXPECT_GT(calls, 350);
+  EXPECT_GT(polls, 0);
+  EXPECT_GT(session.GetStats().checksums_matched, 10);
+  EXPECT_GT(session.GetStats().rollbacks, 0);
+  EXPECT_LE(session.GetStats().deepest_rollback, config.max_rollback);
+  for (int frame = 0; frame < session.FinalFrame(); ++frame)
+  {
+    EXPECT_EQ(At(replay.m_history, frame), recording[frame].checksum) << frame;
+    EXPECT_EQ(At(replay.m_ran_pads, frame), recording[frame].pads) << frame;
   }
 }

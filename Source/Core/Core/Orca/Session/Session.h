@@ -356,6 +356,7 @@ public:
   // Host: declare a fixed machine group before admitting it with AddPeerBatch.
   void SetGroup(int lead, const std::vector<int>& co_seats);
   bool IsLocal(int seat) const;
+  int LocalSeat() const { return m_config.local_seat; }
   int LeadOf(int seat) const;
   bool SameMachine(int a, int b) const;
   int PeersInPlay() const;
