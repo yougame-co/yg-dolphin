@@ -183,6 +183,26 @@ TEST(OrcaRoom, PacketRoundTrips)
   ExpectSame(bare, got);
 }
 
+TEST(OrcaRoom, LegacyPacketGoldens)
+{
+  // Captured with the unmodified 0.3.77 encoder (55238506e8).
+  EXPECT_EQ(EncodePacket(Packet{}), R"golden({"a":[-1,-1,-1,-1],"c":0,"f":0,"k":"p","p":"","s":0})golden");
+  EXPECT_EQ(EncodePacket(Sample()), R"golden({"a":[130,-1,-1,-1],"c":121,"f":120,"h":"fedcba9876543210","j":5,"k":"p","l":64,"n":3,"p":"00ff807f0001a00f01ff807f0001a10f02ff807f0001a20f","r":42,"s":1,"sp":[1,2,2,3],"v":-17,"x":60})golden");
+  Packet host = Frames(0, 20, 2);
+  host.sequence = 7;
+  host.roster = std::array<SeatPlan, MAX_SEATS>{SeatPlan{0, NEVER, 0},
+      SeatPlan{30, NEVER, 20}, SeatPlan{}, SeatPlan{10, 19, 0}};
+  host.start_gate = {20, 30};
+  host.departed[3] = {10, 19, 17, Frames(3, 17, 2).pads};
+  host.history_ack = 12;
+  host.values_ack = 3;
+  host.history_seat = 1;
+  host.history_first = 0;
+  host.history = {Pads{}};
+  host.leaving = true;
+  EXPECT_EQ(EncodePacket(host), R"golden({"a":[-1,-1,-1,-1],"c":22,"ds":[[3,10,19,17,"11000000000000001200000000000000"]],"f":20,"ha":12,"hf":0,"hp":[[1,"0000000000000000000000000000000000000000000000000000000000000000"]],"ht":1,"k":"p","lv":true,"p":"14000000000000001500000000000000","q":7,"ro":[[0,-1,0],[30,-1,20],[-1,-1,-1],[10,19,0]],"s":0,"sg":[20,30],"va":3})golden");
+}
+
 // The host's port values travel in the room's "nm" and "kf" messages: names, the frame each
 // applies from, and a player's own controls; a joiner reads back exactly what the host holds.
 namespace
