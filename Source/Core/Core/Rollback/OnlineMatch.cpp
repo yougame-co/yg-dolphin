@@ -1140,6 +1140,9 @@ void Reseat(Match& match)
     return;
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} moves to port 1 from frame {}", match.local_seat + 1,
                  match.running + 1);
+  auto pending = std::move(match.queued_local[match.local_seat]);
+  ClearQueuedLocal(match);
+  match.queued_local[0] = std::move(pending);
   match.local_seat = 0;
   match.co_seats.clear();
   Orca::UX::SetLocalPadCount(1);
@@ -5349,6 +5352,22 @@ std::vector<Pads> PumpSoloSeatsForTest(Core::System& system, const std::vector<i
     RunSolo(match, sample);
   if (ports)
     *ports = PortsAt(match, frames);
+  return match.log;
+}
+
+std::vector<Pads> PumpJoinerSoloForTest(std::unique_ptr<Orca::Net::Session> session,
+    int frames, const std::function<Pad(int)>& sample)
+{
+  Match match;
+  match.local_seat = session->LocalSeat();
+  match.origin_frame = 0;
+  match.running = session->CurrentFrame() - 1;
+  match.port = std::make_unique<RingPort>(Core::System::GetInstance(), MAX_ROLLBACK);
+  match.session = std::move(session);
+  GoSolo(match, "test match over", nullptr);
+  Reseat(match);
+  for (int frame = 0; frame < frames; ++frame)
+    RunSolo(match, sample);
   return match.log;
 }
 

@@ -7078,3 +7078,50 @@ TEST(OrcaCoSeats, ReplacementLeadCanArriveBeforeItsAuthorityRoster)
   EXPECT_TRUE(friends.players[0]->session->Error().empty());
   EXPECT_EQ(friends.players[0]->session->LeadOf(2), 1);
 }
+
+TEST(OrcaCoSeats, SingleSeatJoinerPlaysQueuedPadsAfterMatchOver)
+{
+  for (const int seat : {1, 2, 3})
+  {
+    for (int delay = 2; delay <= 6; ++delay)
+    {
+      FakeGame game;
+      FakeNet net;
+      FakeNet::End transport(net, 1);
+      Config config;
+      config.seats = 4;
+      config.local_seat = seat;
+      config.input_delay = delay;
+      config.fixed_delay = delay;
+      config.time_sync = false;
+      auto session = std::make_unique<Session>(config, game, transport);
+      for (int frame = 0; frame < 3; ++frame)
+      {
+        const Pad pad{0, static_cast<u8>(frame + 1), 0, 0, 0, 0, 0, 0};
+        ASSERT_EQ(session->OnBoundary(frame - 1, pad).kind, StepKind::Run);
+        game.Run();
+      }
+      const auto pending = session->PendingLocal();
+      ASSERT_EQ(pending.size(), static_cast<size_t>(delay));
+      const Pad fresh{0, 0x7f, 0, 0, 0, 0, 0, 0};
+      int reads = 0;
+      const auto log = Rollback::OnlineMatch::PumpJoinerSoloForTest(std::move(session),
+          delay + 1, [&](int local) {
+            EXPECT_EQ(local, 0);
+            ++reads;
+            return fresh;
+          });
+      ASSERT_GE(log.size(), pending.size() + 1);
+      const size_t first = log.size() - pending.size() - 1;
+      // The pre-co-seats queue was independent of the port: consume every delayed sample first.
+      for (size_t i = 0; i < pending.size(); ++i)
+      {
+        EXPECT_EQ(log[first + i][0], pending[i]) << seat << ":" << delay << ":" << i;
+        for (int port = 1; port < MAX_SEATS; ++port)
+          EXPECT_EQ(log[first + i][port], UNPLUGGED_PAD);
+      }
+      EXPECT_EQ(log.back()[0], fresh);
+      EXPECT_EQ(reads, 1) << seat << ":" << delay;
+    }
+  }
+}
