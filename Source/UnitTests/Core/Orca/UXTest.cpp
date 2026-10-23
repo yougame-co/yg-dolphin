@@ -5261,3 +5261,19 @@ TEST(OrcaUXControllers, ExplicitSeatsIgnorePadIndexAndOrder)
   EXPECT_EQ(after[0]->pad.stickX, 255);
   EXPECT_EQ(after[1]->pad.stickX, 1);
 }
+
+TEST(OrcaUXOrbCombo, CoSeatShortcutHasOnlyTheRecordedMask)
+{
+  OrbCombo combo;
+  GCPadStatus pad = NeutralPad();
+  pad.button = PAD_BUTTON_UP | PAD_BUTTON_START | PAD_BUTTON_A;
+  testing::internal::CaptureStdout();
+  EXPECT_EQ(FilterCoSeatPad(pad, combo, true, true).button, PAD_BUTTON_A);
+  pad.button = PAD_BUTTON_START | PAD_BUTTON_A;
+  EXPECT_EQ(FilterCoSeatPad(pad, combo, true, true).button, PAD_BUTTON_A);
+  pad.button = 0;
+  EXPECT_EQ(FilterCoSeatPad(pad, combo, true, true).button, 0);
+  pad.button = PAD_BUTTON_START;
+  EXPECT_EQ(FilterCoSeatPad(pad, combo, true, true).button, PAD_BUTTON_START);
+  EXPECT_TRUE(testing::internal::GetCapturedStdout().empty());
+}
