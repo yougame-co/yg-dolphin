@@ -609,7 +609,7 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     if (!out.roster || !rg->second.is<picojson::array>() ||
         rg->second.get<picojson::array>().size() != MAX_SEATS)
       return false;
-    std::array<int, MAX_SEATS> groups;
+    std::array<int, MAX_SEATS> groups{};
     for (int s = 0; s < MAX_SEATS; ++s)
     {
       const auto& lead = rg->second.get<picojson::array>()[s];
@@ -5147,6 +5147,18 @@ struct YouGameRoom::Impl
   // Current roster ownership, shared by relay and direct receive (under mutex).
   bool CoSeatsOwned(const Packet& packet, const std::string& id)
   {
+    if (packet.groups)
+    {
+      if (id != host || !packet.roster)
+        return false;
+      for (int slot = 0; slot < MAX_SEATS; ++slot)
+      {
+        const int lead = (*packet.groups)[slot];
+        // Absent room participants may still have a host-scheduled unplug in the session.
+        if (lead >= 0 && !seat_groups[slot].empty() && seat_groups[slot].front() != lead)
+          return false;
+      }
+    }
     const auto owned = peer_co_slots.find(id);
     for (const auto& [slot, inputs] : packet.co)
     {

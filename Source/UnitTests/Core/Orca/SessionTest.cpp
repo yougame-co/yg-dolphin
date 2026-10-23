@@ -6717,3 +6717,47 @@ TEST(OrcaCoSeats, EstablishedGroupMetadataCannotVanish)
   EXPECT_TRUE(friends.players[2]->session->ErrorFromPeer());
   EXPECT_EQ(friends.players[2]->session->Error(), "Invalid roster groups");
 }
+
+TEST(OrcaCoSeats, StaleRosterGroupsDoNotRestoreDepartedMembership)
+{
+  CoSeatMesh friends({{0}, {1}, {2, 3}});
+  friends.Play(400);
+  Packet stale = friends.mesh.last_sent[0];
+  friends.players[0]->session->DropSeat(2);
+  friends.disabled[2] = true;
+  friends.Play(60);
+  ASSERT_EQ(friends.players[1]->session->LeadOf(3), 3);
+  friends.mesh.pending[1].clear();
+  friends.mesh.pending[1].push_back({friends.mesh.tick, stale});
+  for (int attempt = 0; attempt < 4 && !friends.mesh.pending[1].empty(); ++attempt)
+    friends.players[1]->TickCo(friends.mesh.tick);
+  EXPECT_TRUE(friends.mesh.pending[1].empty());
+  EXPECT_TRUE(friends.players[1]->session->Error().empty());
+  EXPECT_EQ(friends.players[1]->session->LeadOf(3), 3);
+  EXPECT_EQ(friends.players[1]->session->Plan()[3].live_from, NEVER);
+}
+
+TEST(OrcaCoSeats, UnusedCoPadFramesUseTheSamePaddingAsTheLead)
+{
+  CoSeatMesh friends({{0, 1}, {2}, {3}});
+  friends.Play(400);
+  friends.players[0]->neutral_seats[1] = true;
+  friends.players[0]->session->UnplugSeat(1);
+  const int unplug = friends.players[0]->session->Plan()[1].unplug_from;
+  bool padding = false;
+  for (int tick = 0; tick < 40; ++tick)
+  {
+    friends.Play(1);
+    const Packet& packet = friends.mesh.last_sent[0];
+    for (const auto& [seat, inputs] : packet.co)
+      for (size_t index = 0; index < inputs.size(); ++index)
+        if (packet.first_frame + static_cast<int>(index) >= unplug)
+        {
+          EXPECT_EQ(inputs[index], Pad{});
+          padding = true;
+        }
+  }
+  EXPECT_TRUE(padding);
+  friends.Play(400);
+  CompareCoFrames(friends);
+}

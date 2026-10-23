@@ -7060,3 +7060,51 @@ TEST(OrcaRoom, RetryCoSeatResetsItsWholeGroupOnce)
   EXPECT_EQ(events[1].seat, 3);
   EXPECT_FALSE(events[1].host);
 }
+
+TEST(OrcaRoom, HostGroupsFollowCurrentRoomOwnershipOnRelayAndDirect)
+{
+  for (const bool direct : {false, true})
+  {
+    Packet valid = Frames(0, 20, 3);
+    valid.co = {{3, Frames(3, 40, 3).pads}};
+    std::array<SeatPlan, MAX_SEATS> roster{};
+    roster.fill(SeatPlan{0, NEVER, 0});
+    valid.roster = roster;
+    valid.groups = std::array<int, MAX_SEATS>{0, 1, 1, 0};
+    const auto step = [direct](const Packet& packet, int time) {
+      return RoomTestStep{direct ? RK::DirectPacket : RK::Message, time,
+          direct ? EncodePacket(packet) : fmt::format(
+              R"({{"t":"msg","from":"peer","d":{}}})", EncodePacket(packet)), 0};
+    };
+    Packet wrong_co = valid;
+    (*wrong_co.groups)[3] = 1;
+    Packet wrong_local = valid;
+    (*wrong_local.groups)[2] = 0;
+    Packet scheduled = valid;
+    scheduled.co.clear();
+    (*scheduled.roster)[3].unplug_from = 60;
+    const auto trace = TraceRoomForTest(TraceOptions(true), {
+        {RK::Message, 0, CoRoster("welcome", true, true, true)},
+        {RK::Message, 0, PeerHello(true)}, step(valid, 1), step(wrong_co, 2), step(wrong_local, 3),
+        {RK::Message, 4, CoRoster("lobby", true, true, false)}, step(scheduled, 5)});
+    EXPECT_EQ(trace[2].packets.size(), 1u);
+    EXPECT_TRUE(trace[3].packets.empty());
+    EXPECT_TRUE(trace[4].packets.empty());
+    // The host's scheduled unplug can outlive the participant's presence in the room.
+    EXPECT_EQ(trace[6].packets.size(), 1u);
+  }
+}
+
+TEST(OrcaRoom, OnlyTheRoomHostSuppliesGroups)
+{
+  Packet packet = Frames(1, 20, 3);
+  std::array<SeatPlan, MAX_SEATS> roster{};
+  roster.fill(SeatPlan{0, NEVER, 0});
+  packet.roster = roster;
+  packet.groups = std::array<int, MAX_SEATS>{0, 1, 0, 1};
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, CoRoster("welcome", false, true, true)},
+      {RK::Message, 0, PeerHello(false)},
+      {RK::Message, 1, fmt::format(R"({{"t":"msg","from":"peer","d":{}}})", EncodePacket(packet))}});
+  EXPECT_TRUE(trace.back().packets.empty());
+}

@@ -1849,7 +1849,7 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
   const bool stale = packet.sequence > 0 && packet.sequence <= m_peer_sequence[s];
   m_peer_sequence[s] = std::max(m_peer_sequence[s], packet.sequence);
   const bool from_authority = !input_only && s == m_config.authority_seat;
-  if (from_authority && packet.groups && !ApplyGroups(packet))
+  if (from_authority && !stale && packet.groups && !ApplyGroups(packet))
     return;
   if (from_authority && m_config.per_peer_inputs)
   {
@@ -2008,6 +2008,12 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
       m_dirty = std::min(m_dirty, f);
   }
   AdvanceReceived(s);
+  if (input_only)
+  {
+    if (!stale)
+      m_remote_frame[s] = packet.current_frame;
+    return;
+  }
   for (int peer = 0; peer < m_config.seats; ++peer)
     m_peer_ack[s][peer] = std::max(m_peer_ack[s][peer], packet.ack[peer]);
   int ack = packet.ack[m_config.local_seat];
@@ -2021,14 +2027,7 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
   // packet's.
   if (stale)
   {
-    if (!input_only)
-      AddPeerChecksum(s, packet);
-    return;
-  }
-  if (input_only)
-  {
-    m_remote_frame[s] = packet.current_frame;
-    m_advantage[s] = m_frame - packet.current_frame;
+    AddPeerChecksum(s, packet);
     return;
   }
   // How far this player ran past the newest of our inputs it had, while it needed them: how deep
@@ -2238,7 +2237,7 @@ void Session::AddCoPads(Packet* packet) const
       const int frame = packet->first_frame + static_cast<int>(i);
       const auto input = m_co_local[seat].find(frame);
       inputs.push_back(Plugged(seat, frame) && input != m_co_local[seat].end() ?
-                           input->second : UNPLUGGED_PAD);
+                           input->second : Pad{});
     }
     packet->co.emplace_back(seat, std::move(inputs));
   }
