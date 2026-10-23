@@ -1288,6 +1288,8 @@ struct YouGameRoom::Impl
   // keyframe store's URL from the ticket reply.
   std::string site, dev_player, keyframes_url;
   std::string current_ticket;  // under mutex
+  // The original ticket/welcome lobby. Refreshes must reuse it even if build defaults change.
+  picojson::object ticket_lobby;  // under mutex
   Clock::time_point ticket_minted{};  // under mutex
   std::thread bridge_thread, events_thread;
   std::atomic<bool> bridge_done{false};
@@ -1806,6 +1808,10 @@ struct YouGameRoom::Impl
     keyframes_url = KeyframesUrl(Str(reply, "keyframes"));
     std::lock_guard lock(mutex);
     code = room;
+    ticket_lobby = lobby;
+    if (const auto original = reply.find("lobby");
+        original != reply.end() && original->second.is<picojson::object>())
+      ticket_lobby = original->second.get<picojson::object>();
     current_ticket = *ticket;
     ticket_minted = Now();
     role_known = true;
@@ -1838,6 +1844,7 @@ struct YouGameRoom::Impl
       return false;
     }
     std::string room;
+    picojson::object lobby;
     {
       std::lock_guard lock(mutex);
       if (!role_known)
@@ -1846,6 +1853,7 @@ struct YouGameRoom::Impl
         return false;
       }
       room = code;
+      lobby = ticket_lobby;
       // YouGame's keyframe store accepts a room ticket for hours past expiry, so only mint another
       // when it refused this one. A reconnect must refresh before the five-minute expiry.
       if (!fresh && !current_ticket.empty() &&
@@ -1856,11 +1864,6 @@ struct YouGameRoom::Impl
         return true;
       }
     }
-    picojson::object lobby;
-    lobby["version"] = picojson::value(1.0);
-    lobby["minPlayers"] = picojson::value(2.0);
-    lobby["maxLocalPlayers"] = picojson::value(1.0);
-    lobby["compatibility"] = picojson::value(options.compatibility);
     picojson::object request;
     request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
     request["mode"] = picojson::value(options.mode);
@@ -4781,6 +4784,7 @@ struct YouGameRoom::Impl
         return;
       }
       // A room whose game is running is what a drop-in friend joins: no refusal.
+      const bool first_welcome = !welcomed_at;
       welcomed_at = Now();
       if (!blackout_opened)
         blackout_opened = welcomed_at;
@@ -4874,6 +4878,9 @@ struct YouGameRoom::Impl
         std::lock_guard lock(mutex);
         queue = q == "casual" || q == "ranked" ? q : "private";
         queue_known = true;
+        if (const auto original = room.find("lobby");
+            first_welcome && original != room.end() && original->second.is<picojson::object>())
+          ticket_lobby = original->second.get<picojson::object>();
         // All recovery rooms: exact boolean opt-in, re-read on every welcome (never a hint).
         welcome_recovery = room.count("recovery") && room.at("recovery").is<bool>() &&
                            room.at("recovery").get<bool>();

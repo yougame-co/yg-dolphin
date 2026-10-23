@@ -6946,3 +6946,49 @@ TEST(OrcaRoom, CoPacketsFollowTheCurrentRosterOnRelayAndDirect)
     EXPECT_TRUE(trace[5].packets.empty());
   }
 }
+TEST_F(OrcaRoomRuntime, FreshTicketReusesTheOriginalLobby)
+{
+  for (const char* queue : {"private", "casual", "ranked"})
+  {
+    const std::string code = std::string("colob") + queue;
+    const std::string lobby = R"({"version":1,"minPlayers":2,"maxLocalPlayers":1,"compatibility":"original-lobby"})";
+    auto room = Open(code, fmt::format(R"({{"queue":"{}","lobby":{}}})", queue, lobby));
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+    // Later metadata must not replace the room's original lobby.
+    picojson::value welcome;
+    ASSERT_TRUE(picojson::parse(welcome, RosterMessage("welcome")).empty());
+    auto& message = welcome.get<picojson::object>();
+    message["room"] = picojson::value(picojson::object{{"queue", picojson::value(queue)},
+        {"lobby", picojson::value(picojson::object{{"maxLocalPlayers", picojson::value(2.0)}})}});
+    message["participants"].get<picojson::array>()[0].get<picojson::object>()["name"] =
+        picojson::value("Again");
+    Action(code, picojson::value(picojson::object{{"message", welcome}}).serialize());
+    ASSERT_TRUE(Wait([&] { return room->SeatName(1) == "Again"; }));
+    std::string ticket, store, error;
+    ASSERT_TRUE(room->FreshTicket(true, &ticket, &store, &error)) << error;
+    const auto lobbies = Request("/state/" + code).get("ticket_lobbies");
+    ASSERT_TRUE(lobbies.is<picojson::array>());
+    ASSERT_EQ(lobbies.get<picojson::array>().size(), 2u);
+    EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 1);
+    picojson::value expected;
+    ASSERT_TRUE(picojson::parse(expected, lobby).empty());
+    EXPECT_EQ(lobbies.get<picojson::array>()[1], expected);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, FreshTicketKeepsTicketLobbyWithoutWelcomeLobby)
+{
+  const std::string code = "coticket01";
+  const std::string lobby = R"({"version":1,"minPlayers":2,"maxLocalPlayers":2,"compatibility":"ticket-lobby"})";
+  auto room = Open(code, fmt::format(R"({{"ticket_lobby":{}}})", lobby));
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+  std::string ticket, store, error;
+  ASSERT_TRUE(room->FreshTicket(true, &ticket, &store, &error)) << error;
+  const auto lobbies = Request("/state/" + code).get("ticket_lobbies");
+  ASSERT_TRUE(lobbies.is<picojson::array>());
+  ASSERT_EQ(lobbies.get<picojson::array>().size(), 2u);
+  EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 1);
+  picojson::value expected;
+  ASSERT_TRUE(picojson::parse(expected, lobby).empty());
+  EXPECT_EQ(lobbies.get<picojson::array>()[1], expected);
+}
