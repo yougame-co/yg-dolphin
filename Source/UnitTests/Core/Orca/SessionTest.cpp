@@ -6790,3 +6790,52 @@ TEST(OrcaCoSeats, VacatedLocalCoSeatCanBecomeARemoteMachine)
         [seat](const auto& inputs) { return inputs.first == seat; }));
   }
 }
+
+namespace
+{
+std::array<u64, 2> SingleSeatLeaveGolden(bool before_plug)
+{
+  FourFriends friends;
+  friends.mesh.latency = {0, 1, 2, 3};
+  if (before_plug)
+    friends.disabled[3] = true;
+  for (int tick = 0; tick < 1800; ++tick)
+  {
+    if (before_plug && tick == 20)
+    {
+      EXPECT_EQ(friends.players[0]->session->Plan()[3].plug_from, NEVER);
+      friends.players[0]->session->DropSeat(3);
+    }
+    if (!before_plug && tick == 400)
+      friends.players[3]->session->RequestLeave();
+    friends.Play(1);
+    if (!before_plug && tick >= 400 && friends.players[3]->session->LeftDone())
+      friends.disabled[3] = true;
+  }
+  EXPECT_TRUE(friends.disabled[3]);
+  friends.Compare();
+  std::array<u64, 2> hashes{};
+  for (const auto& wire : friends.mesh.wire)
+    for (const unsigned char byte : wire)
+      hashes[0] = Mix(hashes[0], byte);
+  for (const auto& player : friends.players)
+    for (const auto& [frame, pads] : player->game.m_ran_pads)
+    {
+      hashes[1] = Mix(hashes[1], static_cast<u64>(frame));
+      for (const Pad& pad : pads)
+        for (const u8 byte : pad)
+          hashes[1] = Mix(hashes[1], byte);
+    }
+  return hashes;
+}
+}
+
+TEST(OrcaCoSeats, SingleSeatLeaveGoldens)
+{
+  // Captured by applying only tests to detached 80448a9e1f on 2026-10-23.
+  const std::array<std::array<u64, 2>, 2> expected{{
+      {0xea1b21ae0bbf358dull, 0x8234d50a77aa9ddeull},
+      {0xdb737feccfdf981cull, 0x21b0105ae1dd8b8eull}}};
+  EXPECT_EQ(SingleSeatLeaveGolden(false), expected[0]);
+  EXPECT_EQ(SingleSeatLeaveGolden(true), expected[1]);
+}
