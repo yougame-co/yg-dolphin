@@ -417,6 +417,11 @@ Match& TheMatch()
   return match;
 }
 
+int LeadSeat(const Match& match)
+{
+  return match.session ? match.session->LocalSeat() : match.local_seat;
+}
+
 bool IsLocal(const Match& match, int seat)
 {
   return match.session ? match.session->IsLocal(seat) :
@@ -4961,7 +4966,7 @@ void ReportJoinFailure(std::string_view code, std::string_view sentence)
 
 int LocalSeat()
 {
-  return TheMatch().local_seat;
+  return LeadSeat(TheMatch());
 }
 
 int LocalSeatCount()
@@ -5353,6 +5358,14 @@ std::vector<Pads> PumpSoloSeatsForTest(Core::System& system, const std::vector<i
   if (ports)
     *ports = PortsAt(match, frames);
   return match.log;
+}
+
+int PumpLeadSeatForTest(std::unique_ptr<Orca::Net::Session> session, int solo_seat)
+{
+  Match match;
+  match.local_seat = solo_seat;
+  match.session = std::move(session);
+  return LeadSeat(match);
 }
 
 std::vector<Pads> PumpJoinerSoloForTest(std::unique_ptr<Orca::Net::Session> session,

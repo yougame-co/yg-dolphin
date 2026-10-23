@@ -7125,3 +7125,20 @@ TEST(OrcaCoSeats, SingleSeatJoinerPlaysQueuedPadsAfterMatchOver)
     }
   }
 }
+
+TEST(OrcaCoSeats, SessionLeadDeterminesLocalInputEvenBeforeMatchSeatAgrees)
+{
+  FakeGame game;
+  FakeNet net;
+  FakeNet::End transport(net, 1);
+  for (const int seat : {1, 2, 3})
+  {
+    Config config;
+    config.seats = 4;
+    config.local_seat = seat;
+    auto session = std::make_unique<Session>(config, game, transport);
+    // The input callback uses LocalSeat() to select ordinal zero and the lead-only filter.
+    EXPECT_EQ(Rollback::OnlineMatch::PumpLeadSeatForTest(std::move(session), 0), seat);
+  }
+  EXPECT_EQ(Rollback::OnlineMatch::PumpLeadSeatForTest(nullptr, 2), 2);
+}

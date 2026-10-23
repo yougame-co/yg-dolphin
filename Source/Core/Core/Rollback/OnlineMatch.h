@@ -567,6 +567,7 @@ std::vector<Orca::Net::Pads> PumpSoloSeatsForTest(Core::System& system,
     const std::vector<int>& co_seats, int frames, bool fresh_tail,
     const std::function<Orca::Net::Pad(int)>& sample,
     std::vector<Orca::Events::PortInfo>* ports);
+int PumpLeadSeatForTest(std::unique_ptr<Orca::Net::Session> session, int solo_seat);
 // Exercise the match-over handoff, including the old seat's delayed samples.
 std::vector<Orca::Net::Pads> PumpJoinerSoloForTest(
     std::unique_ptr<Orca::Net::Session> session, int frames,
