@@ -6064,3 +6064,95 @@ TEST(OrcaCoSeats, EstablishedGroupsStayFixedEvenWhenPlansMatch)
   friends.players[1]->TickCo(friends.mesh.tick);
   EXPECT_TRUE(friends.players[1]->session->ErrorFromPeer());
 }
+
+namespace
+{
+std::array<u64, 2> SingleSeatGolden(int scenario)
+{
+  FourFriends friends;
+  friends.mesh.latency = {0, 1, 2, 3};
+  if (scenario == 2)
+  {
+    for (int seat = 0; seat < MAX_SEATS; ++seat)
+    {
+      auto& player = *friends.players[seat];
+      Config config = DropInConfig(seat, seat == 0 ? 300 : 240);
+      config.per_peer_inputs = true;
+      config.time_sync = true;
+      player.session = std::make_unique<Session>(config, player.game, player.transport);
+      player.session->SetValuesHeld(4);
+      for (int sample = 0; sample < 3; ++sample)
+        player.session->OnRoundTrip(40 + 60 * seat);
+    }
+    std::vector<Pads> log;
+    for (int frame = 240; frame < 300; ++frame)
+      log.push_back(At(friends.players[0]->game.m_ran_pads, frame));
+    friends.players[0]->session->SetLog(240, std::move(log));
+    for (int seat = 1; seat < MAX_SEATS; ++seat)
+      friends.players[0]->session->RequireValues(seat, 4);
+    friends.players[0]->session->AddPeerBatch({1, 2, 3}, 300, 240);
+  }
+  int compare_from = 300;
+  for (int tick = 0; tick < 1800; ++tick)
+  {
+    if (scenario == 1 && tick == 400)
+    {
+      auto& host = *friends.players[0];
+      const int live = host.session->CurrentFrame();
+      compare_from = live - 30;
+      host.session->DropSeat(3);
+      host.session->AddPeer(3, live, compare_from);
+      // A replacement connection has no packets left over from its previous session.
+      for (auto& queue : friends.mesh.pending)
+        std::erase_if(queue, [](const auto& pending) { return pending.packet.seat == 3; });
+      friends.players[3] = std::make_unique<MeshPlayer>(friends.mesh, 3, compare_from, true);
+      friends.players[3]->game.m_state = At(host.game.m_history, compare_from);
+      friends.mesh.pending[3].clear();
+    }
+    for (auto& player : friends.players)
+      player->game.now_ms = tick * (1000.0 / 60);
+    friends.Play(1);
+    if (scenario == 2 && tick > 200 && tick % 3 == 0)
+      friends.players[3]->Tick(friends.mesh.tick);
+  }
+  friends.Compare(compare_from);
+  if (scenario == 2)
+  {
+    int waits = 0;
+    for (const auto& player : friends.players)
+    {
+      waits += player->session->GetStats().waits;
+      EXPECT_GE(player->session->GetStats().peer_rtt_median, 160);
+    }
+    EXPECT_GT(waits, 0);
+  }
+  std::array<u64, 2> hashes{};
+  for (const auto& wire : friends.mesh.wire)
+    for (const unsigned char byte : wire)
+      hashes[0] = Mix(hashes[0], byte);
+  for (const auto& player : friends.players)
+    for (const auto& [frame, pads] : player->game.m_ran_pads)
+    {
+      hashes[1] = Mix(hashes[1], static_cast<u64>(frame));
+      for (const Pad& pad : pads)
+        for (const u8 byte : pad)
+          hashes[1] = Mix(hashes[1], byte);
+    }
+  return hashes;
+}
+}  // namespace
+
+TEST(OrcaCoSeats, WiderSingleSeatGoldens)
+{
+  // Captured in a detached 80448a9e1f worktree before changing Session:
+  // six pairs, leave/rebuild, then time sync with RTT and actual pacing waits.
+  const std::array<std::array<u64, 2>, 3> expected{{
+      {0xb1ce5b70c91e2f59ull, 0x4fbd61ac9c2f09a5ull},
+      {0xad6cfe7cd352759aull, 0x7bbf7c03ae2261b0ull},
+      {0xcdaf4149adc7bebdull, 0x8020f66db1955da3ull}}};
+  for (int scenario = 0; scenario < 3; ++scenario)
+  {
+    SCOPED_TRACE(scenario);
+    EXPECT_EQ(SingleSeatGolden(scenario), expected[scenario]);
+  }
+}
