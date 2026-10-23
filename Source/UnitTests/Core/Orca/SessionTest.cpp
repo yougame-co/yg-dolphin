@@ -6219,3 +6219,21 @@ TEST(OrcaCoSeats, BatchReplacementKeepsTheDeclaredGroup)
   EXPECT_EQ(host.session->Plan()[2].plug_from, NEVER);
   EXPECT_EQ(host.session->Plan()[3].plug_from, NEVER);
 }
+
+TEST(OrcaCoSeats, JoinerRejectsAdmissionWithoutItsCoSeat)
+{
+  FriendsMesh mesh;
+  CoMeshPlayer joiner(mesh, 2, {3}, {0});
+  Packet host;
+  host.seat = 0;
+  host.sequence = 1;
+  host.current_frame = 300;
+  std::array<SeatPlan, MAX_SEATS> roster{};
+  roster[0] = {0, NEVER, 0};
+  roster[2] = {NEVER, NEVER, 300};
+  host.roster = roster;
+  mesh.pending[2].push_back({0, host});
+  joiner.TickCo(0);
+  EXPECT_TRUE(joiner.session->ErrorFromPeer());
+  EXPECT_NE(joiner.session->Error().find("without its co-seat"), std::string::npos);
+}

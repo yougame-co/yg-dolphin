@@ -365,6 +365,17 @@ bool Session::ApplyGroups(const Packet& packet)
     const bool present = plan.live_from != NEVER;
     groups[seat] = packet.groups ? (*packet.groups)[seat] : (present ? seat : -1);
   }
+  const SeatPlan& own = (*packet.roster)[m_config.local_seat];
+  if (own.live_from != NEVER && own.live_from >= m_config.start_frame)
+    for (const int seat : m_config.co_seats)
+      if (m_own_live_from[seat] == NEVER &&
+          ((*packet.roster)[seat].live_from != own.live_from ||
+           (*packet.roster)[seat].plug_from != own.plug_from ||
+           groups[seat] != m_config.local_seat))
+      {
+        FailPeer("The host admitted this player without its co-seat");
+        return false;
+      }
   for (int seat = 0; seat < MAX_SEATS; ++seat)
   {
     const SeatPlan& plan = (*packet.roster)[seat];
