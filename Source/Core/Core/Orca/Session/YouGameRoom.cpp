@@ -811,6 +811,28 @@ std::string EncodePacket(const Packet& packet)
   return picojson::value(PacketToJson(packet)).serialize();
 }
 
+std::string EncodeDirectPacket(const Packet& packet)
+{
+  Packet copy = packet;
+  copy.history_seat = -1;
+  copy.history_first = 0;
+  copy.history.clear();
+  std::string payload = EncodePacket(copy);
+  while (payload.size() > DirectLink::MAX_PAYLOAD && copy.pads.size() > 1)
+  {
+    // Every frame contributes one pad per local seat, each with 16 hex digits.
+    const size_t bytes_per_frame = 16 * (1 + copy.co.size());
+    const size_t over =
+        (payload.size() - DirectLink::MAX_PAYLOAD + bytes_per_frame - 1) / bytes_per_frame;
+    const size_t count = copy.pads.size() > over ? copy.pads.size() - over : 1;
+    copy.pads.resize(count);
+    for (auto& [co_seat, inputs] : copy.co)
+      inputs.resize(count);
+    payload = EncodePacket(copy);
+  }
+  return payload;
+}
+
 bool DecodePacket(const std::string& json, Packet* packet)
 {
   picojson::value value;
@@ -2756,18 +2778,7 @@ struct YouGameRoom::Impl
     }
     sent_at = now;
     sent_newest = std::max(sent_newest, newest);
-    Packet copy = packet;
-    copy.history_seat = -1;
-    copy.history_first = 0;
-    copy.history.clear();
-    std::string payload = EncodePacket(copy);
-    while (payload.size() > DirectLink::MAX_PAYLOAD && copy.pads.size() > 1)
-    {
-      // Each pad is 16 hex digits.
-      const size_t over = (payload.size() - DirectLink::MAX_PAYLOAD + 15) / 16;
-      copy.pads.resize(copy.pads.size() > over ? copy.pads.size() - over : 1);
-      payload = EncodePacket(copy);
-    }
+    const std::string payload = EncodeDirectPacket(packet);
     if (payload.size() <= DirectLink::MAX_PAYLOAD)
       direct->Send(payload, recipient);
   }

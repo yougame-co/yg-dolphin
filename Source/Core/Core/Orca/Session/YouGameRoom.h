@@ -410,6 +410,8 @@ std::string GameStartMessage(const std::string& queue, const std::string& match,
                              int start);
 // Packets as room messages (exposed for tests).
 std::string EncodePacket(const Packet& packet);
+// Direct inputs omit history and retain the oldest frames that fit, for every local seat.
+std::string EncodeDirectPacket(const Packet& packet);
 bool DecodePacket(const std::string& json, Packet* packet);
 // Port values in the room's "nm" and "kf" messages (exposed for tests): each entry is [seat, from,
 // name], plus controls hex (empty for none) and then queue hex when present. At most 16 entries are

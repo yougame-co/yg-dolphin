@@ -6662,6 +6662,33 @@ TEST(OrcaRoom, CoSeatPacketRoundTrips)
   EXPECT_EQ(EncodePacket(sent).find("\"rg\""), std::string::npos);
 }
 
+TEST(OrcaRoom, DirectTrimKeepsEveryCoSeatAligned)
+{
+  for (const int count : {1, 3})
+  {
+    Packet sent = Frames(0, 100, MAX_PADS_IN_PACKET);
+    for (int seat = 1; seat <= count; ++seat)
+      sent.co.emplace_back(seat, Frames(seat, 100 + seat, MAX_PADS_IN_PACKET).pads);
+    ASSERT_GT(EncodePacket(sent).size(), DirectLink::MAX_PAYLOAD);
+    const std::string payload = EncodeDirectPacket(sent);
+    EXPECT_LE(payload.size(), DirectLink::MAX_PAYLOAD);
+    Packet got;
+    ASSERT_TRUE(DecodePacket(payload, &got));
+    EXPECT_EQ(got.first_frame, sent.first_frame);
+    ASSERT_GT(got.pads.size(), 1u);
+    ASSERT_LT(got.pads.size(), sent.pads.size());
+    EXPECT_EQ(got.pads, (std::vector<Pad>(sent.pads.begin(),
+                                        sent.pads.begin() + got.pads.size())));
+    ASSERT_EQ(got.co.size(), sent.co.size());
+    for (size_t i = 0; i < got.co.size(); ++i)
+    {
+      EXPECT_EQ(got.co[i].first, sent.co[i].first);
+      EXPECT_EQ(got.co[i].second, (std::vector<Pad>(sent.co[i].second.begin(),
+          sent.co[i].second.begin() + got.pads.size())));
+    }
+  }
+}
+
 TEST(OrcaRoom, MalformedCoSeatPacketsAreRefused)
 {
   const std::string pad = "0000000000000000";
