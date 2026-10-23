@@ -506,8 +506,8 @@ private:
   std::array<bool, MAX_SEATS> m_group_known{};
   // A removed initial local co-seat may subsequently belong to another machine.
   std::array<bool, MAX_SEATS> m_local_retired{};
-  // Only to discard late inputs after retirement; never used for admission or routing.
-  std::array<int, MAX_SEATS> m_previous_lead{-1, -1, -1, -1};
+  // Former co-seat leads can still have aligned input copies in flight after re-admission.
+  std::array<unsigned, MAX_SEATS> m_retired_co_leads{};
   // A scheduled co-seat stay can outlive room ownership while its slot is being replaced.
   std::array<int, MAX_SEATS> m_departed_owner{-1, -1, -1, -1};
   std::array<int, MAX_SEATS> m_local_co_until{NEVER, NEVER, NEVER, NEVER};

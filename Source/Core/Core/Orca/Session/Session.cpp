@@ -439,20 +439,22 @@ bool Session::ApplyGroups(const Packet& packet)
     }
   }
   for (int seat = 0; seat < MAX_SEATS; ++seat)
+  {
+    if (m_group_known[seat] && LeadOf(seat) != seat &&
+        (groups[seat] != LeadOf(seat) ||
+         m_plan[seat].live_from != (*packet.roster)[seat].live_from))
+      m_retired_co_leads[seat] |= 1u << LeadOf(seat);
     if (groups[seat] >= 0)
     {
-      if (m_plan[seat].live_from != (*packet.roster)[seat].live_from)
-        m_previous_lead[seat] = -1;
       m_lead[seat] = groups[seat];
       m_group_known[seat] = true;
     }
     else
     {
-      if (m_group_known[seat])
-        m_previous_lead[seat] = LeadOf(seat);
       m_lead[seat] = seat;
       m_group_known[seat] = false;
     }
+  }
   return true;
 }
 
@@ -603,7 +605,6 @@ void Session::AdmitSeat(int seat, int live_from, int history_from)
     DropSeat(seat);
   SeatPlan& plan = m_plan[seat];
   plan = {NEVER, NEVER, live_from};
-  m_previous_lead[seat] = -1;
   m_peer_ack[seat].fill(-1);
   m_acked[seat] = live_from - 1;
   m_received[seat] = -1;
@@ -731,13 +732,13 @@ void Session::CloseEmptyBatch()
 void Session::RetireSeat(int seat, bool preserve_unplug)
 {
   const int lead = LeadOf(seat);
+  if (lead != seat)
+    m_retired_co_leads[seat] |= 1u << lead;
   const bool local_co = IsLocal(seat) && seat != m_config.local_seat;
   m_plug_batch.erase(seat);
   CloseEmptyBatch();
   if (!InPlay(seat) && !(IsLocal(seat) && m_plan[seat].live_from != NEVER))
   {
-    if (m_group_known[seat])
-      m_previous_lead[seat] = lead;
     m_lead[seat] = seat;
     m_group_known[seat] = false;
     return;
@@ -805,7 +806,6 @@ void Session::RetireSeat(int seat, bool preserve_unplug)
     m_local_retired[seat] = true;
     m_local_co_until[seat] = plan.unplug_from;
   }
-  m_previous_lead[seat] = lead;
   m_lead[seat] = seat;
   m_group_known[seat] = false;
 }
@@ -1879,17 +1879,18 @@ void Session::ReceivePackets()
     seen[lead] = true;
     for (const auto& [seat, inputs] : packet.co)
     {
-      if (seat < 0 || seat >= m_config.seats || seen[seat] || IsLocal(seat) ||
+      if (seat < 0 || seat >= m_config.seats || seen[seat] ||
           inputs.size() != packet.pads.size())
       {
         FailPeer("Invalid input group");
         return;
       }
       seen[seat] = true;
-      // A roster can retire a co-seat before the last copy of its inputs arrives.
-      if (!InPlay(seat) && m_previous_lead[seat] == lead)
+      // A roster can retire and re-admit a co-seat before its last input copy arrives.
+      if ((!InPlay(seat) || LeadOf(seat) != lead) &&
+          (m_retired_co_leads[seat] & (1u << lead)))
         continue;
-      if (!InPlay(seat) || LeadOf(seat) != lead)
+      if (IsLocal(seat) || !InPlay(seat) || LeadOf(seat) != lead)
       {
         FailPeer("Invalid input group");
         return;
@@ -2069,7 +2070,6 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
         {
           // Preserve the single-seat pre-admission leave path.
           m_plan[s].live_from = NEVER;
-          m_previous_lead[s] = LeadOf(s);
           m_lead[s] = s;
           m_group_known[s] = false;
         }

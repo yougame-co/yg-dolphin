@@ -7142,3 +7142,24 @@ TEST(OrcaCoSeats, SessionLeadDeterminesLocalInputEvenBeforeMatchSeatAgrees)
   }
   EXPECT_EQ(Rollback::OnlineMatch::PumpLeadSeatForTest(nullptr, 2), 2);
 }
+
+TEST(OrcaCoSeats, LateCoInputAfterReadmissionKeepsTheLeadPlaying)
+{
+  CoSeatMesh friends({{0}, {1, 2}});
+  friends.Play(500);
+  auto& host = *friends.players[0];
+  friends.players[1]->neutral_seats[2] = true;
+  host.session->UnplugSeat(2);
+  const int live = host.session->Plan()[2].unplug_from;
+  Packet late = friends.mesh.last_sent[1];
+  ASSERT_EQ(late.co.size(), 1u);
+  host.session->AddPeer(2, live, host.session->CurrentFrame() - 30);
+  ASSERT_TRUE(host.session->Error().empty());
+  ASSERT_EQ(host.session->LeadOf(2), 2);
+  late.sequence += 100;
+  friends.mesh.pending[0].push_back({friends.mesh.tick, late});
+  host.TickCo(friends.mesh.tick);
+  EXPECT_TRUE(host.session->Error().empty()) << host.session->Error();
+  EXPECT_FALSE(host.session->ErrorFromPeer());
+  EXPECT_EQ(host.session->Plan()[1].unplug_from, NEVER);
+}
