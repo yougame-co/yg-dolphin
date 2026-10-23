@@ -302,7 +302,8 @@ int Session::PlayersInPlay() const
 bool Session::IsLocal(int seat) const
 {
   return seat == m_config.local_seat ||
-         std::ranges::find(m_config.co_seats, seat) != m_config.co_seats.end();
+         (seat >= 0 && seat < MAX_SEATS && !m_local_retired[seat] &&
+          std::ranges::find(m_config.co_seats, seat) != m_config.co_seats.end());
 }
 
 int Session::LeadOf(int seat) const
@@ -663,6 +664,7 @@ void Session::DropSeat(int seat)
 void Session::RetireSeat(int seat)
 {
   const int lead = LeadOf(seat);
+  const bool local_co = IsLocal(seat) && seat != m_config.local_seat;
   m_plug_batch.erase(seat);
   if (m_start_gate && m_start_gate->second == NEVER && m_plug_batch.empty())
   {
@@ -723,6 +725,8 @@ void Session::RetireSeat(int seat)
     }
   }
   plan.live_from = NEVER;
+  if (local_co)
+    m_local_retired[seat] = true;
   m_previous_lead[seat] = lead;
   m_lead[seat] = seat;
   m_group_known[seat] = false;
@@ -879,6 +883,9 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
       ResetLateness(s);
     }
     mine = now;
+    if (IsLocal(s) && s != m_config.local_seat && now.live_from == NEVER &&
+        m_own_live_from[s] != NEVER)
+      m_local_retired[s] = true;
     AdvanceReceived(s);
   }
 }
@@ -1698,7 +1705,7 @@ Pads Session::PadsFor(int frame)
   }
   for (const int seat : m_config.co_seats)
     if (const auto input = m_co_local[seat].find(frame);
-        input != m_co_local[seat].end() && Plugged(seat, frame))
+        input != m_co_local[seat].end() && IsLocal(seat) && Plugged(seat, frame))
       pads[seat] = input->second;
   for (int s = 0; s < m_config.seats; ++s)
   {
@@ -1887,7 +1894,7 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
         const auto& local = seat == m_config.local_seat ? m_local : m_co_local[seat];
         if (frame < m_plan[seat].plug_from || frame >= m_plan[seat].unplug_from)
           held.pads.push_back(UNPLUGGED_PAD);
-        else if (IsLocal(seat) && local.contains(frame))
+        else if ((IsLocal(seat) || m_local_retired[seat]) && local.contains(frame))
           held.pads.push_back(local.at(frame));
         else if (m_remote[seat].contains(frame))
           held.pads.push_back(m_remote[seat].at(frame));
@@ -2229,7 +2236,8 @@ void Session::AddCoPads(Packet* packet) const
 {
   for (const int seat : m_config.co_seats)
   {
-    if (m_plan[seat].live_from == NEVER && m_own_live_from[seat] != NEVER)
+    if (!IsLocal(seat) ||
+        (m_plan[seat].live_from == NEVER && m_own_live_from[seat] != NEVER))
       continue;
     std::vector<Pad> inputs;
     for (size_t i = 0; i < packet->pads.size(); ++i)
@@ -2322,6 +2330,8 @@ void Session::SendPacket()
   if (m_config.per_peer_inputs)
     for (const int seat : m_config.co_seats)
     {
+      if (!IsLocal(seat) && m_plan[seat].live_from != NEVER)
+        continue;
       const auto prefix = m_departed.find(seat);
       if (prefix != m_departed.end())
         packet.ack[seat] = std::min(DepartedThrough(seat), prefix->second.until - 1);

@@ -497,6 +497,8 @@ private:
   std::array<std::map<int, Pad>, MAX_SEATS> m_co_local;
   std::array<int, MAX_SEATS> m_lead{0, 1, 2, 3};
   std::array<bool, MAX_SEATS> m_group_known{};
+  // A removed initial local co-seat may subsequently belong to another machine.
+  std::array<bool, MAX_SEATS> m_local_retired{};
   // Only to discard late inputs after retirement; never used for admission or routing.
   std::array<int, MAX_SEATS> m_previous_lead{-1, -1, -1, -1};
   std::array<std::map<int, Pad>, MAX_SEATS> m_remote;

@@ -6381,8 +6381,12 @@ int RebuildCoMachine(CoSeatMesh& friends, int lead, const std::vector<int>& sibl
   for (auto& queue : friends.mesh.pending)
     std::erase_if(queue, [lead](const auto& pending) { return pending.packet.seat == lead; });
   friends.mesh.pending[lead].clear();
+  std::vector<int> host_group;
+  for (int seat = 0; seat < MAX_SEATS; ++seat)
+    if (host.session->IsLocal(seat) && host.session->Plan()[seat].live_from != NEVER)
+      host_group.push_back(seat);
   friends.players[lead] = std::make_unique<CoMeshPlayer>(friends.mesh, lead, siblings,
-                                                       friends.groups.front(), keyframe);
+                                                       host_group, keyframe);
   friends.players[lead]->game.m_state = At(host.game.m_history, keyframe);
   friends.disabled[lead] = false;
   return keyframe;
@@ -6760,4 +6764,29 @@ TEST(OrcaCoSeats, UnusedCoPadFramesUseTheSamePaddingAsTheLead)
   EXPECT_TRUE(padding);
   friends.Play(400);
   CompareCoFrames(friends);
+}
+
+TEST(OrcaCoSeats, VacatedLocalCoSeatCanBecomeARemoteMachine)
+{
+  for (const bool host_co : {false, true})
+  {
+    SCOPED_TRACE(host_co);
+    CoSeatMesh friends(host_co ? std::vector<std::vector<int>>{{0, 1}, {2}, {3}} :
+                                std::vector<std::vector<int>>{{0}, {1, 2}, {3}});
+    friends.Play(600);
+    const int seat = host_co ? 1 : 2;
+    const int owner = host_co ? 0 : 1;
+    friends.players[owner]->neutral_seats[seat] = true;
+    friends.players[0]->session->UnplugSeat(seat);
+    friends.Play(100);
+    EXPECT_FALSE(friends.players[owner]->session->IsLocal(seat));
+    const int first = RebuildCoMachine(friends, seat, {});
+    friends.Play(900);
+    CompareCoFrames(friends, first);
+    CheckCoCounts(friends, 4, 4);
+    EXPECT_FALSE(friends.players[owner]->session->IsLocal(seat));
+    const auto& packet = friends.mesh.last_sent[owner];
+    EXPECT_TRUE(std::ranges::none_of(packet.co,
+        [seat](const auto& inputs) { return inputs.first == seat; }));
+  }
 }
