@@ -4,10 +4,12 @@
 """Runner regressions using isolated fake Orca children; no disc or external service."""
 import importlib.util
 import io
+import os
 import socket
 from pathlib import Path
 import threading
 import time
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -18,6 +20,13 @@ spec.loader.exec_module(fixture)
 
 
 class CoSeatFixtureTest(unittest.TestCase):
+    def test_relative_files_remain_valid_after_the_child_changes_directory(self):
+        with tempfile.TemporaryDirectory() as work:
+            disc = Path(work) / "fixture-disc"
+            disc.write_bytes(b"fixture")
+            self.assertEqual(fixture.file_argument(os.path.relpath(disc)), str(disc.resolve()))
+        self.assertEqual(fixture.file_argument("fake-orca"), "fake-orca")
+
     def test_only_local_pairs_agree_the_co_seat_capability(self):
         self.assertEqual(fixture.role_caps(0, {0: 2}, None), "caps join leave stats coseats\n")
         self.assertEqual(fixture.role_caps(1, {0: 2}, None), "caps join leave stats\n")

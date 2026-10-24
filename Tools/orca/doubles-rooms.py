@@ -92,6 +92,11 @@ def role_caps(role, local, queue_mode):
             (" host results locks" if queue_mode else "") + "\n")
 
 
+def file_argument(value):
+    # Preserve PATH executable names; pin real relative files before the isolated child chdir.
+    return str(Path(value).resolve()) if Path(value).is_file() else value
+
+
 def isolated_host(host):
     if host == "localhost":
         return True
@@ -1309,14 +1314,14 @@ def run(args):
                 stderr = open(Path(work) / f"peer-{role}.log", "w")
                 binary = binaries.get(str(role), args.binary)
                 print(f"peer {role} binary: {binary}", flush=True)
-                command = [binary, "-p", "headless", "-u", str(user), "-v", "Null",
+                command = [file_argument(binary), "-p", "headless", "-u", str(user), "-v", "Null",
                            "-C", "Dolphin.DSP.Backend=No Audio Output",
                            "-C", "Dolphin.Input.BackgroundInput=True", "-C", "Logger.Logs.ROLLBACK=True",
                            "-C", "Logger.Logs.NETPLAY=True", "-C", "Logger.Options.Verbosity=3"]
                 if args.pplus:
-                    command += ["-C", f"Dolphin.Core.DefaultISO={args.disc}", "-e", args.pplus]
+                    command += ["-C", f"Dolphin.Core.DefaultISO={file_argument(args.disc)}", "-e", file_argument(args.pplus)]
                 else:
-                    command += ["-e", args.disc]
+                    command += ["-e", file_argument(args.disc)]
                 process = subprocess.Popen(command, env=environment, cwd=user, stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
                 lines = queue.Queue()
