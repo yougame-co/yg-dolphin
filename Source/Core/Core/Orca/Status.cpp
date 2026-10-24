@@ -202,7 +202,7 @@ std::string OfferedCaps()
   }
   caps += fmt::format(" {} {}", RECORD_CAP, HOSTUI_CAP);
   // Append-only: old desktop builds read at most 24 words.
-  if (GetEnv("ORCA_COSEATS") != "0")
+  if (SessionActive() && GetEnv("ORCA_COSEATS") != "0")
     caps += " coseats";
   return caps;
 }
