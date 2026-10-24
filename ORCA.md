@@ -1641,11 +1641,12 @@ away.
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh.
 Compatibility: a change to one game's module that changes only what that game computes bumps that
 game's own revision (`Games/Brawl/BrawlGame.h`, the key's `ux=<n>.<game>`; a game revision of 0
-omits the suffix). Engine compatibility (`UX::kCompatVersion`) is currently **31**. From 0.3.48,
+omits the suffix). Engine compatibility (`UX::kCompatVersion`) is currently **32**. From 0.3.48,
 Brawl and Project+ use game revision **1** for returning a held token to the player's own panel
-to sit out, so their keys say `ux=31.1`. Results-only and GenericModule also use revision **1**;
-the legacy Brawl launcher stays at **0** (`ux=31`). Anything else that changes what the game
-computes bumps the engine compatibility. Engine 31 keeps player-selected tag controls, including
+to sit out, so their keys say `ux=32.1`. Results-only and GenericModule also use revision **1**;
+the legacy Brawl launcher stays at **0** (`ux=32`). Anything else that changes what the game
+computes bumps the engine compatibility. Engine 32 selects Supernova 2026 stages, two bans and
+30/10 ledge limits in Brawl ranked; casual and Project+ are unchanged. Engine 31 keeps player-selected tag controls, including
 the C-stick. Earlier engine changes: `ux=29`: a casual stage select's Random, the two cursors start on
 nothing, and a button held into the stage select counts once it is let go, so an A held into a
 ranked stage select no longer proposes until released, and Project+'s auto-pick waits for the hover

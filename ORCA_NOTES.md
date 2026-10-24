@@ -7371,3 +7371,25 @@ pins the tagged form. Left as decided or open, from the review:
   been compiled), a forced-TDR smoke if one can be made, and 5 more forbidden-calls hits (CrashNote's
   `GetStdHandle`/`GetModuleHandleExW`, GpuLost's `stderr`/`Status::Error`) for the one baseline
   refresh of the V2 line.
+
+
+## Supernova 2026 ranked port and D3D probe default (2026-10-24, 0.3.82)
+
+Ported the seven Oct 6 stage-lists-ledge commits onto train-0381 (`dd700be102`). Brawl ranked:
+eight Supernova 2026 stages, two optional bans, no IC/FD restriction, Meta Knight stage clause
+retained; ledge limits 30/10, Meta Knight 20/6. Casual and both PPLUS32/PPLUS321 ranked lists stay
+as on 0.3.81. The Oct 6 proposal records above are historical, not new test results.
+
+Compatibility: `Source/Core/Core/Orca/UX/UX.h`, `kCompatVersion` 31 -> 32, matching the Random
+release's global bump (`1eb9bd16db`, 28 -> 29 after `4d64861a26`). The existing key builder includes
+it as `ux=32.1` for Brawl and Project+; an older build cannot share that key. The per-game revision
+stays 1, and no key construction function changes.
+
+Forced upgrade: the engine has no queue minimum-version setting. ORCA_NOTES' release workflow
+says the app forces the newest engine and the site's queue rejects older builds with
+`409 orca_outdated`; Tools/orca/upstream-sync.py's release steps describe the same gate.
+The external release manifest is `runtime/orca/manifest.json`: orca-lead must publish its
+`version` as `0.3.82` with this train's final commit and new artifacts. If the release contract
+also maintains a `minEngine` floor, set it to `0.3.82`; no desktop protocol changed, so no new
+`minDesktop` floor is required by this port. This repo contains neither that manifest nor the
+site/desktop implementation of those fields; they were not accessed or changed here.
