@@ -8197,3 +8197,20 @@ TEST(OrcaRoom, CoPageStatusDistinguishesFullFromNotReady)
   EXPECT_EQ(trace[4].notices, (std::vector<std::string>{
       "Room: Add local player isn't available here (full)"}));
 }
+
+TEST(OrcaRoom, JoinerPageAddAfterTheWelcomeTickIsAMidSessionAdd)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
+      {RK::Message, 0, CoPageWelcome(true, "private", true)}, {RK::Tick, 1001},
+      {RK::PageEvent, 1002, CO_PAGE_ADD}, {RK::Tick, 2002}});
+  EXPECT_TRUE(HasRoomKind(trace[1], "hello"));
+  EXPECT_TRUE(trace[2].sent.empty());
+  EXPECT_EQ(trace[2].notices, (std::vector<std::string>{
+      "Room: Add local player isn't available here (in-match)"}));
+  EXPECT_TRUE(trace[3].co_seats.empty());
+  // The page must send Add with or before joining; after hello it needs P5.
+}
