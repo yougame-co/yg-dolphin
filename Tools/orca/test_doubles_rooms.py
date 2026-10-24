@@ -20,6 +20,26 @@ spec.loader.exec_module(fixture)
 
 
 class CoSeatFixtureTest(unittest.TestCase):
+    def test_ticket_reservations_include_existing_local_seats(self):
+        server = fixture.Server(("127.0.0.1", 0))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            rooms = server.rooms
+            rooms.admit("co", {"p": "Doubles0"})
+            rooms.local_command("co", "Doubles0", {"t": "local-add"})
+            site = f"http://127.0.0.1:{server.server_port}"
+            fixture.post_fixture(site, "/api/multiplayer/ticket", {
+                "dev": "orca-doubles-test", "room": "co", "player_id": "Doubles1"})
+            self.assertEqual(rooms.members[("co", "Doubles1")], 2)
+            rooms.local_command("co", "Doubles1", {"t": "local-add"})
+            with self.assertRaises(fixture.urllib.error.HTTPError) as refused:
+                fixture.post_fixture(site, "/api/multiplayer/ticket", {
+                    "dev": "orca-doubles-test", "room": "co", "player_id": "Doubles2"})
+            self.assertEqual(refused.exception.code, 409)
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_relative_files_remain_valid_after_the_child_changes_directory(self):
         with tempfile.TemporaryDirectory() as work:
             disc = Path(work) / "fixture-disc"

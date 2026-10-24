@@ -569,7 +569,7 @@ class Handler(BaseHTTPRequestHandler):
             if key in self.server.rooms.expired:
                 return self.reply({"error": "room-hold-expired"}, 409)
             if key not in members and not self.server.rooms.version_refusals:
-                used = {seat for (code, _), seat in members.items() if code == room}
+                used = self.server.rooms.used_slots(room)
                 size = 2 if self.server.rooms.mode(room) else 4
                 if len(used) == size:
                     return self.reply({}, 409)
