@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <functional>
@@ -5914,6 +5915,11 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     case RoomTestStep::Kind::ReportGame:
     case RoomTestStep::Kind::GameStart:
     {
+      if (room.reports.size() >= 16)
+      {
+        std::fputs("TraceRoomForTest: report queue full (16 entries)\n", stderr);
+        std::abort();
+      }
       GameReport report;
       report.start = static_cast<int>(step.close_code);
       report.number = step.text.empty() ? 1 : std::atoi(step.text.c_str());

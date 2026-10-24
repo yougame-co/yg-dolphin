@@ -282,6 +282,19 @@ RoomOptions QueueTraceOptions(bool joining = true)
 }
 }  // namespace
 
+TEST(OrcaRoomTraceDeathTest, ReportStepsFailLoudlyWhenTheQueueIsFull)
+{
+  for (const auto kind : {RK::ReportGame, RK::GameStart})
+  {
+    SCOPED_TRACE(kind == RK::ReportGame ? "result" : "start");
+    std::vector<RoomTestStep> steps(16, {kind, 0, "1", 120});
+    EXPECT_EQ(TraceRoomForTest(QueueTraceOptions(), steps).size(), 16u);
+    steps.push_back({kind, 1, "1", 121});
+    EXPECT_DEATH((void)TraceRoomForTest(QueueTraceOptions(), steps),
+                 "TraceRoomForTest: report queue full");
+  }
+}
+
 TEST(OrcaRoomPingRange, QueueWelcomesAdvertiseProbeOnJoin)
 {
   for (const char* queue : {"casual", "ranked"})
