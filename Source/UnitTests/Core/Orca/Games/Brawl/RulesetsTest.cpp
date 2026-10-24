@@ -182,9 +182,11 @@ TEST(OrcaRulesets, RankedBrawlUsesSupernova2026StagesAndTwoOptionalBans)
   ASSERT_NE(r, nullptr);
   EXPECT_EQ(r->slug, "brawl-supernova-2026");
   ASSERT_EQ(r->stage_count, 8);
+  const std::array<u8, 8> kinds{0x01, 0x2E, 0x13, 0x21, 0x0D, 0x02, 0x03, 0x0C};
   for (int i = 0; i < r->stage_count; ++i)
   {
     const u8 kind = r->stage_kinds[i];
+    EXPECT_EQ(kind, kinds[i]);
     const bool starter = kind == 1 || kind == 2 || kind == 19 || kind == 33 || kind == 13;
     EXPECT_EQ((r->starters & (1 << i)) != 0, starter) << i;
   }
@@ -204,6 +206,19 @@ TEST(OrcaRulesets, RankedBrawlUsesSupernova2026StagesAndTwoOptionalBans)
   EXPECT_EQ(progress.step, 0);
   EXPECT_TRUE(Ranked::Strike(*r, plan, &progress, 7));
   EXPECT_EQ(progress.step, 1);
+  // One ban can be kept while skipping the second, or letting its timer expire.
+  for (const bool skip : {false, true})
+  {
+    auto partial = Ranked::Begin(*r, plan);
+    ASSERT_TRUE(Ranked::Strike(*r, plan, &partial, 7));
+    if (skip)
+      EXPECT_TRUE(Ranked::Skip(*r, plan, &partial));
+    else
+      for (u32 frame = 0; frame < Ranked::StepFrames(*r, plan.steps[0]); ++frame)
+        Ranked::Tick(*r, plan, &partial);
+    EXPECT_EQ(partial.struck, 1 << 7);
+    EXPECT_EQ(partial.step, 1);
+  }
 }
 
 TEST(OrcaRulesets, RankedBrawlUsesSupernova2026LedgeLimits)
@@ -214,4 +229,39 @@ TEST(OrcaRulesets, RankedBrawlUsesSupernova2026LedgeLimits)
   EXPECT_EQ(r->ledge.For(true, 0), 10);
   EXPECT_EQ(r->ledge.For(false, 24), 20);
   EXPECT_EQ(r->ledge.For(true, 24), 6);
+}
+
+TEST(OrcaRulesets, RankedMetaKnightClauseIncludesFinalDestinationAgainstIceClimbers)
+{
+  const Ranked::Ruleset* r = Orca::UX::Rulesets::ByBlock(1);
+  ASSERT_NE(r, nullptr);
+  Ranked::SetView set;
+  set.characters = {24, 16};
+  auto plan = Ranked::PlanGame(*r, set);
+  EXPECT_TRUE(plan.mk_clause);
+  EXPECT_EQ(plan.available, 0xFF);
+  ASSERT_EQ(plan.steps.size(), 1u);
+  EXPECT_EQ(plan.steps[0].port, 1);
+  set.characters = {24, 24};
+  plan = Ranked::PlanGame(*r, set);
+  EXPECT_FALSE(plan.mk_clause);
+  EXPECT_EQ(plan.available, 0x3D);
+  EXPECT_EQ(plan.steps.size(), 3u);
+}
+
+TEST(OrcaRulesets, CompiledInRanked2026IsTheFile)
+{
+  std::string text, error;
+  ASSERT_TRUE(File::ReadFileToString(
+      RepoPath("Source/Core/Core/Orca/Games/Brawl/Rulesets/brawl-supernova-2026.json"), text));
+  const auto r = Orca::Engine::ReadRuleset(text, &error);
+  ASSERT_TRUE(r) << error;
+  const auto& builtin = Orca::UX::Rulesets::Brawl2026();
+  EXPECT_EQ(r->slug, builtin.slug);
+  EXPECT_EQ(r->stage_names, builtin.stage_names);
+  EXPECT_EQ(r->stage_kinds, builtin.stage_kinds);
+  EXPECT_EQ(r->starters, builtin.starters);
+  EXPECT_EQ(r->counterpicks, builtin.counterpicks);
+  EXPECT_EQ(r->later_count, builtin.later_count);
+  EXPECT_EQ(r->ledge, builtin.ledge);
 }
