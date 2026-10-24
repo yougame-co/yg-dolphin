@@ -5305,6 +5305,8 @@ struct YouGameRoom::Impl
     for (auto it = packet.co.begin(); it != packet.co.end();)
     {
       const int slot = it->first;
+      if (slot < 0 || slot >= MAX_SEATS)
+        return false;
       if ((owned != peer_co_slots.end() &&
            std::ranges::find(owned->second, slot) != owned->second.end()) ||
           (!id.empty() && seat_groups[slot].empty() && last_co_owner[slot] == id))

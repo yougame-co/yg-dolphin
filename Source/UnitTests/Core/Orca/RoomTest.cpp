@@ -7558,3 +7558,26 @@ TEST(OrcaRoom, CoJoinerTimeoutAndCommandErrorsContinueSingleSeat)
     EXPECT_FALSE(refused[2].sent.empty());
   }
 }
+
+TEST_F(OrcaRoomRuntime, LaggingRoomRosterCannotRetireTheHostsOwnCoSeat)
+{
+  const std::string code = "coownlag";
+  auto room = Open(code, R"({"joining":false,"doubles":true,"co_seats":{"peer":[3]}})", false);
+  ASSERT_TRUE(Wait([&] { return room->ArrivalPending(); }));
+  room->TakePeerEvents();
+  RoomHashGame game;
+  Orca::Net::Config config;
+  config.seats = MAX_SEATS;
+  config.local_seat = config.authority_seat = 0;
+  config.co_seats = {3};
+  config.per_peer_inputs = true;
+  config.start_frame = 1600;
+  std::array<SeatPlan, MAX_SEATS> plan{};
+  plan[0] = plan[3] = {0, NEVER, 0};
+  config.plan = plan;
+  auto session = std::make_unique<Session>(config, game, *room);
+  Rollback::OnlineMatch::PumpHeldFriendsEventsForTest(*room, session, {});
+  EXPECT_TRUE(session->IsLocal(3));
+  EXPECT_EQ(session->LeadOf(3), 0);
+  EXPECT_EQ(session->Plan()[3], plan[3]);
+}

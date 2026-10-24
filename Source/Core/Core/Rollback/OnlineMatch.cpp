@@ -1457,7 +1457,7 @@ void RetireReassignedCoSeats(Match& match, Orca::Net::YouGameRoom* test_room = n
     return;
   for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
   {
-    if (match.session->LeadOf(seat) == seat)
+    if (match.session->IsLocal(seat) || match.session->LeadOf(seat) == seat)
       continue;
     const auto group = test_room ? test_room->GroupOf(seat) : Orca::Online::GroupOf(seat);
     if (!group.empty() && group.front() != match.session->LeadOf(seat))
