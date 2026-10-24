@@ -80,6 +80,13 @@ def role_values(values):
     return result
 
 
+def local_counts(values):
+    counts = role_values(value for value in values if value != "server")
+    if any(count != "2" for count in counts.values()):
+        raise ValueError("--local needs ROLE=2 (at most two local players)")
+    return {int(role): 2 for role in counts}
+
+
 def isolated_host(host):
     if host == "localhost":
         return True
@@ -148,6 +155,7 @@ class Rooms:
         self.version_events = []
         self.lock = threading.RLock()
         self.members = {}
+        self.locals = {}  # (room, connection) -> {participant id: slot}; no extra socket.
         self.sockets = {}
         self.joined = set()
         self.offers = []
@@ -185,6 +193,7 @@ class Rooms:
                 if old:
                     old[0].shutdown(socket.SHUT_RDWR)
                 self.members.pop((room, player), None)
+                self.locals.pop((room, player), None)
                 self.joined.discard((room, player))
                 self.away.discard((room, player))
                 self.lobbies.pop(room)
@@ -199,10 +208,32 @@ class Rooms:
             self.lobbies[room] = ticket.copy()
         key = (room, player)
         if key not in self.members:
-            used = {seat for (code, _), seat in self.members.items() if code == room}
+            used = self.used_slots(room)
             if len(used) == (2 if self.mode(room) else 4):
                 return {}, 409
             self.members[key] = min(set(range(2 if self.mode(room) else 4)) - used)
+        return None
+
+    def used_slots(self, room):
+        return ({seat for (code, _), seat in self.members.items() if code == room} |
+                {seat for (code, _), seats in self.locals.items() if code == room
+                 for seat in seats.values()})
+
+    def local_command(self, room, player, message):
+        if self.mode(room):
+            return "queue"
+        if not self.doubles:
+            return "not-doubles"
+        seats = self.locals.setdefault((room, player), {})
+        if message["t"] == "local-remove":
+            if message.get("id") not in seats:
+                return "in-match"
+            del seats[message["id"]]
+        else:
+            free = set(range(4)) - self.used_slots(room)
+            if seats or not free:
+                return "in-match"
+            seats[f"local:{player}:1"] = min(free)
         return None
 
     def blackout(self, room, player):
@@ -219,6 +250,7 @@ class Rooms:
         with self.lock:
             self.expired.add((room, player))
             self.members.pop((room, player), None)
+            self.locals.pop((room, player), None)
             connection = self.sockets.pop((room, player), None)
             if connection:
                 connection[0].shutdown(socket.SHUT_RDWR)
@@ -357,6 +389,8 @@ class Rooms:
         reports = {name: value for (code, name), value in self.reports.items() if code == room}
         hashes = {name: value for (code, name), value in self.hashes.items() if code == room}
         return {"active": active, "reports": reports,
+                "local_seats": {name: list(seats.values()) for (code, name), seats in self.locals.items()
+                                if code == room},
                 "offers": list(self.offers), "version_events": list(self.version_events),
                 "commands": list(self.commands), "drops": list(self.drops),
                 "lost_receipts": list(self.lost_receipts),
@@ -382,6 +416,11 @@ class Rooms:
                             for _, name in members],
                 "participants": [{"id": name, "connectionId": name, "slot": seat, "name": name}
                                  for seat, name in members]}
+        for _, name in members:
+            for participant, slot in self.locals.get((room, name), {}).items():
+                result["participants"].append({"id": participant, "connectionId": name,
+                    "localIndex": 1, "slot": slot, "name": name + " · Player 2"})
+        result["participants"].sort(key=lambda participant: participant["slot"])
         if self.mode(room) and self.recovery and kind == "welcome":
             result["room"]["recovery"] = True
         if self.mode(room) and self.recovery and self.hold_ms is not None:
@@ -604,8 +643,17 @@ class Handler(BaseHTTPRequestHandler):
                             rooms.broadcast(room, player, outgoing)
                     elif rooms.mode(room) and message.get("t") in {"begin", "game-start", "game-report", "finish"}:
                         rooms.match_command(room, player, message)
+                    elif message.get("t") in {"local-add", "local-remove"}:
+                        error = rooms.local_command(room, player, message)
+                        if error:
+                            rooms.send(connection, {"t": "command-error", "action": message["t"], "error": error})
+                        else:
+                            for (code, name), other in list(rooms.sockets.items()):
+                                if code == room:
+                                    rooms.send(other, rooms.roster(room, name, "lobby", player))
                     elif message.get("t") == "leave":
                         rooms.members.pop((room, player), None)
+                        rooms.locals.pop((room, player), None)
                         for (code, name), other in list(rooms.sockets.items()):
                             if code == room and name != player:
                                 rooms.send(other, rooms.roster(room, name, "leave", player))
@@ -1136,12 +1184,28 @@ def verify_queue_run(args, work, diagnostics, errors):
 
 
 def run(args):
+    # Preserve callers of this runner that predate the optional queue/version fields.
+    for name, default in {"role_binary": [], "expect_version_refusal": [], "queue": None,
+                          "expect_queue_ending": None, "expect_report_replay": False,
+                          "expect_ranked_reconciliation": False, "expect_fight": [],
+                          "local": []}.items():
+        if not hasattr(args, name):
+            setattr(args, name, default)
     address = urllib.parse.urlsplit(args.site)
     if address.scheme != "http" or not isolated_host(address.hostname) or address.username or address.password:
         raise ValueError("--site must be a loopback or isolated LAN dev fixture")
     if args.hold_expiry and args.seconds < 120:
         raise ValueError("--hold-expiry needs at least 120 seconds for the 90-second hold")
     roles = [int(role) for role in args.roles.split(",")]
+    local = local_counts(args.local if isinstance(args.local, list) else [])
+    if (args.queue or getattr(args, "ordinary", False)) and local:
+        raise ValueError("local players require friends doubles")
+    if not set(local) <= set(roles) or sum(local.get(role, 1) for role in roles) > 4:
+        raise ValueError("local players must belong to this run and fit its four seats")
+    if local and len(roles) > 3:
+        raise ValueError("co-seat runs use at most three headless instances")
+    ports_by_role = {role: role + 1 + sum(count - 1 for owner, count in local.items() if owner < role)
+                     for role in roles}
     if len(set(roles)) != len(roles) or not set(roles) <= set(range(4)):
         raise ValueError("roles must be distinct values from 0..3")
     binaries = role_values(args.role_binary)
@@ -1193,6 +1257,8 @@ def run(args):
                                "ORCA_ROOM": args.room, "ORCA_JOIN": "0" if role == 0 else "1",
                                "ORCA_TEST_PLAYER": f"Doubles{role}", "ORCA_NAME": f"Doubles{role}",
                                "ORCA_DIRECT": "1", "ORCA_DIRECT_LOOPBACK": "1", "ORCA_DIRECT_STUN": "0"}
+                if role in local:
+                    environment["ORCA_TEST_LOCAL_PLAYERS"] = "2"
                 if args.queue:
                     # Public matchmaking is entered by host/join from the game's own lobby.
                     # ORCA_ROOM's startup shortcut intentionally does not arm the queue header.
@@ -1217,7 +1283,7 @@ def run(args):
                 if args.probe:
                     environment["ORCA_UX_PROBE"] = str(Path(args.probe).resolve())
                 input_path = role_inputs.get(str(role), args.input)
-                if input_path:
+                if input_path and not local:
                     environment["YG_INPUT"] = str(Path(input_path).resolve())
                 if args.profile or args.pplus:
                     environment["ORCA_PROFILE"] = "PPLUS32" if args.pplus else args.profile
@@ -1246,7 +1312,11 @@ def run(args):
                             output.put(line.rstrip())
                 threading.Thread(target=read_output, daemon=True).start()
                 players.append((role, process, stderr, lines))
-                process.stdin.write("caps join leave stats" + (" host results locks" if args.queue else "") + "\n")
+                process.stdin.write("caps join leave stats" + (" coseats" if local else "") +
+                                    (" host results locks" if args.queue else "") + "\n")
+                if input_path and local:
+                    # One script may contain independent rules for both of this role's ports.
+                    process.stdin.write("test-input " + str(Path(input_path).resolve()) + "\n")
                 process.stdin.flush()
                 # Tickets assign seats in arrival order. Wait for every role, since a slow
                 # ticket for role 1 must not let role 2 claim its port and invalidate pad scripts.
@@ -1266,8 +1336,14 @@ def run(args):
                     assignment = re.search((rf"in room {re.escape(args.room)} on seat (\d+)" if args.queue
                                             else r"on seat (\d+)"), text)
                     if assignment:
-                        if int(assignment[1]) != role + 1:
+                        if int(assignment[1]) != ports_by_role[role]:
                             raise RuntimeError(f"peer {role} owns unexpected seat {assignment[1]}")
+                        if role in local:
+                            with urllib.request.urlopen(args.site + "/diagnostics/" + args.room, timeout=3) as response:
+                                roster = json.load(response)
+                            if len(roster.get("local_seats", {}).get(f"Doubles{role}", [])) != 1:
+                                time.sleep(0.1)
+                                continue
                         break
                     if process.poll() is not None:
                         raise RuntimeError(f"peer {role} exited before owning its room seat")
@@ -1428,7 +1504,9 @@ def run(args):
             else:
                 final_frame = verify_diagnostics(diagnostics, expected=args.expected)
             verify_gameplay(work, args.expect_fight)
-            print(f"PASS: all machines agree on plug {frames}, confirmed hashes through frame {final_frame}; "
+            samples = [diagnostics["hashes"].get(name, {}) for name in diagnostics["active"]]
+            common = set.intersection(*(set(sample) for sample in samples)) if samples else set()
+            print(f"PASS: all machines agree on plug {frames}, {len(common)} common confirmed hashes through frame {final_frame}; "
                   f"0 desyncs; {len(args.expect_fight)} requested fights returned to CSS")
         finally:
             if args.keep_logs:
@@ -1514,7 +1592,8 @@ def main():
     parser.add_argument("--expected", type=int, default=4, choices=(2, 3, 4))
     parser.add_argument("--doubles", action="store_true", help="accepted for dropin-rooms compatibility")
     parser.add_argument("--ordinary", action="store_true", help="serve an ordinary friends room")
-    parser.add_argument("--local", action="store_true", help="own a loopback server for this run")
+    parser.add_argument("--local", nargs="?", const="server", action="append", default=[], metavar="ROLE=2",
+                        help="own a loopback server; optionally add and script a role's second local seat")
     game = parser.add_mutually_exclusive_group()
     game.add_argument("--profile", help="launcher profile, e.g. PPLUS32")
     game.add_argument("--pplus", help="legacy P+ launcher DOL with sd.raw beside it; --disc is Brawl")
@@ -1529,6 +1608,8 @@ def main():
     if any(not clean_version(version) for version in versions.values()):
         parser.error("--role-version needs X.Y.Z versions")
     if args.queue:
+        if local_counts(args.local):
+            parser.error("--local ROLE=2 requires friends doubles")
         if args.roles not in {"0,1", "0,1,2,3"}:
             parser.error("--queue runs exactly roles 0,1")
         args.roles = "0,1"

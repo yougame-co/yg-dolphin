@@ -17,6 +17,36 @@ fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
 
 
+class CoSeatFixtureTest(unittest.TestCase):
+    def test_two_local_seats_keep_one_connection_and_lowest_free_ports(self):
+        rooms = fixture.Rooms()
+        self.assertIsNone(rooms.admit("co", {"p": "Doubles0"}))
+        self.assertIsNone(rooms.local_command("co", "Doubles0", {"t": "local-add"}))
+        self.assertIsNone(rooms.admit("co", {"p": "Doubles1"}))
+        self.assertIsNone(rooms.local_command("co", "Doubles1", {"t": "local-add"}))
+        participants = rooms.roster("co", "Doubles1")["participants"]
+        self.assertEqual([(p["connectionId"], p.get("localIndex", 0), p["slot"])
+                          for p in participants],
+                         [("Doubles0", 0, 0), ("Doubles0", 1, 1),
+                          ("Doubles1", 0, 2), ("Doubles1", 1, 3)])
+        self.assertEqual(len(rooms.members), 2)
+        self.assertEqual(rooms.admit("co", {"p": "Doubles2"}), ({}, 409))
+        self.assertIsNone(rooms.local_command("co", "Doubles0", {
+            "t": "local-remove", "id": "local:Doubles0:1"}))
+        self.assertIsNone(rooms.admit("co", {"p": "Doubles2"}))
+        self.assertEqual(rooms.members[("co", "Doubles2")], 1)
+
+    def test_local_arguments_and_queue_refusal(self):
+        self.assertEqual(fixture.local_counts(["server", "0=2", "1=2"]), {0: 2, 1: 2})
+        for invalid in (["0=3"], ["4=2"], ["0=2", "0=2"]):
+            with self.assertRaises(ValueError):
+                fixture.local_counts(invalid)
+        rooms = fixture.Rooms(queue_mode="casual")
+        rooms.admit("co", {"p": "Doubles0"})
+        self.assertEqual(rooms.local_command("co", "Doubles0", {"t": "local-add"}), "queue")
+        self.assertEqual(len(rooms.roster("co", "Doubles0")["participants"]), 1)
+
+
 class RunnerTest(unittest.TestCase):
     def test_slow_second_ticket_cannot_swap_role_ports(self):
         registered = threading.Event()
