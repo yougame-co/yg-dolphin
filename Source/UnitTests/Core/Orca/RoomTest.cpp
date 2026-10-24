@@ -329,6 +329,112 @@ TEST(OrcaRoomPingRange, FriendsAndTournamentJoinsKeepTheirBytes)
   }
 }
 
+TEST(OrcaRoomPingRange, ProbeEchoIsImmediateAndPreservesTheReceivedNonce)
+{
+  ScopedEnv delay("ORCA_TEST_NET_DELAY_MS", "1000");
+  ScopedEnv knobs("ORCA_TEST", "1");
+  for (const char* queue : {"casual", "ranked"})
+  {
+    const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+        {RK::Message, 0, QueueRoster("welcome", queue)},
+        // A room match's start is still character select, before game 1's fight.
+        {RK::Message, 0, QueueRoster("start", queue)},
+        {RK::SocketMessage, 0, R"({"t":"probe","n":"b3fdc99d-64e1-4c92-9967-d81e6e873073"})"},
+        {RK::SocketMessage, 1000, R"({"t":"probe","n":"quote\"slash\\"})"},
+    });
+    EXPECT_EQ(trace[2].sent, (std::vector<std::string>{
+        R"({"n":"b3fdc99d-64e1-4c92-9967-d81e6e873073","t":"probe-ack"})"}));
+    EXPECT_EQ(trace[3].sent, (std::vector<std::string>{
+        R"({"n":"quote\"slash\\","t":"probe-ack"})"}));
+  }
+}
+
+TEST(OrcaRoomPingRange, MalformedProbesDoNotConsumeTheEchoBudget)
+{
+  std::vector<RoomTestStep> steps{{RK::Message, 0, QueueRoster("welcome", "ranked")}};
+  for (const std::string bad : {R"({"t":"probe"})", R"({"t":"probe","n":null})",
+                               R"({"t":"probe","n":1})", R"({"t":"probe","n":true})",
+                               R"({"t":"probe","n":[]})", R"({"t":"probe","n":{}})",
+                               R"({"t":"probe","n":""})", R"({"t":"probe","n":"\n"})",
+                               R"({"t":"probe",)", R"(["probe","n"])"})
+    steps.push_back({RK::Message, 0, bad});
+  steps.push_back({RK::Message, 0, fmt::format(R"({{"t":"probe","n":"{}"}})", std::string(65, 'a'))});
+  steps.push_back({RK::Message, 0, fmt::format(R"({{"t":"probe","n":"{}"}})", std::string(64, 'a'))});
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+  for (size_t i = 1; i + 1 < trace.size(); ++i)
+    EXPECT_TRUE(trace[i].sent.empty()) << i;
+  EXPECT_EQ(trace.back().sent, (std::vector<std::string>{fmt::format(
+      R"({{"n":"{}","t":"probe-ack"}})", std::string(64, 'a'))}));
+}
+
+TEST(OrcaRoomPingRange, FloodAndRepeatedNoncesAreBounded)
+{
+  std::vector<RoomTestStep> steps{{RK::Message, 0, QueueRoster("welcome", "casual")}};
+  for (int ms = 0; ms <= 10000; ms += 10)
+    steps.push_back({RK::Message, ms, fmt::format(R"({{"t":"probe","n":"n{}"}})", ms)});
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+  std::vector<int> acknowledged;
+  for (size_t i = 1; i < trace.size(); ++i)
+  {
+    EXPECT_LE(trace[i].sent.size(), 1u);
+    if (!trace[i].sent.empty())
+      acknowledged.push_back(steps[i].milliseconds);
+  }
+  ASSERT_EQ(acknowledged.size(), 6u);
+  for (size_t i = 1; i < acknowledged.size(); ++i)
+    EXPECT_GE(acknowledged[i] - acknowledged[i - 1], 900);
+  const auto repeated = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "casual")},
+      {RK::Message, 0, R"({"t":"probe","n":"same"})"},
+      {RK::Message, 1000, R"({"t":"probe","n":"same"})"},
+      {RK::Message, 1000, R"({"t":"probe","n":"next"})"},
+      {RK::Message, 7000, R"({"t":"probe","n":"expired"})"},
+  });
+  EXPECT_EQ(repeated[1].sent.size(), 1u);
+  EXPECT_TRUE(repeated[2].sent.empty());
+  EXPECT_EQ(repeated[3].sent.size(), 1u);
+  EXPECT_TRUE(repeated[4].sent.empty());
+}
+
+TEST(OrcaRoomPingRange, EchoStopsAtTheFirstFightAndStaysOffOnRejoin)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const bool result : {false, true})
+    {
+      const auto welcome = QueueRoster("welcome", queue);
+      const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+          {RK::Message, 0, welcome},
+          {RK::Message, 0, R"({"t":"probe","n":"before"})"},
+          {result ? RK::ReportGame : RK::GameStart, 1, "1", 120},
+          // No Tick: the frame thread's report must close the echo path immediately.
+          {RK::Message, 1000, R"({"t":"probe","n":"late"})"},
+          {RK::SocketClose, 2000}, {RK::Message, 3000, welcome},
+          {RK::Message, 4000, R"({"t":"probe","n":"rejoin"})"},
+      });
+      EXPECT_EQ(trace[1].sent.size(), 1u);
+      EXPECT_TRUE(trace[3].sent.empty());
+      EXPECT_TRUE(trace[6].sent.empty());
+    }
+  }
+}
+
+TEST(OrcaRoomPingRange, ProbesOutsideQueueRoomsProduceNoTraffic)
+{
+  for (const bool tournament : {false, true})
+  {
+    std::vector<RoomTestStep> steps;
+    if (tournament)
+      steps.push_back({RK::Tournament, 0});
+    steps.push_back({RK::Message, 0, R"({"t":"probe","n":"before-welcome"})"});
+    steps.push_back({RK::Message, 0, QueueRoster("welcome", tournament ? "ranked" : "private")});
+    steps.push_back({RK::Message, 1000, R"({"t":"probe","n":"outside"})"});
+    const auto trace = TraceRoomForTest(TraceOptions(), steps);
+    for (const auto& step : trace)
+      EXPECT_TRUE(step.sent.empty());
+  }
+}
+
 TEST(OrcaRoomRecovery, PublicRoomsNeedAnExactWelcomeOptIn)
 {
   for (const char* queue : {"casual", "ranked"})

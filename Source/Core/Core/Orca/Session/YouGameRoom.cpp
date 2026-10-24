@@ -1349,6 +1349,11 @@ struct YouGameRoom::Impl
   bool welcome_recovery = false;  // Only the welcome room.recovery boolean can opt a queue in.
   bool ticket_tourney = false;
   bool probe_room = false;  // I/O thread: authoritative queue welcome, excluding tournaments.
+  // The frame thread closes this path before it queues game 1's start/result. Never reset on rejoin.
+  std::atomic<bool> probe_stopped{false};
+  std::optional<Clock::time_point> probe_started, probe_last;
+  std::array<std::string, 6> probe_nonces{};  // I/O thread; also the lifetime reply budget.
+  size_t probe_count = 0;
   bool stay = false;
   bool doubles = false;
   int room_size = MAX_SEATS;
@@ -1616,6 +1621,7 @@ struct YouGameRoom::Impl
   // `app_code`: the app's error code for this end (Orca::Status); empty for a normal leave.
   void End(std::string why, std::string app_code = "network")
   {
+    probe_stopped = true;
     if (QueueRecovery())
     {
       RoomNotice("room-leave self ended " + (app_code.empty() ? "left" : app_code));
@@ -2929,10 +2935,7 @@ struct YouGameRoom::Impl
       if (auto text = ws->ReceiveText(std::chrono::milliseconds(net_delay ? 1 : 2)))
       {
         last_heard = Clock::now();
-        if (net_delay)
-          held_in.push_back({HoldUntil(held_in), std::move(*text)});
-        else
-          OnMessage(*text);
+        OnSocketMessage(std::move(*text));
         continue;
       }
       // Under the test delay, what the server sent before closing is still in flight and comes
@@ -4127,6 +4130,7 @@ struct YouGameRoom::Impl
     }
     if (room_queue == "private" || match.empty() || !verdicts_seen.insert(match + "/$final").second)
       return false;
+    probe_stopped = true;
     AckMatchReport(match, "$final");
     if (room_queue == "ranked")
     {
@@ -4970,6 +4974,49 @@ struct YouGameRoom::Impl
     Publish();
   }
 
+  // Socket-thread only. This path never enters the emulator mutex or the test delay queues.
+  void OnProbe(const picojson::object& m)
+  {
+    if (!probe_room || probe_stopped.load() || probe_count == probe_nonces.size())
+      return;
+    const auto n = m.find("n");
+    if (n == m.end() || !n->second.is<std::string>())
+      return;
+    const auto& nonce = n->second.get<std::string>();
+    if (nonce.empty() || nonce.size() > 64 ||
+        !std::all_of(nonce.begin(), nonce.end(), [](unsigned char c) { return c >= 0x20 && c < 0x7f; }) ||
+        std::ranges::find(probe_nonces, nonce) != probe_nonces.end())
+      return;
+    const auto now = Now();
+    // Worker issues ~1/s for 5 s. Allow scheduling jitter, but at most six unique replies in 6 s.
+    if ((probe_started && now - *probe_started >= std::chrono::seconds(6)) ||
+        (probe_last && now - *probe_last < std::chrono::milliseconds(900)))
+      return;
+    if (!probe_started)
+      probe_started = now;
+    probe_last = now;
+    probe_nonces[probe_count++] = nonce;
+    SendJson({{"t", picojson::value("probe-ack")}, {"n", n->second}},
+             std::chrono::milliseconds(100), false);
+  }
+
+  void OnSocketMessage(std::string text)
+  {
+    if (!net_delay)
+    {
+      OnMessage(text);
+      return;
+    }
+    picojson::value value;
+    if (Json::ParseJson(text, &value) && value.is<picojson::object>() &&
+        Str(value.get<picojson::object>(), "t") == "probe")
+    {
+      OnProbe(value.get<picojson::object>());
+      return;
+    }
+    held_in.push_back({HoldUntil(held_in), std::move(text)});
+  }
+
   void OnMessage(const std::string& text)
   {
     picojson::value value;
@@ -4980,6 +5027,11 @@ struct YouGameRoom::Impl
     }
     const auto& m = value.get<picojson::object>();
     const std::string t = Str(m, "t");
+    if (t == "probe")
+    {
+      OnProbe(m);
+      return;
+    }
     if (QueueRecovery() && State() == RoomState::Ended)
       return;
 
@@ -5831,6 +5883,9 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     case RoomTestStep::Kind::Message:
       room.OnMessage(step.text);
       break;
+    case RoomTestStep::Kind::SocketMessage:
+      room.OnSocketMessage(step.text);
+      break;
     case RoomTestStep::Kind::PageEvent:
       room.OnPageEvent(step.text);
       room.SendPageCommands();
@@ -5864,7 +5919,11 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
       report.kind = GameReport::Kind::Win;
       report.winner_seat = 1;
       report.detail = "{}";
-      room.reports.push_back({report, *room.test_now, step.kind == RoomTestStep::Kind::GameStart});
+      if (step.kind == RoomTestStep::Kind::GameStart)
+        owner.ReportGameStart(report.start);
+      else
+        owner.ReportGame(report);
+      room.reports.back().at = *room.test_now;
       break;
     }
     case RoomTestStep::Kind::InputSilence:
@@ -6468,6 +6527,7 @@ void YouGameRoom::SetOpponentPlugged(bool plugged)
 
 void YouGameRoom::ReportGame(GameReport report)
 {
+  m_impl->probe_stopped = true;
   std::lock_guard lock(m_impl->mutex);
   if (m_impl->reports.size() < 16)
     m_impl->reports.push_back({std::move(report), Clock::now()});
@@ -6475,6 +6535,8 @@ void YouGameRoom::ReportGame(GameReport report)
 
 void YouGameRoom::ReportGameStart(int start)
 {
+  if (start >= 0)
+    m_impl->probe_stopped = true;
   GameReport report;
   report.start = start;
   std::lock_guard lock(m_impl->mutex);
