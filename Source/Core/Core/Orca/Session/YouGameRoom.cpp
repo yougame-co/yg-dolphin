@@ -3951,7 +3951,9 @@ struct YouGameRoom::Impl
     {
       v.out = "void";
       v.winner.clear();
-      if (const auto it = void_why.find(id); it != void_why.end())
+      if (Str(event, "reason") == "too_far")
+        v.why = "too_far";
+      else if (const auto it = void_why.find(id); it != void_why.end())
         v.why = it->second;
       else if (Str(event, "reason").find("could not be recorded") != std::string::npos)
         v.why = "unrecorded";
@@ -4164,7 +4166,7 @@ struct YouGameRoom::Impl
     // A desync voided this game's match (SendFinish's "$final").
     if (const auto it = void_why.find("$final"); it != void_why.end())
     {
-      if (v.out == "void")
+      if (v.out == "void" && v.why != "too_far")
         v.why = it->second;
       void_why.erase(it);
     }

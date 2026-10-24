@@ -435,6 +435,41 @@ TEST(OrcaRoomPingRange, ProbesOutsideQueueRoomsProduceNoTraffic)
   }
 }
 
+TEST(OrcaRoomPingRange, TooFarVoidReachesThePageVerbatimOnce)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const std::string recovery : {"true", "false"})
+    {
+      for (const bool started : {false, true})
+      {
+        SCOPED_TRACE(fmt::format("{} recovery={} match-start={}", queue, recovery, started));
+        picojson::value welcome;
+        ASSERT_TRUE(picojson::parse(welcome, QueueRoster("welcome", queue, recovery)).empty());
+        if (!started)
+          welcome.get<picojson::object>().erase("matchId");
+        std::vector<RoomTestStep> steps{{RK::Message, 0, welcome.serialize()}};
+        if (started)
+          steps.push_back({RK::Message, 0, QueueRoster("start", queue, recovery)});
+        const std::string verdict = R"({"t":"result","matchId":"queue-recovery-match",
+            "id":"ping-check","round":1,"void":true,"draw":false,"ranking":["me","peer"],
+            "disposition":"void","reason":"too_far","ratings":null})";
+        const size_t result = steps.size();
+        steps.push_back({RK::Message, 1, verdict});
+        steps.push_back({RK::Message, 2, verdict});
+        steps.push_back({RK::Message, 3, R"({"t":"probe","n":"after-result"})"});
+        const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+        const std::string expected = std::string(queue) == "ranked" ?
+            R"({"q":"ranked","k":"set","out":"void","by":"games","why":"too_far","score":[0,0]})" :
+            R"({"q":"casual","k":"game","n":1,"out":"void","why":"too_far"})";
+        EXPECT_EQ(trace[result].results, (std::vector<std::string>{expected}));
+        EXPECT_TRUE(trace[result + 1].results.empty());
+        EXPECT_TRUE(trace.back().sent.empty());
+      }
+    }
+  }
+}
+
 TEST(OrcaRoomRecovery, PublicRoomsNeedAnExactWelcomeOptIn)
 {
   for (const char* queue : {"casual", "ranked"})
