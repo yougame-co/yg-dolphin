@@ -46,7 +46,6 @@ constexpr u32 AREA_IN_HAND = 0x1F8;  // u8: 1 the token is in the hand, 0 down
 constexpr u32 AREA_FLYING = 0x1F9;   // u8: 1 while the token flies
 constexpr u32 KIND_HUMAN = 1;
 
-constexpr u16 BUTTON_START = PAD_BUTTON_START;
 constexpr u16 BUTTON_B = PAD_BUTTON_B;
 
 bool Pointer(const GuestMemory& m, u32 p)
