@@ -4230,6 +4230,14 @@ two-cursor rectangles), and the Random Stage Switch mask (`0x04005807`, Frigate 
 On the MK clause: one reply says the last two tournaments (and that night's) didn't have it. Both
 Supernova rulebooks do, and Luis keeps it.
 
+**Frigate Orpheon on vanilla's stage select** (probe, 2026-10-06: the game's cursor written over
+the Brawl page in 0.5 steps, 3 frames a point, the hovered item watched): page 0 slot 10, hovered
+item `0x0C`, x 24.5..29.5 and y 7.5..13.0 (at y 13.5 the row above's slot 4 takes x < 27, so the
+tile stops at 13.25). Stage select id `0x0B` (MuStageTblAccess's page 0 list starts 0, 1, 2, 3, 4,
+5, 7, 9, 8, 0xA, 0xB, 0xC, ...; bit 11 of the Random Stage Switch's Brawl page, `m_orpheon` in
+BrawlHeaders' record), srStageKind `0x0C`. Page 0 is rows of 5, 6, 5, 5, 6 and 4 icons (slots 0-4,
+5-10, 11-15, 16-20, 21-26, 27-30). Every existing legal tile matched its rectangle.
+
 **Project+: no change; 2024 Proposed is still the newest Proposed list.** Project+ v3.2 (released
 2026-08-05, `Project-Plus-Development-Team/PPlusReleases`) ships these Random Stage Select presets
 (`pf/stage/switch/SwitchNN.rss`, decoded from page 0's slots through the slot table at +0x104 and
