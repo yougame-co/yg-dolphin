@@ -7847,3 +7847,39 @@ TEST(OrcaRoom, CoCommandErrorsUseTheRoomsRefusalSentences)
           std::string_view(action) == "local-add" ? "Add" : "Remove", reason)}));
     }
 }
+
+TEST(OrcaRoom, CoPendingHostAddKeepsExistingFriendsOffersOnTheirLegacySchedule)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  KeyframeInfo info{120, "replay-120-00112233", 1234, "00112233aabbccdd", std::string(64, '0')};
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, CoPageWelcome(false, "private", true)},
+      {RK::Message, 1, PeerHello(false)},
+      {RK::OfferKeyframe, 2, picojson::value(KeyframeOfferToJson(info)).serialize(), 1},
+      {RK::Tick, 1000}, {RK::PageEvent, 1001, CO_PAGE_ADD}, {RK::Tick, 2000}});
+  ASSERT_TRUE(HasRoomKind(trace[3], "kf"));
+  EXPECT_TRUE(HasRoomKind(trace[5], "kf"));
+  EXPECT_FALSE(HasRoomKind(trace[5], "hello"));
+}
+
+TEST(OrcaRoom, CoJoinerAcceptsKeyframeOffersOnlyAfterItsPendingAddResolves)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  KeyframeInfo info{120, "replay-120-00112233", 1234, "00112233aabbccdd", std::string(64, '0')};
+  const auto offer = fmt::format(R"({{"t":"msg","from":"peer","d":{}}})",
+      picojson::value(KeyframeOfferToJson(info)).serialize());
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
+      {RK::Message, 0, CoPageWelcome(true, "private", true)}, {RK::PageEvent, 1, CO_PAGE_ADD},
+      {RK::Message, 2, PeerHello(true)}, {RK::Message, 3, offer},
+      {RK::Message, 3000, CoRoster("lobby", true, true, false)}, {RK::Tick, 3001},
+      {RK::Message, 3002, offer}});
+  EXPECT_TRUE(trace[3].events.empty());
+  ASSERT_EQ(trace[6].events.size(), 1u);
+  EXPECT_EQ(trace[6].events[0].kind, PeerEvent::Kind::Keyframe);
+}

@@ -471,6 +471,7 @@ struct RoomTestStep
     PageEvent,
     SessionActive,
     Tournament,
+    OfferKeyframe,
   };
   Kind kind;
   int milliseconds = 0;

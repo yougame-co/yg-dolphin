@@ -3210,7 +3210,7 @@ struct YouGameRoom::Impl
     {
       co_wait_expired = false;
       co_wait_until = Now() + CO_SEAT_WAIT;
-      co_hello_pending = true;
+      co_hello_pending = joining;
     }
     SendJson(command);
   }
@@ -4363,7 +4363,7 @@ struct YouGameRoom::Impl
         // response ever arrives, the cleanup deadline leaves instead of assuming one seat.
       }
     }
-    if (!co_wait_until &&
+    if ((!joining || !co_wait_until) &&
         (co_hello_pending || now - last_hello >= HELLO_EVERY || offer_now.exchange(false)))
     {
       last_hello = now;
@@ -5624,6 +5624,8 @@ struct YouGameRoom::Impl
     }
     if (kind == "kf")
     {
+      if (joining && co_wait_until)
+        return;  // The host retries after our complete local group can say hello.
       // Only from the host, to a joiner.
       if (!peer.drop_in_host || !joining)
         return;
@@ -5762,6 +5764,14 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
       else
         owner.SetSessionActive(false);
       break;
+    case RoomTestStep::Kind::OfferKeyframe:
+    {
+      picojson::value value;
+      if (Json::ParseJson(step.text, &value) && value.is<picojson::object>())
+        if (const auto info = KeyframeOfferFromJson(value.get<picojson::object>()))
+          owner.OfferKeyframe(static_cast<int>(step.close_code), *info);
+      break;
+    }
     case RoomTestStep::Kind::Tournament:
       room.ticket_tourney = true;
       break;
