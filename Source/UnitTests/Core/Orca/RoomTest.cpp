@@ -7515,7 +7515,8 @@ TEST(OrcaRoom, CoJoinerAddsBeforeHelloAndWaitsForItsRoster)
   {
     picojson::value value;
     ASSERT_TRUE(picojson::parse(value, wire).empty());
-    EXPECT_NE(value.get("d").get("k").to_str(), "hello");
+    const auto& data = value.get("d");
+    EXPECT_FALSE(data.is<picojson::object>() && data.get("k").to_str() == "hello");
   }
   EXPECT_EQ(trace[3].co_seats, (std::vector<int>{2}));
   ASSERT_FALSE(trace[4].sent.empty());
@@ -7524,7 +7525,8 @@ TEST(OrcaRoom, CoJoinerAddsBeforeHelloAndWaitsForItsRoster)
   {
     picojson::value value;
     ASSERT_TRUE(picojson::parse(value, wire).empty());
-    hello |= value.get("d").get("k").to_str() == "hello";
+    const auto& data = value.get("d");
+    hello |= data.is<picojson::object>() && data.get("k").to_str() == "hello";
   }
   EXPECT_TRUE(hello);
   EXPECT_TRUE(trace[5].sent.empty());
