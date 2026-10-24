@@ -1665,7 +1665,7 @@ struct YouGameRoom::Impl
     lobby["version"] = picojson::value(1.0);
     lobby["minPlayers"] = picojson::value(2.0);
     // Build constant: the room's lobby key must agree even when the app lacks co-seats.
-    lobby["maxLocalPlayers"] = picojson::value(options.friends_room ? 2.0 : 1.0);
+    lobby["maxLocalPlayers"] = picojson::value(2.0);
     lobby["compatibility"] = picojson::value(options.compatibility);
 
     const std::string bridge = Env("YOUGAME_BRIDGE"), token = Env("YOUGAME_TOKEN");
@@ -3161,7 +3161,7 @@ struct YouGameRoom::Impl
   {
     if (!Orca::Status::Cap("coseats") || Env("ORCA_COSEATS") == "0")
       return "no-cap";
-    if (queue != "private" || !options.friends_room || ticket_tourney)
+    if (!queue_known || queue != "private" || ticket_tourney)
       return "queue";
     if (!doubles)
       return "not-doubles";
@@ -3237,7 +3237,7 @@ struct YouGameRoom::Impl
   bool CoSeatsEnabledLocked() const
   {
     return Orca::Status::Cap("coseats") && Env("ORCA_COSEATS") != "0" &&
-           doubles && queue == "private" && options.friends_room && !ticket_tourney;
+           queue_known && doubles && queue == "private" && !ticket_tourney;
   }
 
   void OnPageEvent(const std::string& line)

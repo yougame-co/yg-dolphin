@@ -45,6 +45,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/SetEnd.h"
+#include "Core/Orca/UX/Search.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/Rollback/ReplayStream.h"
@@ -7599,8 +7600,8 @@ TEST_F(OrcaRoomRuntime, QueueTicketRequestAndReconnectKeepOneLocalPlayer)
     ASSERT_TRUE(room->FreshTicket(true, &ticket, &store, &error)) << error;
     const auto lobbies = Request("/state/" + code).get("ticket_lobbies");
     ASSERT_EQ(lobbies.get<picojson::array>().size(), 2u);
-    for (const auto& lobby : lobbies.get<picojson::array>())
-      EXPECT_EQ(lobby.get("maxLocalPlayers").get<double>(), 1);
+    EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 2);
+    EXPECT_EQ(lobbies.get<picojson::array>()[1].get("maxLocalPlayers").get<double>(), 1);
   }
 }
 
@@ -7685,4 +7686,40 @@ TEST(OrcaRoom, CoStartupUsesTheFullAssignmentAvailableAtWelcome)
       EXPECT_EQ(trace[0].sent[0], R"({"t":"local-add"})");
     }
   }
+}
+
+TEST_F(OrcaRoomRuntime, QueuedFriendJoinRequestsTheHostsPrivateLobby)
+{
+  for (const bool searching : {false, true})
+  {
+    Orca::UX::QueueApp::Begin(false);
+    if (searching)
+      Orca::UX::Search::Begin(false);
+    const Common::ScopeGuard cleanup([] {
+      Orca::UX::QueueApp::End();
+      Orca::UX::Search::End();
+    });
+    const std::string code = searching ? "cofriendsea" : "cofriendcss";
+    auto room = Open(code, R"({"doubles":true,"required_local_players":2})", true, false);
+    ASSERT_TRUE(Wait([&] { return room->Connected() || room->GetState() == RoomState::Ended; }));
+    EXPECT_TRUE(room->Connected()) << room->Status();
+    const auto lobbies = Request("/state/" + code).get("ticket_lobbies");
+    ASSERT_EQ(lobbies.get<picojson::array>().size(), 1u);
+    EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 2);
+  }
+}
+
+TEST(OrcaRoom, PrivateRoomKindEnablesCoSeatsAfterAQueuedFriendJoin)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  auto options = TraceOptions(true);
+  options.friends_room = false;
+  const auto trace = TraceRoomForTest(options, {
+      {RK::Message, 0, CoPageWelcome(true, "private", true)},
+      {RK::PageEvent, 1, R"({"slug":"co-page","cmd":"local-add"})"}});
+  EXPECT_EQ(picojson::value(trace[0].mirror).get("lobby").get("maxLocalPlayers").get<double>(), 2);
+  EXPECT_EQ(trace[1].sent, (std::vector<std::string>{R"({"t":"local-add"})"}));
 }
