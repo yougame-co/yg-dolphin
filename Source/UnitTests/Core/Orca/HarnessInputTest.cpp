@@ -172,7 +172,7 @@ TEST_F(OrcaHarnessInput, StdinScriptKeepsBothLocalPortsIndependent)
     SetEnv("ORCA_TEST_DEV_GAME", dev.c_str());
     File::DeleteDirRecursively(directory);
   });
-  ASSERT_TRUE(File::WriteStringToFile("0 999999 1 A SX=200\n0 999999 3 B SY=20\n", script));
+  ASSERT_TRUE(File::WriteStringToFile(script, "0 999999 1 A SX=200\n0 999999 3 B SY=20\n"));
   SetEnv("ORCA_TEST_DEV_GAME", "co-input");
   SetEnv("ORCA_TEST_COMMANDS", "0");
   EXPECT_FALSE(Rollback::Harness::SetInputScriptForTest(script));
