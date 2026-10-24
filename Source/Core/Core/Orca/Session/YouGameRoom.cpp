@@ -1309,6 +1309,7 @@ struct YouGameRoom::Impl
   bool local_add_pending = false;  // under mutex: an accepted add reserves solo ownership
   std::optional<Clock::time_point> co_wait_until;
   bool co_wait_expired = false;  // cancellation: wait for the removal roster
+  bool inherited_co_cleanup = false;
   std::set<std::string> co_removals;
   Clock::time_point last_heard{};
 
@@ -4710,7 +4711,7 @@ struct YouGameRoom::Impl
       Orca::UX::SetEnd::Current().CasualOpponentLeft(Orca::UX::SetEnd::NowMs());
   }
 
-  void Roster(const picojson::object& m)
+  void Roster(const picojson::object& m, bool fresh_without_add = false)
   {
     mirror_dirty = true;
     LobbyFields(m);
@@ -4755,7 +4756,13 @@ struct YouGameRoom::Impl
       if (id.empty() || !slot || !index)
         continue;
       if (id == me && *index > 0 && Str(o, "id").starts_with("local:"))
+      {
         local_co_ids.push_back(Str(o, "id"));
+        inherited_co_cleanup |= fresh_without_add;
+        // A fresh process has no controller assignment for a previous process's co-seat.
+        if (inherited_co_cleanup)
+          continue;
+      }
       names[*slot] = CleanName(Str(o, "name"));
       connections[id].emplace(*index, Participant{*slot, Str(o, "name")});
     }
@@ -4772,6 +4779,16 @@ struct YouGameRoom::Impl
     {
       std::lock_guard lock(mutex);
       const auto previous_local = my_co_seats;
+      if (inherited_co_cleanup && !local_co_ids.empty())
+      {
+        local_add_pending = true;
+        if (!co_wait_expired)
+        {
+          co_wait_expired = true;
+          co_wait_until = Now() + CO_SEAT_WAIT;
+          co_hello_pending = joining;
+        }
+      }
       seat_names = std::move(names);
       peer_ids.clear();
       peer_co_slots.clear();
@@ -4829,11 +4846,12 @@ struct YouGameRoom::Impl
         if (co_removals.insert(participant).second)
           SendJson({{"t", picojson::value("local-remove")},
                     {"id", picojson::value(participant)}});
-      if (!co_removals.empty() && my_co_seats.empty())
+      if (!co_removals.empty() && local_co_ids.empty())
       {
         co_removals.clear();
         co_wait_until.reset();
         co_wait_expired = false;
+        inherited_co_cleanup = false;
         {
           std::lock_guard lock(mutex);
           local_add_pending = false;
@@ -5127,8 +5145,14 @@ struct YouGameRoom::Impl
         public_socket_reachable = true;
       }
       LinkPeers();
-      Roster(m);
-      if (first_welcome && std::exchange(page_add_before_welcome, false))
+      bool add_pending;
+      {
+        std::lock_guard lock(mutex);
+        add_pending = local_add_pending ||
+                      (page_add_before_welcome && LocalRefusalLocked(false).empty());
+      }
+      Roster(m, first_welcome && !add_pending);
+      if (first_welcome && std::exchange(page_add_before_welcome, false) && my_co_seats.empty())
         SendLocalCommand({{"t", picojson::value("local-add")}});
       if (QueueRecovery() &&
           (m.count("hold_ms") || (m.count("recovering") && m.at("recovering").is<bool>() &&
