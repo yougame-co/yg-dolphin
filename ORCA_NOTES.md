@@ -4238,6 +4238,20 @@ tile stops at 13.25). Stage select id `0x0B` (MuStageTblAccess's page 0 list sta
 BrawlHeaders' record), srStageKind `0x0C`. Page 0 is rows of 5, 6, 5, 5, 6 and 4 icons (slots 0-4,
 5-10, 11-15, 16-20, 21-26, 27-30). Every existing legal tile matched its rectangle.
 
+**Checked** (2026-10-06, M4 Pro, `-v Null`, `ORCA_TEST_QUEUE=ranked ORCA_TEST_SET_RULES=1,8
+ORCA_UX_TEST_NAMES=ada,bo YG_SYNCTEST=7 YG_SYNCTEST_FROM=1700`):
+- `Tools/orca/inputs/bf-ranked-bo3.txt`, rewritten for this list, frames 1,700-12,000: 72,051 re-run
+  frames, **0 RAM mismatches**. Game 1 struck BF, FD, Lylat (masks 001, 003, 007) and picked YI
+  (the match's stage `0x0D`); game 2 banned Delfino and Frigate (020, 060) and the loser picked PS1
+  across the page turn (`0x2E`); game 3 skipped the bans with Y and the loser picked Frigate
+  (`0x0C`, it loads); 2-1, the set over.
+- `Tools/orca/inputs/bf-sss-cursors.txt` (game 1 now agrees on Smashville after both A's on PS1 were
+  refused as a counterpick), frames 1,700-7,000: 37,051 re-run frames, 0 RAM mismatches.
+- Project+ unchanged: `pplus-sss-cursors-ranked.txt` (`ORCA_PROFILE=PPLUS32`, from frame 170) to
+  frame 6,000: 40,761 re-run frames, 0 RAM mismatches, game 1 agreed on Battlefield. (A first try
+  aborted at the match start with an I/O error writing its log to the worktree disk image; the same
+  binary from the internal disk passed.)
+
 **Project+: no change; 2024 Proposed is still the newest Proposed list.** Project+ v3.2 (released
 2026-08-05, `Project-Plus-Development-Team/PPlusReleases`) ships these Random Stage Select presets
 (`pf/stage/switch/SwitchNN.rss`, decoded from page 0's slots through the slot table at +0x104 and
