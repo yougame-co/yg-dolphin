@@ -7439,6 +7439,38 @@ TEST(OrcaRoom, CoPageMirrorRequiresFriendsDoublesAndAgreedCap)
       }
 }
 
+TEST(OrcaRoom, PageMirrorSerializesOnlyAfterItsInputsChange)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv enabled("ORCA_COSEATS", "1");
+  Orca::Status::SetAppCaps("");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  std::vector<RoomTestStep> steps{
+      {RK::Message, 0, CoPageWelcome(false, "private", true)}};
+  for (int tick = 1; tick <= 100; ++tick)
+    steps.push_back({RK::Tick, tick});
+  steps.insert(steps.end(), {
+      {RK::AppCaps, 101, "coseats"}, {RK::Tick, 102},
+      {RK::Message, 103, PeerHello(false)}, {RK::Tick, 104},
+      {RK::Message, 105, CoRoster("lobby", false, false, true)}, {RK::Tick, 106},
+      {RK::AppCaps, 107, ""}, {RK::Tick, 108}, {RK::Tick, 109}});
+  const auto trace = TraceRoomForTest(TraceOptions(false), steps);
+  ASSERT_EQ(trace[0].mirror_serializations, 1u);
+  for (size_t tick = 1; tick <= 100; ++tick)
+  {
+    EXPECT_EQ(trace[tick].mirror_serializations, 1u) << tick;
+    EXPECT_EQ(trace[tick].published_mirror, picojson::value(trace[tick].mirror).serialize());
+  }
+  for (const size_t index : {102u, 103u, 104u, 105u, 106u, 108u, 109u})
+    EXPECT_EQ(trace[index].published_mirror, picojson::value(trace[index].mirror).serialize()) << index;
+  EXPECT_EQ(trace[102].mirror_serializations, 2u);
+  EXPECT_EQ(trace[103].mirror_serializations, 3u);  // The first hello makes ready true.
+  EXPECT_EQ(trace[104].mirror_serializations, 3u);
+  EXPECT_EQ(trace[105].mirror_serializations, 4u);  // Roster and revision.
+  EXPECT_EQ(trace[108].mirror_serializations, 5u);
+  EXPECT_EQ(trace[109].mirror_serializations, 5u);
+}
+
 TEST(OrcaRoom, CoPageCommandsPinEveryGateAndStatus)
 {
   const ScopedEnv session("ORCA_SESSION", "1");

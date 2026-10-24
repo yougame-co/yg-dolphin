@@ -1332,6 +1332,8 @@ struct YouGameRoom::Impl
   std::mutex bridge_mutex;
   std::condition_variable bridge_wake;
   std::optional<std::string> bridge_pending;
+  bool mirror_dirty = true;  // I/O thread only, like every RoomMirror input.
+  std::optional<bool> mirror_co_cap;
   std::string last_published;  // I/O thread only
   bool mirror_closed = false;  // under s_mirror_mutex: the emptied room went out
   std::atomic<bool> leave_requested{false};
@@ -1541,6 +1543,7 @@ struct YouGameRoom::Impl
   unsigned test_send_failures = 0;
   std::vector<std::string> test_notices;
   std::vector<std::string> test_results;
+  unsigned test_mirror_serializations = 0;
   Clock::time_point Now() const { return test_now.value_or(Clock::now()); }
 
   explicit Impl(RoomOptions room_options, bool start_thread = true) : options(std::move(room_options))
@@ -1844,6 +1847,7 @@ struct YouGameRoom::Impl
     }
     keyframes_url = KeyframesUrl(Str(reply, "keyframes"));
     std::lock_guard lock(mutex);
+    mirror_dirty = true;
     code = room;
     ticket_tourney = Int(reply, "tourney", 1, 1).has_value();
     ticket_lobby = lobby;
@@ -3077,11 +3081,26 @@ struct YouGameRoom::Impl
     return room;
   }
 
+  bool MirrorNeedsPublish()
+  {
+    // Caps can be replaced by the app thread without a room message.
+    const bool co_cap = Orca::Status::Cap("coseats") && Env("ORCA_COSEATS") != "0";
+    if (mirror_co_cap != co_cap)
+    {
+      mirror_co_cap = co_cap;
+      mirror_dirty = true;
+    }
+    return mirror_dirty;
+  }
+
   void Publish()
   {
-    if (!bridged)
+    if (!bridged || !MirrorNeedsPublish())
       return;
+    mirror_dirty = false;
     std::string snapshot = picojson::value(RoomMirror(false)).serialize();
+    if (test_now)
+      ++test_mirror_serializations;
     if (snapshot == last_published)
       return;
     last_published = snapshot;
@@ -3440,7 +3459,10 @@ struct YouGameRoom::Impl
         }
       }
       if (!held_match)
+      {
+        mirror_dirty |= match_id != id;
         match_id = std::move(id);
+      }
     }
     if (const auto it = m.find("participants");
         !rejoin_verdict_until && it != m.end() && it->second.is<picojson::array>())
@@ -4063,6 +4085,7 @@ struct YouGameRoom::Impl
     std::lock_guard lock(mutex);
     set_done = true;
     rejoin_verdict_until.reset();
+    mirror_dirty |= !match_id.empty();
     match_id.clear();
   }
 
@@ -4096,6 +4119,7 @@ struct YouGameRoom::Impl
         std::lock_guard lock(mutex);
         set_done = true;
         rejoin_verdict_until.reset();
+        mirror_dirty |= !match_id.empty();
         match_id.clear();
         // The server has settled the set. Keep the socket/outbox alive solely to
         // reconcile receipts, without letting a previous hold end that work.
@@ -4138,6 +4162,7 @@ struct YouGameRoom::Impl
     finish_sent = false;
     std::lock_guard lock(mutex);
     rejoin_verdict_until.reset();
+    mirror_dirty |= !match_id.empty();
     match_id.clear();
     return true;
   }
@@ -4196,8 +4221,8 @@ struct YouGameRoom::Impl
   void Tick()
   {
     const auto now = Now();
-    if (welcomed_at)
-      Publish();  // A replacement caps answer also refreshes the page's picker limit.
+    if (welcomed_at && MirrorNeedsPublish())
+      Publish();
     std::vector<std::string> retries, notices;
     {
       std::lock_guard lock(mutex);
@@ -4556,6 +4581,7 @@ struct YouGameRoom::Impl
 
   void ResetPeer(std::map<std::string, Peer>::iterator p, const std::string& why = "")
   {
+    mirror_dirty |= p->second.announced;
     if (p->second.announced || p->second.presence.suspended)
     {
       EmitLeft(p->second, why.empty() ? p->second.bye : why);
@@ -4676,6 +4702,7 @@ struct YouGameRoom::Impl
 
   void Roster(const picojson::object& m)
   {
+    mirror_dirty = true;
     LobbyFields(m);
     // Settlement can clear the gameplay roster before its verdict reaches a recovering game.
     // Keep identities/session, including departures, until the verdict or its bounded wait ends.
@@ -5581,6 +5608,7 @@ struct YouGameRoom::Impl
       // A game player: a joiner at a seat other than the host's, or the host itself.
       if (!peer.announced && peer.slot >= 0)
       {
+        mirror_dirty = true;
         peer.announced = true;
         std::string room;
         {
@@ -5742,6 +5770,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
   YouGameRoom owner(options, false);
   auto& room = *owner.m_impl;
   room.code = options.room_code;
+  room.bridged = true;  // Exercise publication without starting a bridge or making requests.
   std::vector<RoomTestSnapshot> trace;
   for (const RoomTestStep& step : steps)
   {
@@ -5773,6 +5802,9 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     }
     case RoomTestStep::Kind::Tournament:
       room.ticket_tourney = true;
+      break;
+    case RoomTestStep::Kind::AppCaps:
+      Orca::Status::SetAppCaps(step.text);
       break;
     case RoomTestStep::Kind::ReportGame:
     case RoomTestStep::Kind::GameStart:
@@ -5860,6 +5892,8 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                      owner.RoomRecovering(*room.test_now), input_held});
     auto& snapshot = trace.back();
     snapshot.mirror = room.RoomMirror(false);
+    snapshot.published_mirror = room.last_published;
+    snapshot.mirror_serializations = room.test_mirror_serializations;
     snapshot.host_input_deadline = owner.HostAwayDeadline();
     snapshot.seat = owner.Seat();
     snapshot.co_seats = owner.CoSeats();

@@ -470,6 +470,7 @@ struct RoomTestStep
     SessionActive,
     Tournament,
     OfferKeyframe,
+    AppCaps,
   };
   Kind kind;
   int milliseconds = 0;
@@ -503,6 +504,8 @@ struct RoomTestSnapshot
   std::vector<int> linked_seats;
   std::optional<std::chrono::steady_clock::time_point> host_input_deadline;
   picojson::object mirror;
+  std::string published_mirror;
+  unsigned mirror_serializations = 0;
 };
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                              const std::vector<RoomTestStep>& steps);
