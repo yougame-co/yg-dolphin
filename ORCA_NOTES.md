@@ -4279,6 +4279,21 @@ game or its changelogs. A guess at the complaint: a friends room (no header) kee
 preset, which defaults to "Legal stages" (21 stages), not 2024 Proposed.
 
 
+**Review fixes (2026-10-06).** The rulebook's text export (`.../export?format=txt`) confirms every
+row above. `bf-css-random.txt` and `bf-native-text.txt` had copied `bf-sss-cursors.txt`'s old game
+1 (both A's on Pokemon Stadium: agreed); under the 2026 list those A's propose nothing and the
+stage select waited out both timers. Both now end as `bf-sss-cursors.txt` does (port 1 proposes
+Smashville: agreed). Plain runs (`ORCA_TEST_QUEUE=ranked:solo`, pick frame 2106 as before): game 1
+on Smashville (`0x21`) from frame 2703, game 2 on Battlefield (css-random 4325, native-text 4607),
+Random resolving to the same characters as on 0.3.18 (37/26, then 25/1). `bf-css-random.txt` under
+`YG_SYNCTEST=7` from 1440 to 5000: 24,871 re-run frames, **0 RAM mismatches**.
+`bf-queue2-ranked.txt` and `bf-css-lockin.txt` (one cursor's game 1, both ports sending the same
+inputs) never strike by hand any more: port 1's X misses Battlefield and the timer strikes for
+it. The 0.3.27 + q14 binary (old list) does exactly the same, so they went stale with the two
+cursors (`ux=12`), not here. Kept: `Ruleset::ic_banned_stage`/`ice_climbers` (no ruleset sets them
+now; a general clause, harmless).
+
+
 ## Casual stage pick
 
 A casual queue match's stage (Luis, 2026-10-04: "A stage is picked at random between the two
