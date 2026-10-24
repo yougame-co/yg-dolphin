@@ -15,6 +15,7 @@
 #include <map>
 #include <set>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -238,7 +239,8 @@ struct InputRule
   int sx = -1, sy = -1, cx = -1, cy = -1;
 };
 
-std::atomic<std::shared_ptr<const std::vector<InputRule>>> s_stdin_rules;
+std::mutex s_stdin_rules_mutex;
+std::shared_ptr<const std::vector<InputRule>> s_stdin_rules;
 std::atomic<bool> s_stdin_active{false};
 
 std::vector<InputRule> LoadInputScript(const std::string& path, bool* loaded = nullptr)
@@ -1137,14 +1139,18 @@ bool SetInputScriptForTest(const std::string& path)
   if (path.empty())
   {
     s_stdin_active.store(false);
-    s_stdin_rules.store({});
+    std::lock_guard lock(s_stdin_rules_mutex);
+    s_stdin_rules.reset();
     return true;
   }
   bool loaded = false;
   auto rules = LoadInputScript(path, &loaded);
   if (!loaded)
     return false;
-  s_stdin_rules.store(std::make_shared<const std::vector<InputRule>>(std::move(rules)));
+  {
+    std::lock_guard lock(s_stdin_rules_mutex);
+    s_stdin_rules = std::make_shared<const std::vector<InputRule>>(std::move(rules));
+  }
   s_stdin_active.store(true);
   return true;
 }
@@ -1156,8 +1162,12 @@ std::optional<GCPadStatus> InputOverride(int port)
   // A test port nobody plugged in reports no controller, scripted or not.
   if (TestPortUnplugged(port, s_frame))
     return Orca::Net::DecodePad(Orca::Net::UNPLUGGED_PAD);
-  const auto stdin_rules = s_stdin_active.load(std::memory_order_relaxed) ? s_stdin_rules.load() :
-      std::shared_ptr<const std::vector<InputRule>>{};
+  std::shared_ptr<const std::vector<InputRule>> stdin_rules;
+  if (s_stdin_active.load(std::memory_order_relaxed))
+  {
+    std::lock_guard lock(s_stdin_rules_mutex);
+    stdin_rules = s_stdin_rules;
+  }
   const auto& rules = stdin_rules ? *stdin_rules : Input();
   if (rules.empty())
     return std::nullopt;
