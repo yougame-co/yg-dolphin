@@ -3872,6 +3872,8 @@ The verdict:
   or a time-out still level, is a tie: the next game is a tiebreak game with 1 stock and 3:00
   (`RankedSet::WriteSetRules`, on the menus; 3 stocks and 8:00 otherwise). Five ties in a row void
   the set.
+  (2026-10-06: Supernova 2026's 30 and 10 replace 35 and 11 since `ux=21`, "Stage lists checked
+  against the community".)
 - Project+ (2024): the results screen's winner. Its codeset already decides a time-out by stocks
   then percent and gives an exact tie overtime ("Tiebreaker v2.0", "RoA Overtime v2.1").
 
@@ -4226,6 +4228,13 @@ clause; this track changes only the stage table (`RankedSteps.cpp` MakeBrawl: 8 
 bans, no IC/FD), the stage select glue (`BrawlStages` tiles and srStageKinds, Frigate `0x0C`; the
 two-cursor rectangles), and the Random Stage Switch mask (`0x04005807`, Frigate is stage select id
 `0x0B`). The ledge-grab limits (`RankedSet`/Results) are still 2025's: a separate change.
+
+**Ledge-grab limits, later the same day** (branch `stage-lists-ledge`, one commit on `stage-lists`,
+for Luis's OK with the stage tables): section 6.7 of the same rulebook, over 30 grabs loses (Meta
+Knight over 20), 10 and 6 in a 1-stock tiebreak. `RankedSet.h` `LEDGE_LIMIT` 30 and
+`LEDGE_LIMIT_TIEBREAK` 10 (the MK limits were already 20 and 6). `OrcaRankedSet` tests: 31 against
+30, Meta Knight's 21 against 20, the tiebreak's 11 against 10. Same `ux=21`, so no second forced
+upgrade.
 
 On the MK clause: one reply says the last two tournaments (and that night's) didn't have it. Both
 Supernova rulebooks do, and Luis keeps it.

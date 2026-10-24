@@ -205,3 +205,13 @@ TEST(OrcaRulesets, RankedBrawlUsesSupernova2026StagesAndTwoOptionalBans)
   EXPECT_TRUE(Ranked::Strike(*r, plan, &progress, 7));
   EXPECT_EQ(progress.step, 1);
 }
+
+TEST(OrcaRulesets, RankedBrawlUsesSupernova2026LedgeLimits)
+{
+  const Ranked::Ruleset* r = Orca::UX::Rulesets::ByBlock(1);
+  ASSERT_NE(r, nullptr);
+  EXPECT_EQ(r->ledge.For(false, 0), 30);
+  EXPECT_EQ(r->ledge.For(true, 0), 10);
+  EXPECT_EQ(r->ledge.For(false, 24), 20);
+  EXPECT_EQ(r->ledge.For(true, 24), 6);
+}

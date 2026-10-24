@@ -31,8 +31,8 @@
     "minutes": 8,
     "timeOut": "judged",
     "ledgeGrabLimit": {
-      "limit": 35,
-      "tiebreakLimit": 11,
+      "limit": 30,
+      "tiebreakLimit": 10,
       "characters": [{ "character": 24, "limit": 20, "tiebreakLimit": 6 }]
     },
     "tiebreak": { "stocks": 1, "minutes": 3 },

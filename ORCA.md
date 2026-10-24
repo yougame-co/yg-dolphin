@@ -2076,8 +2076,8 @@ sudden death stays in `scMelee` (fighters vanish and come back with 1 stock each
 **The verdict:**
 
 - Not exactly two humans on ports 1 and 2, or a no contest: no game.
-- **Brawl (Supernova 2025):** a KO is the results screen's winner. Out of time: the ledge-grab limit
-  first (over 35 loses, Meta Knight over 20; 11 and 6 in a tiebreak game), then more stocks, then
+- **Brawl (Supernova 2026):** a KO is the results screen's winner. Out of time: the ledge-grab limit
+  first (over 30 loses, Meta Knight over 20; 10 and 6 in a tiebreak game), then more stocks, then
   lower percent. A tie (a simultaneous last stock, or a level time-out) makes the next game a
   tiebreak with 1 stock and 3:00. Five ties in a row void the set.
 - **Project+ (2024):** the results screen's winner (its codeset already handles time-outs and
