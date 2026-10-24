@@ -7439,4 +7439,30 @@ boundary. `keyCode` is unchanged: `f86645e20656efe5`; the fingerprinted key func
 identical to dd700be102, while the UX value they consume changes. Baseline checks: clean at
 `dd700be102 YG Dolphin 0.3.81`, `BASE-OK`. Initial configure and `make -j2 tests dolphin-nogui`
 succeeded with the tools cache options and `CCACHE_DIR=/Volumes/YGWorktrees/ccache`; `-j2` follows
-the later hard machine rule. Regression and final validation remain pending the shared lock.
+the later hard machine rule. The baseline regression binary failed both new tests as expected (seven stages and 35/11 limits).
+
+
+**Run 2 validation and blocker (2026-10-24):** the port reconfigured and built successfully with
+`ORCA_VERSION=0.3.82` in the local cache, the reference options, Unix Makefiles, ccache at the required
+path, and only `make -j2 tests dolphin-nogui`. Focused checks: **128/128 passed** across seven suites.
+The full binary ran once through `Tools/orca/room-fix-tests.py --gtest_brief=1`: **2,543 tests,
+207 suites, 2,519 passed, 23 skipped, 1 failed** (693,699 ms).
+
+The sole failure is the existing `OrcaMod.GoldenLegacyCompatibilityKey` at
+`Source/UnitTests/Core/Orca/ModTest.cpp:1955`: it asserts `parts.ends_with("|ux=31.1")`. The approved
+compat bump produces `|ux=32.1`. The test still explicitly normalizes this suffix before checking
+its older UX 30 and 29 serialization goldens. It predates dd700be102, and this assertion is outside
+the user's allowed old Brawl ranked stage/ban/ledge assertions. It was **not edited or skipped**;
+no production compatibility code was altered to accommodate it. Work stopped under the task's
+hard blocker rule. Continuing requires an explicit exception for this compatibility fixture's
+suffix assertion (and its explanatory comment), retaining both older serialization goldens.
+
+Hashlogs, the five synctests, all localhost two-instance ranked checks, key-template/selftest and
+the final source/package version commit were **not run/made** after this failure. The dd700be102
+baseline app was found in staging-0381/hashlog/new/YG Dolphin.app and its embedded commit verified;
+the eab fallback was not used. `keyCode` was independently calculated as `f86645e20656efe5`,
+unchanged because the fingerprinted functions did not change. D3D source remains byte-identical
+to ef746ea873. No pushes, network service requests, window/GPU boots, signing or releases occurred.
+The full suite generated an untracked root `imgui.ini`; it is not committed or removed (deletion
+outside the build directory is forbidden). Logs and prepared local verification scripts stay in
+`build-stagelists/`. The source/package versions remain 0.3.81 until the final authorized bump.
