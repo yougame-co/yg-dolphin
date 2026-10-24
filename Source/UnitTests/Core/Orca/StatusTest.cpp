@@ -200,10 +200,8 @@ TEST(OrcaStatus, CoSeatsCapsAreAppendOnlyAndFitLegacyReaders)
       before += " music results locks queue2 pick-casual pick-ranked talk rumble";
       if (product)
       {
-        before += " replay";
-#ifdef HAVE_BROADCAST_SINK
-        before += " broadcast";
-#endif
+        // Core always includes BroadcastSink.cpp; its private define is not a test define.
+        before += " replay broadcast";
       }
       before += " record hostui";
       SetEnv("ORCA_COSEATS", "0");
@@ -225,11 +223,7 @@ TEST(OrcaStatus, CoSeatsCapsAreAppendOnlyAndFitLegacyReaders)
       unsigned count = 0;
       for (std::string word; words >> word;)
         ++count;
-      unsigned expected = product ? 20 : 22;
-#ifdef HAVE_BROADCAST_SINK
-      if (product)
-        ++expected;
-#endif
+      const unsigned expected = product ? 21 : 22;
       EXPECT_EQ(count, expected);
       EXPECT_LE(count, 24u);
       Orca::Status::SetAppCaps("join");
