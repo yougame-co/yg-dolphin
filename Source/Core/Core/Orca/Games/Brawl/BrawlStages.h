@@ -151,7 +151,7 @@ struct Tile
 const Tile& TileFor(int stage);
 
 // Maps the game's stage id (result info +0x0C) to a legal Stage, or -1.
-int StageForStageId(int stage_id);
+int StageForStageId(int stage_id, bool casual = false);
 
 // The stage select as seen this frame.
 struct View

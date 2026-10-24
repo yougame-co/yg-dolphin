@@ -326,7 +326,9 @@ View ReadView(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
     return v;
   // The ruleset's queue timers. A queue header is locked, so it names a builtin ruleset; none only
   // in a build whose ruleset files don't load (OrcaRulesets.BuiltinsAreTheOldTables).
-  const Ranked::Ruleset* rules = Rulesets::ByBlock(static_cast<u8>(h.ruleset));
+  const Ranked::Ruleset* rules = h.ruleset == Rules::Ruleset::Brawl ?
+                                     &Rulesets::RulesFor(h.mode == Rules::Mode::Casual) :
+                                     Rulesets::ByBlock(static_cast<u8>(h.ruleset));
   if (!rules)
     return v;
   v.ready_frames = static_cast<u16>(rules->queue_ready_seconds * 60);

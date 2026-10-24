@@ -18,6 +18,8 @@ namespace Orca::UX::Rulesets
 const Ranked::Ruleset& Brawl2025();
 // Brawl ranked: Supernova 2026 (MatchBlock ruleset 1).
 const Ranked::Ruleset& Brawl2026();
+// Brawl casual retains 2025; ranked follows 2026, including all timers and defaults.
+const Ranked::Ruleset& RulesFor(bool casual);
 // Project+ 2024 (MatchBlock ruleset 2).
 const Ranked::Ruleset& PPlus2024();
 // The builtin ruleset with MatchBlock ruleset byte `block`, or nullptr (0, or unknown).
