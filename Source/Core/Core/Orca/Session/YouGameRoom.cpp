@@ -1532,7 +1532,7 @@ struct YouGameRoom::Impl
   {
     // A deterministic 0..jitter extra per message, after any spike (and, outgoing, a slow uplink's
     // hold); never earlier than the previous message.
-    const auto now = Clock::now();
+    const auto now = Now();
     const u32 extra = net_jitter ? (++net_count * 2654435761u) % static_cast<u32>(net_jitter + 1) : 0;
     auto due = RadioFree(now) + std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
     const auto since = std::chrono::duration_cast<std::chrono::seconds>(now - net_opened).count();
@@ -1656,14 +1656,14 @@ struct YouGameRoom::Impl
   bool SendJson(const picojson::object& message,
                 std::chrono::milliseconds timeout = std::chrono::seconds(2), bool held = true)
   {
-    if (test_now)
-    {
-      test_sent.push_back(picojson::value(message).serialize());
-      return true;
-    }
     if (held && net_delay)
     {
       held_out.push_back({HoldUntil(held_out), picojson::value(message).serialize()});
+      return true;
+    }
+    if (test_now)
+    {
+      test_sent.push_back(picojson::value(message).serialize());
       return true;
     }
     if (ws->SendText(picojson::value(message).serialize(), timeout))
@@ -3431,10 +3431,12 @@ struct YouGameRoom::Impl
 
   void FlushHeld()
   {
-    const auto now = Clock::now();
+    const auto now = Now();
     while (!held_out.empty() && held_out.front().due <= now)
     {
-      if (ws->IsOpen() && !ws->SendText(held_out.front().text, std::chrono::seconds(2)))
+      if (test_now)
+        test_sent.push_back(held_out.front().text);
+      else if (ws->IsOpen() && !ws->SendText(held_out.front().text, std::chrono::seconds(2)))
         WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws->Error());
       held_out.pop_front();
     }
@@ -4976,7 +4978,7 @@ struct YouGameRoom::Impl
     Publish();
   }
 
-  // Socket-thread only. This path never enters the emulator mutex or the test delay queues.
+  // Socket-thread only: no emulator mutex. Only agent QA delay holds the probe or its reply.
   void OnProbe(const picojson::object& m)
   {
     if (!probe_room || probe_stopped.load() || probe_count == probe_nonces.size())
@@ -4999,7 +5001,7 @@ struct YouGameRoom::Impl
     probe_last = now;
     probe_nonces[probe_count++] = nonce;
     SendJson({{"t", picojson::value("probe-ack")}, {"n", n->second}},
-             std::chrono::milliseconds(100), false);
+             std::chrono::milliseconds(100));
   }
 
   void OnSocketMessage(std::string text)
@@ -5007,13 +5009,6 @@ struct YouGameRoom::Impl
     if (!net_delay)
     {
       OnMessage(text);
-      return;
-    }
-    picojson::value value;
-    if (Json::ParseJson(text, &value) && value.is<picojson::object>() &&
-        Str(value.get<picojson::object>(), "t") == "probe")
-    {
-      OnProbe(value.get<picojson::object>());
       return;
     }
     held_in.push_back({HoldUntil(held_in), std::move(text)});
@@ -5887,6 +5882,9 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
       break;
     case RoomTestStep::Kind::SocketMessage:
       room.OnSocketMessage(step.text);
+      break;
+    case RoomTestStep::Kind::FlushHeld:
+      room.FlushHeld();
       break;
     case RoomTestStep::Kind::PageEvent:
       room.OnPageEvent(step.text);

@@ -476,6 +476,7 @@ struct RoomTestStep
     OfferKeyframe,
     AppCaps,
     SocketMessage,
+    FlushHeld,
   };
   Kind kind;
   int milliseconds = 0;

@@ -331,8 +331,7 @@ TEST(OrcaRoomPingRange, FriendsAndTournamentJoinsKeepTheirBytes)
 
 TEST(OrcaRoomPingRange, ProbeEchoIsImmediateAndPreservesTheReceivedNonce)
 {
-  ScopedEnv delay("ORCA_TEST_NET_DELAY_MS", "1000");
-  ScopedEnv knobs("ORCA_TEST", "1");
+  ScopedEnv delay("ORCA_TEST_NET_DELAY_MS", nullptr);
   for (const char* queue : {"casual", "ranked"})
   {
     const auto trace = TraceRoomForTest(QueueTraceOptions(), {
@@ -346,6 +345,30 @@ TEST(OrcaRoomPingRange, ProbeEchoIsImmediateAndPreservesTheReceivedNonce)
         R"({"n":"b3fdc99d-64e1-4c92-9967-d81e6e873073","t":"probe-ack"})"}));
     EXPECT_EQ(trace[3].sent, (std::vector<std::string>{
         R"({"n":"quote\"slash\\","t":"probe-ack"})"}));
+  }
+}
+
+TEST(OrcaRoomPingRange, AgentDelayHoldsBothProbeAndAckForTheRoundTrip)
+{
+  ScopedEnv session("ORCA_SESSION", "1");
+  ScopedEnv delay("ORCA_TEST_NET_DELAY_MS", "1000");
+  ScopedEnv jitter("ORCA_TEST_NET_JITTER_MS", "0");
+  for (const char* queue : {"casual", "ranked"})
+  {
+    SCOPED_TRACE(queue);
+    const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+        {RK::Message, 0, QueueRoster("welcome", queue)},
+        {RK::FlushHeld, 1000},  // Clear the delayed join before measuring the probe.
+        {RK::SocketMessage, 1100, R"({"t":"probe","n":"delayed"})"},
+        {RK::FlushHeld, 2099}, {RK::FlushHeld, 2100},
+        {RK::FlushHeld, 3099}, {RK::FlushHeld, 3100}, {RK::FlushHeld, 4100},
+    });
+    EXPECT_EQ(trace[1].sent, (std::vector<std::string>{R"({"probe":1,"t":"join"})"}));
+    for (size_t i = 2; i < 6; ++i)
+      EXPECT_TRUE(trace[i].sent.empty()) << i;
+    EXPECT_EQ(trace[6].sent, (std::vector<std::string>{
+        R"({"n":"delayed","t":"probe-ack"})"}));
+    EXPECT_TRUE(trace[7].sent.empty());
   }
 }
 
