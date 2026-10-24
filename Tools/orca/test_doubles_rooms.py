@@ -18,6 +18,11 @@ spec.loader.exec_module(fixture)
 
 
 class CoSeatFixtureTest(unittest.TestCase):
+    def test_only_local_pairs_agree_the_co_seat_capability(self):
+        self.assertEqual(fixture.role_caps(0, {0: 2}, None), "caps join leave stats coseats\n")
+        self.assertEqual(fixture.role_caps(1, {0: 2}, None), "caps join leave stats\n")
+        self.assertEqual(fixture.role_caps(0, {}, "ranked"), "caps join leave stats host results locks\n")
+
     def test_emulator_working_directory_is_its_isolated_user(self):
         class Inspected(Exception):
             pass

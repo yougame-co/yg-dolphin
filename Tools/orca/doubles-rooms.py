@@ -87,6 +87,11 @@ def local_counts(values):
     return {int(role): 2 for role in counts}
 
 
+def role_caps(role, local, queue_mode):
+    return ("caps join leave stats" + (" coseats" if role in local else "") +
+            (" host results locks" if queue_mode else "") + "\n")
+
+
 def isolated_host(host):
     if host == "localhost":
         return True
@@ -1323,8 +1328,7 @@ def run(args):
                             output.put(line.rstrip())
                 threading.Thread(target=read_output, daemon=True).start()
                 players.append((role, process, stderr, lines))
-                process.stdin.write("caps join leave stats" + (" coseats" if local else "") +
-                                    (" host results locks" if args.queue else "") + "\n")
+                process.stdin.write(role_caps(role, local, args.queue))
                 if input_path and local:
                     # One script may contain independent rules for both of this role's ports.
                     process.stdin.write("test-input " + str(Path(input_path).resolve()) + "\n")
