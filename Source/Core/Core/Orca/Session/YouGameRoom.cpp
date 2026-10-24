@@ -1348,6 +1348,7 @@ struct YouGameRoom::Impl
   bool queue_known = false;
   bool welcome_recovery = false;  // Only the welcome room.recovery boolean can opt a queue in.
   bool ticket_tourney = false;
+  bool probe_room = false;  // I/O thread: authoritative queue welcome, excluding tournaments.
   bool stay = false;
   bool doubles = false;
   int room_size = MAX_SEATS;
@@ -5203,11 +5204,17 @@ struct YouGameRoom::Impl
         test_held_socket.reset();
         FlushReportOutbox(true);
       }
-      std::lock_guard lock(mutex);
-      NOTICE_LOG_FMT(NETPLAY, "Orca room: in room {} on seat {}, {}", code, seat + 1,
-                     joining ? "joining" : "hosting");
-      if (state == RoomState::Connecting)
-        state = RoomState::Waiting;
+      {
+        std::lock_guard lock(mutex);
+        probe_room = queue_known && !ticket_tourney && (queue == "casual" || queue == "ranked");
+        NOTICE_LOG_FMT(NETPLAY, "Orca room: in room {} on seat {}, {}", code, seat + 1,
+                       joining ? "joining" : "hosting");
+        if (state == RoomState::Connecting)
+          state = RoomState::Waiting;
+      }
+      // rooms/src/index.ts (741160657):3418 accepts this after the queue welcome, including rejoin.
+      if (probe_room)
+        SendJson({{"t", picojson::value("join")}, {"probe", picojson::value(1.0)}});
     }
     else if (t == "recovering" && QueueRecovery())
     {

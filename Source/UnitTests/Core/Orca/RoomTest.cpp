@@ -282,6 +282,53 @@ RoomOptions QueueTraceOptions(bool joining = true)
 }
 }  // namespace
 
+TEST(OrcaRoomPingRange, QueueWelcomesAdvertiseProbeOnJoin)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const bool joining : {false, true})
+    {
+      SCOPED_TRACE(fmt::format("{} joining={}", queue, joining));
+      const auto welcome = QueueRoster("welcome", queue, "true", joining);
+      const auto trace = TraceRoomForTest(QueueTraceOptions(joining), {
+          {RK::Message, 0, welcome}, {RK::SocketClose, 1000}, {RK::Message, 2000, welcome},
+      });
+      for (const size_t step : {0u, 2u})
+        EXPECT_EQ(trace[step].sent,
+                  (std::vector<std::string>{R"({"probe":1,"t":"join"})"}));
+    }
+  }
+}
+
+TEST(OrcaRoomPingRange, FriendsAndTournamentJoinsKeepTheirBytes)
+{
+  ScopedEnv direct("ORCA_DIRECT", "1");
+  for (const bool joining : {false, true})
+  {
+    for (const char* queue : {"private", "casual", "ranked"})
+    {
+      SCOPED_TRACE(fmt::format("{} joining={}", queue, joining));
+      const auto welcome = QueueRoster("welcome", queue, "true", joining);
+      const auto trace = TraceRoomForTest(TraceOptions(joining), {
+          {RK::Tournament, 0}, {RK::Message, 0, welcome},
+      });
+      EXPECT_TRUE(trace.back().sent.empty());
+    }
+    auto options = TraceOptions(joining);
+    options.recovery_enabled = false;  // No random private recovery identity in this wire golden.
+    const auto friends = TraceRoomForTest(options, {
+        {RK::Message, 0, RosterMessage("welcome", joining)},
+        {RK::Tick, 1000},
+    });
+    EXPECT_TRUE(friends[0].sent.empty());
+    // Captured from 0.3.83 with one seat: no capability fields in the peer hello.
+    ASSERT_EQ(friends[1].sent.size(), 2u);  // Normal timestamped ping, then hello.
+    EXPECT_EQ(friends[1].sent[1], fmt::format(
+        R"({{"d":{{"c":"test","dl":1,"h":{},"k":"hello","r":false}},"t":"msg","to":"peer"}})",
+        !joining));
+  }
+}
+
 TEST(OrcaRoomRecovery, PublicRoomsNeedAnExactWelcomeOptIn)
 {
   for (const char* queue : {"casual", "ranked"})
