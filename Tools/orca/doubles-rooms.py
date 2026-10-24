@@ -161,6 +161,7 @@ class Rooms:
         self.offers = []
         self.captures = {}
         self.hashes = {}
+        self.activity = {}
         self.frames = {}
         self.reports = {}
         self.expired = set()
@@ -391,6 +392,8 @@ class Rooms:
         return {"active": active, "reports": reports,
                 "local_seats": {name: list(seats.values()) for (code, name), seats in self.locals.items()
                                 if code == room},
+                "input_activity": {name: sorted(seats) for (code, name), seats in self.activity.items()
+                                   if code == room},
                 "offers": list(self.offers), "version_events": list(self.version_events),
                 "commands": list(self.commands), "drops": list(self.drops),
                 "lost_receipts": list(self.lost_receipts),
@@ -403,6 +406,14 @@ class Rooms:
             if packet.get("k") == "p":
                 key = (room, player)
                 self.frames[key] = max(self.frames.get(key, 0), packet.get("c", 0))
+                inputs = [(packet.get("s", -1), packet.get("p", "")), *packet.get("co", [])]
+                for slot, pads in inputs:
+                    if not isinstance(slot, int) or slot < 0 or slot >= 4:
+                        continue
+                    samples = [bytes.fromhex(pads[index:index + 16])
+                               for index in range(0, len(pads), 16)]
+                    if any(len(pad) == 8 and not pad[0] & 0x80 and any(pad) for pad in samples):
+                        self.activity.setdefault(key, set()).add(slot)
             if packet.get("k") == "p" and "x" in packet and "h" in packet:
                 self.hashes.setdefault((room, player), {})[str(packet["x"])] = packet["h"]
 
@@ -1188,7 +1199,7 @@ def run(args):
     for name, default in {"role_binary": [], "expect_version_refusal": [], "queue": None,
                           "expect_queue_ending": None, "expect_report_replay": False,
                           "expect_ranked_reconciliation": False, "expect_fight": [],
-                          "local": []}.items():
+                          "local": [], "scratch": None}.items():
         if not hasattr(args, name):
             setattr(args, name, default)
     address = urllib.parse.urlsplit(args.site)
@@ -1490,6 +1501,13 @@ def run(args):
             if refused:
                 diagnostics["active"] = [name for name in diagnostics["active"]
                                          if name not in {f"Doubles{role}" for role in refused}]
+            for role in local:
+                if not role_inputs.get(str(role), args.input):
+                    continue
+                name = f"Doubles{role}"
+                expected_ports = {ports_by_role[role] - 1, *diagnostics["local_seats"].get(name, [])}
+                if not expected_ports <= set(diagnostics["input_activity"].get(name, [])):
+                    raise RuntimeError(f"peer {role} did not drive both scripted local ports")
             if args.queue:
                 verify_queue_run(args, work, diagnostics, queue_errors)
             if args.expect_queue_ending or args.expect_report_replay or args.expect_ranked_reconciliation:

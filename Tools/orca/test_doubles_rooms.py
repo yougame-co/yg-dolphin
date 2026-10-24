@@ -18,6 +18,12 @@ spec.loader.exec_module(fixture)
 
 
 class CoSeatFixtureTest(unittest.TestCase):
+    def test_packet_activity_covers_both_local_ports(self):
+        rooms = fixture.Rooms()
+        rooms.record("co", "Doubles1", {"k": "p", "s": 2, "c": 1,
+                     "p": "0001000000000000", "co": [[3, "0002000000000000"]]})
+        self.assertEqual(rooms.diagnostics("co")["input_activity"], {"Doubles1": [2, 3]})
+
     def test_two_local_seats_keep_one_connection_and_lowest_free_ports(self):
         rooms = fixture.Rooms()
         self.assertIsNone(rooms.admit("co", {"p": "Doubles0"}))
