@@ -4195,6 +4195,68 @@ select X, Y, Z, L and R do nothing, and Start takes a stage.
 **Not yet:** a screenshot check of the grey tiles and the overlay lines (Luis tests the look); a
 two-Orca drop-in mid-select; Brawl's exact Supernova order (Phase 4).
 
+### Stage lists checked against the community (2026-10-06, proposal `ux=21`)
+
+Historical proposal below; ported to 0.3.82 on 2026-10-24. Casual keeps the train's existing rules.
+
+After the public launch, X posts said the ranked list wasn't "the right proposed stage list" (a
+Project+ player) and questioned the forced Meta Knight stage clause (a Brawl player; another
+replied that it is community standard). Luis's decision: keep the Meta Knight clause, match the
+lists to the current community ranked lists, and see the differences before anything ships.
+
+**Brawl: Supernova 2026 replaces Supernova 2025.** The Supernova Official Rulebook, section 6
+(Google Doc `1w6SDL0jvtRSkO9nNFmDIB__siuiLvZLuujorcXNS1D8`, "Last Revised July 25, 2026"; linked
+from start.gg `tournament/supernova-2026/details`). Supernova 2026 (Baltimore, 2026-08-06..09,
+152 Brawl singles entrants) was the largest Brawl event this year, and locals reuse Supernova's
+section 6 word for word (Terry Christmas 5, 2025-12-20, pasted the 2025 one into its start.gg
+rules). Changes from 2025:
+
+| | Supernova 2025 (was) | Supernova 2026 (now) |
+|---|---|---|
+| Starters | BF, Pokemon Stadium (Melee), Lylat, Smashville, Yoshi's Island (Brawl) | BF, Final Destination, Lylat, Smashville, Yoshi's Island (Brawl) |
+| Counterpicks | Final Destination*, Delfino Plaza | Delfino Plaza, Frigate Orpheon, Pokemon Stadium (Melee) |
+| Game 1 | RPS, strikes 1-2-2-1 (P1, P2, P2, P1) | the same (or G&W's hammer instead of RPS) |
+| Later games | winner may ban 1, loser picks, DSR | winner may ban 2, loser picks, DSR |
+| MK stage clause | yes | yes ("if both pick MK it doesn't apply") |
+| Ice Climbers | *never on FD | no such rule |
+| Ledge-grab limit | 35 (MK 20); tiebreak 11 (MK 6) | 30 (MK 20); tiebreak 10 (MK 6) |
+
+Orca's flow already does 1-2-1 with the header's coin (the coin replaces RPS), DSR and the MK
+clause; this track changes only the stage table (`RankedSteps.cpp` MakeBrawl: 8 stages, 2 optional
+bans, no IC/FD), the stage select glue (`BrawlStages` tiles and srStageKinds, Frigate `0x0C`; the
+two-cursor rectangles), and the Random Stage Switch mask (`0x04005807`, Frigate is stage select id
+`0x0B`). The ledge-grab limits (`RankedSet`/Results) are still 2025's: a separate change.
+
+On the MK clause: one reply says the last two tournaments (and that night's) didn't have it. Both
+Supernova rulebooks do, and Luis keeps it.
+
+**Project+: no change; 2024 Proposed is still the newest Proposed list.** Project+ v3.2 (released
+2026-08-05, `Project-Plus-Development-Team/PPlusReleases`) ships these Random Stage Select presets
+(`pf/stage/switch/SwitchNN.rss`, decoded from page 0's slots through the slot table at +0x104 and
+`pf/stage/stageslot/Stageslot IDs.txt`); names from the 3.0.1 and 3.2 changelogs
+(`pplus-website/app/changes/data/3.0.1.json`, `3.2.json`):
+
+| File | Stages | Preset |
+|---|---|---|
+| Switch00 | 21 | Legal stages (default) |
+| Switch01 | WL, FoD, FD, Metal Cavern, DL, GHZ, SV, BF, PS2, Delfino's Secret | PMBR |
+| Switch02 | YI, Frigate Husk, DL, ToT, SV, BF, PS2, LM | 2023 Proposed |
+| Switch03 | GHZ, Bowser's Castle, Frigate Husk, DL, ToT, SV, BF, PS2, LM | 2024 Proposed (Orca's) |
+| Switch04 | Switch03 with Fountain of Dreams (hazards on) for Bowser's Castle | Midwest (new in 3.2) |
+| Switch05 | GHZ, ToT, Sky Sanctuary, FH, DL, YI, SV, BF, PS2, LM | Australia or Japan |
+| Switch06 | YI, GHZ, FD, FH, DL, ToT, SV, BF, PS2, LM | Australia or Japan |
+| Switch07 | 21 | All stages |
+
+The 2024 Proposed doc (Google Doc `1G1b14fgT9APjgCbJ5jB0yUZv-Jh7oBVCXWHzn7auEPM`, posted
+2024-06-24 with Project+ v3.0): singles BF, PS2, SV, Luigi's Mansion v2, Temple of Time; counterpicks
+GHZ (low swing, hazards off), Bowser's Castle, Frigate Husk, Dream Land (no wind); "Initial stage
+striking is as normal, 1-2-1", "Two bans in both Best of 3 and Best of 5", "DSR is in play". Orca's
+`PPlus2024()` matches it exactly. Regions still differ (Exodus 2026, NorCal, ran start.gg's "PMBR
+Recommended"; Invincible VIII ran 2023 Proposed in 2024), but no newer Proposed list exists in the
+game or its changelogs. A guess at the complaint: a friends room (no header) keeps the player's own
+preset, which defaults to "Legal stages" (21 stages), not 2024 Proposed.
+
+
 ## Casual stage pick
 
 A casual queue match's stage (Luis, 2026-10-04: "A stage is picked at random between the two

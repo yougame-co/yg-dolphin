@@ -1922,11 +1922,11 @@ opponent unplugs; ranked stays locked while the set is open.
 
 **The locks** (first runs and re-runs, only bytes that differ):
 
-| | Brawl (Supernova 2025) | Project+ (2024) |
+| | Brawl | Project+ (2024) |
 |---|---|---|
 | Rules | stock, 3 stocks, 8:00, handicap off, team attack on, pause off | the same with 4 stocks |
 | Items | none | none |
-| Legal stages | Battlefield, Final Destination, Delfino, Yoshi's Island, Lylat, Smashville, Pokemon Stadium; FD off while a human picked Ice Climbers | the 2024 Proposed list (preset 3, `Switch03.rss`): 9 stages, hazards off |
+| Legal stages | Ranked: Supernova 2026, BF, FD, Lylat, Smashville, YI; counterpicks Delfino, Frigate Orpheon, PS1. Casual: the existing seven stages, FD off with Ice Climbers | the 2024 Proposed list (preset 3, `Switch03.rss`): 9 stages, hazards off |
 | Input gate | character select: A only in the grid, B only to take the token back up; stage select: every port while the two cursors run (they act instead); fight: Start | the same, plus the D-pad on the character select, and D-pad Down while L and R are held in every scene (the Code Menu's chord) |
 | Code Menu | (none) | off, closed, every cheat and gameplay value at its default (below) |
 | Fighters | any | Giga Bowser and Wario-Man play as Bowser and Wario |
@@ -2095,8 +2095,9 @@ game's stage id, starter or counterpick), the stage steps' timers and the winner
 the Ice Climbers and Meta Knight clauses, the set (wins, stocks and minutes, who decides a time-out,
 the ledge-grab limits, the tiebreak game, how many ties void the set), the queue's character
 select (its ready timer, the B hold that skips), the ranked character order's turn time and the
-ranked character select's no-show timer. The builtin ones are `Orca/Games/Brawl/Rulesets/brawl-supernova-2025.json`
-(the match block's ruleset 1) and `pplus-2024.json` (2), compiled in byte for byte
+ranked character select's no-show timer. The builtin files are
+`Orca/Games/Brawl/Rulesets/brawl-supernova-2026.json` (ranked, match block ruleset 1),
+`brawl-supernova-2025.json` (casual, unchanged) and `pplus-2024.json` (2), compiled in byte for byte
 (`Games/Brawl/Rulesets.*`).
 
 Every ruleset is read the same way (`Orca/Engine/Ruleset.*`): a strict JSON reader
@@ -2121,16 +2122,18 @@ pack format names none).
 ### Ranked steps
 
 `Orca/UX/RankedSteps.*` (namespace `Ranked`): pure functions of a ruleset and the set so far, shared
-by both games. Stages are the ruleset's legal list, starters first, as bit masks.
+by both games. Stages are the ruleset's legal list as bit masks. Brawl keeps the existing seven
+indices for casual; ranked adds Frigate at index 7 and changes the starter mask to `0x3D`.
 
 - **Game 1:** the coin's port strikes 1 starter, the other strikes 2, then the coin's port picks one
   of the last two. The coin is one bit of an FNV-1a hash of the room code (the server makes the code,
   neither player picks it).
-- **Later games:** the last game's winner strikes 2 (Project+) or may ban 1 (Brawl, optional: Y
-  skips), then the loser picks, never a stage they already won on (full DSR; dropped if it leaves
+- **Later games:** the last game's winner strikes 2 (Project+) or may ban 2 (Brawl, optional: Y
+  skips the bans left), then the loser picks, never a stage they already won on (full DSR; dropped if it leaves
   nothing).
 - **Brawl only:** the Meta Knight clause (exactly one Meta Knight, character `0x18`: the other player
-  picks any legal stage, over strikes, bans and DSR) and Ice Climbers never on Final Destination.
+  picks any legal stage, over strikes, bans and DSR). Ranked permits Ice Climbers on Final
+  Destination under Supernova 2026; casual retains its existing restriction.
 - **Timers:** game 1's steps 30, 30 and 10 s, a later strike, ban or pick 30 s, each with 3 s of
   grace at 0:00. When one runs out, the remaining strikes fall on the first allowed stages, the ban
   is skipped, a pick takes the first allowed stage.

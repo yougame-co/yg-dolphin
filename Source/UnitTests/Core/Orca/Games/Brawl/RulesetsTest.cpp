@@ -127,7 +127,7 @@ TEST(OrcaRulesets, BuiltinsAreTheOldTables)
   EXPECT_EQ(p.queue_skip_frames, 90);
   EXPECT_EQ(p.order_pick_seconds, 45);
 
-  EXPECT_EQ(Orca::UX::Rulesets::ByBlock(1), &b);
+  EXPECT_EQ(Orca::UX::Rulesets::ByBlock(1), &Orca::UX::Rulesets::Brawl2026());
   EXPECT_EQ(Orca::UX::Rulesets::ByBlock(2), &p);
   for (const int block : {0, 3, 255})
     EXPECT_EQ(Orca::UX::Rulesets::ByBlock(static_cast<u8>(block)), nullptr);
@@ -174,4 +174,34 @@ TEST(OrcaRulesets, StageIdsComeFromTheRuleset)
     EXPECT_EQ(Orca::UX::RankedPPlus::LegalIndexOfKind(pplus[i]), static_cast<int>(i));
   EXPECT_EQ(Orca::UX::RankedPPlus::LegalIndexOfKind(0x02), -1);
   EXPECT_EQ(Orca::UX::RankedPPlus::LegalIndexOfKind(0), -1);
+}
+
+TEST(OrcaRulesets, RankedBrawlUsesSupernova2026StagesAndTwoOptionalBans)
+{
+  const Ranked::Ruleset* r = Orca::UX::Rulesets::ByBlock(1);
+  ASSERT_NE(r, nullptr);
+  EXPECT_EQ(r->slug, "brawl-supernova-2026");
+  ASSERT_EQ(r->stage_count, 8);
+  for (int i = 0; i < r->stage_count; ++i)
+  {
+    const u8 kind = r->stage_kinds[i];
+    const bool starter = kind == 1 || kind == 2 || kind == 19 || kind == 33 || kind == 13;
+    EXPECT_EQ((r->starters & (1 << i)) != 0, starter) << i;
+  }
+  EXPECT_EQ(r->All(), 0xFF);
+  EXPECT_EQ(r->later_count, 2);
+  EXPECT_TRUE(r->later_optional);
+  EXPECT_EQ(r->ic_banned_stage, -1);
+  EXPECT_EQ(r->meta_knight, 24);
+  Ranked::SetView set;
+  set.game = 2;
+  set.last_winner = 0;
+  const Ranked::Plan plan = Ranked::PlanGame(*r, set);
+  Ranked::Progress progress = Ranked::Begin(*r, plan);
+  ASSERT_EQ(plan.steps.size(), 2u);
+  EXPECT_EQ(plan.steps[0], (Ranked::Step{Ranked::StepKind::Ban, 0, 2, true, 30}));
+  EXPECT_TRUE(Ranked::Strike(*r, plan, &progress, 6));
+  EXPECT_EQ(progress.step, 0);
+  EXPECT_TRUE(Ranked::Strike(*r, plan, &progress, 7));
+  EXPECT_EQ(progress.step, 1);
 }
