@@ -5307,13 +5307,16 @@ struct YouGameRoom::Impl
         const auto error = Str(m, "error");
         RefuseLocal(action, error == "not-doubles" || error == "queue" || error == "no-cap" ?
                                 error : "in-match");
-        co_wait_until.reset();
+        if (action == "local-add")
         {
-          std::lock_guard lock(mutex);
-          local_add_pending = false;
+          co_wait_until.reset();
+          {
+            std::lock_guard lock(mutex);
+            local_add_pending = false;
+          }
+          co_wait_expired = false;
+          last_hello = {};
         }
-        co_wait_expired = false;
-        last_hello = {};
       }
       WARN_LOG_FMT(NETPLAY, "Orca room: {} refused: {}", Str(m, "action"), Str(m, "error"));
       // A void refused while the match's games were still being decided goes again shortly.

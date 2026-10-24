@@ -7808,3 +7808,22 @@ TEST(OrcaRoom, PrivateRoomKindEnablesCoSeatsAfterAQueuedFriendJoin)
   EXPECT_EQ(picojson::value(trace[0].mirror).get("lobby").get("maxLocalPlayers").get<double>(), 2);
   EXPECT_EQ(trace[1].sent, (std::vector<std::string>{R"({"t":"local-add"})"}));
 }
+
+TEST(OrcaRoom, CoRemoveErrorDoesNotResolveAPendingAdd)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
+      {RK::Message, 0, CoPageWelcome(true, "private", true)}, {RK::PageEvent, 1, CO_PAGE_ADD},
+      {RK::Message, 2, PeerHello(true)},
+      {RK::Message, 3, R"({"t":"command-error","action":"local-remove","error":"Only your additional local players can be removed"})"},
+      {RK::Tick, 1000}, {RK::SessionActive, 1001, "", 1},
+      {RK::Message, 3000, CoRoster("lobby", true, true, false)}, {RK::Tick, 3001}});
+  EXPECT_FALSE(HasRoomKind(trace[4], "hello"));
+  ASSERT_TRUE(trace[5].input_held);
+  EXPECT_FALSE(*trace[5].input_held);
+  EXPECT_EQ(trace[6].co_seats, (std::vector<int>{2}));
+  EXPECT_TRUE(HasRoomKind(trace[7], "hello"));
+}
