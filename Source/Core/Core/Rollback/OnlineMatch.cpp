@@ -1476,10 +1476,12 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   bool locals_changed = false;
   if (!match.session && (test_room || Orca::Online::InRoom()))
   {
-    const auto locals = test_room ? test_room->CoSeats() : Orca::Online::CoSeats();
-    locals_changed = locals != match.co_seats;
-    match.co_seats = locals;
-    Orca::UX::SetLocalPadCount(match.co_seats.empty() ? 1 : 2);
+    if (const auto locals = test_room ? test_room->CoSeatsForSolo() : Orca::Online::CoSeatsForSolo())
+    {
+      locals_changed = *locals != match.co_seats;
+      match.co_seats = *locals;
+      Orca::UX::SetLocalPadCount(match.co_seats.empty() ? 1 : 2);
+    }
   }
   const bool in_room = test_room ? test_room->Connected() : Orca::Online::InRoom();
   const bool in_queue_room = test_room ? QueueMode(test_room->Queue()) != Orca::Engine::Mode::None :
@@ -5399,6 +5401,17 @@ std::vector<Pads> PumpSoloSeatsForTest(Core::System& system, const std::vector<i
   if (ports)
     *ports = PortsAt(match, frames);
   return match.log;
+}
+
+Pads PumpSoloRoomForTest(Core::System& system, Orca::Net::YouGameRoom& room)
+{
+  const Common::ScopeGuard reset_count([] { Orca::UX::SetLocalPadCount(1); });
+  Match match;
+  match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
+  match.origin_frame = 0;
+  HostEvents(system, match, &room, true);
+  RunSolo(match, [](int) { return Pad{}; });
+  return match.log.back();
 }
 
 std::optional<Pad> PumpSeenLocalPadForTest(int lead, const std::vector<int>& co_seats,

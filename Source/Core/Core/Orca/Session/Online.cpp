@@ -543,6 +543,12 @@ std::vector<int> CoSeats()
   return room ? room->CoSeats() : std::vector<int>{};
 }
 
+std::optional<std::vector<int>> CoSeatsForSolo()
+{
+  const auto room = Room();
+  return room ? room->CoSeatsForSolo() : std::optional(std::vector<int>{});
+}
+
 int LocalIndex(int seat)
 {
   const auto room = Room();

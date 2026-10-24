@@ -8155,3 +8155,27 @@ TEST_F(OrcaRoomRuntime, LocalRosterCountSurvivesMissingDevicesAndIgnoresStraySea
                             "orca seats 1=pad:0 2=pad:1 3=none 4=none\n" : "");
   }
 }
+
+TEST(OrcaRoom, SoloHostDoesNotPlugALocalSeatDuringAddCleanup)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  std::vector<Pads> frames;
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, CoPageWelcome(false, "private", true)}, {RK::PageEvent, 1, CO_PAGE_ADD},
+      {RK::Tick, 10001}, {RK::Message, 11000, CoRoster("lobby", false, true, false)},
+      {RK::Tick, 11001}, {RK::Message, 12000, CoPageWelcome(false, "private", true)},
+      {RK::PageEvent, 12001, CO_PAGE_ADD},
+      {RK::Message, 12002, CoRoster("lobby", false, true, false)}},
+      [&](YouGameRoom& room) {
+        frames.push_back(Rollback::OnlineMatch::PumpSoloRoomForTest(core.system, room));
+      });
+  ASSERT_EQ(trace[3].co_seats, (std::vector<int>{2}));  // Raw roster, still being cancelled.
+  ASSERT_EQ(frames.size(), 8u);
+  for (size_t frame = 0; frame < 7; ++frame)
+    EXPECT_EQ(frames[frame][2], UNPLUGGED_PAD) << frame;
+  EXPECT_EQ(frames[7][2], Pad{});  // A later, completed Add really plugs it.
+}

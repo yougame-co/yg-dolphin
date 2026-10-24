@@ -5799,7 +5799,8 @@ YouGameRoom::YouGameRoom(RoomOptions options, bool start_io)
 YouGameRoom::~YouGameRoom() = default;
 
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
-                                             const std::vector<RoomTestStep>& steps)
+                                             const std::vector<RoomTestStep>& steps,
+                                             const std::function<void(YouGameRoom&)>& observe)
 {
   YouGameRoom owner(options, false);
   auto& room = *owner.m_impl;
@@ -5917,6 +5918,8 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
         room.End(room.RoomRefusalReason(step.text), RefusalCode(step.text));
       break;
     }
+    if (observe)
+      observe(owner);
     trace.push_back({room.state, std::exchange(room.events, {}), std::exchange(room.inbox, {}),
                      room.host_away_until, room.reconnect.since.has_value(), reconnect_started,
                      std::exchange(room.test_sent, {}), room.reconnect.attempts,
@@ -5960,6 +5963,14 @@ int YouGameRoom::Seat() const
 std::vector<int> YouGameRoom::CoSeats() const
 {
   std::lock_guard lock(m_impl->mutex);
+  return m_impl->my_co_seats;
+}
+
+std::optional<std::vector<int>> YouGameRoom::CoSeatsForSolo() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  if (m_impl->local_add_pending)
+    return std::nullopt;
   return m_impl->my_co_seats;
 }
 

@@ -117,6 +117,7 @@ std::optional<bool> Joining();
 Net::Transport* Transport();
 int Seat();
 std::vector<int> CoSeats();
+std::optional<std::vector<int>> CoSeatsForSolo();
 void SetSessionActive(bool active);
 bool TryStartSession(const std::vector<int>& co_seats);
 int LocalIndex(int seat);
