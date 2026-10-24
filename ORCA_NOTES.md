@@ -7551,3 +7551,8 @@ suite, all 12 hashlog boots and all five standalone replays passed as recorded a
 processes had already exited when cleanup was checked; no process was killed. `imgui.ini` was
 already untracked at resume and remains untouched. All changes are local; no push or external
 service request was made.
+
+**2026-10-24 staging follow-up:** YG Dolphin 0.3.82 shipped to staging at 6:09am ET.
+Its live online checks passed: Brawl ranked through the new stage select 226/226 checksums,
+casual 102/102; P+ 3.2.1b casual 104/104, ranked 228/228. The version and unrun queue2
+pairs described above were the earlier review state, superseded by these staging results.
