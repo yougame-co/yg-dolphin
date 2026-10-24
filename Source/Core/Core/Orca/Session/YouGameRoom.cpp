@@ -3028,7 +3028,10 @@ struct YouGameRoom::Impl
     picojson::object lobby;
     lobby["version"] = picojson::value(1.0);
     lobby["minPlayers"] = picojson::value(2.0);
-    lobby["maxLocalPlayers"] = picojson::value(1.0);
+    {
+      std::lock_guard lock(mutex);
+      lobby["maxLocalPlayers"] = picojson::value(CoSeatsEnabledLocked() ? 2.0 : 1.0);
+    }
     lobby["compatibility"] = picojson::value(options.compatibility);
     picojson::object room;
     room["type"] = picojson::value("mpRoom");
@@ -3157,6 +3160,12 @@ struct YouGameRoom::Impl
   }
 
   // One event from the app's stream: a lobby command the page sent this game.
+  bool CoSeatsEnabledLocked() const
+  {
+    return Orca::Status::Cap("coseats") && Env("ORCA_COSEATS") != "0" &&
+           doubles && queue == "private" && options.friends_room && !ticket_tourney;
+  }
+
   void OnPageEvent(const std::string& line)
   {
     picojson::value value;
@@ -5655,6 +5664,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                      std::exchange(room.test_results, {}), room.WaitingDeadlineLocked(),
                      owner.RoomRecovering(*room.test_now), input_held});
     auto& snapshot = trace.back();
+    snapshot.mirror = room.RoomMirror(false);
     snapshot.host_input_deadline = owner.HostAwayDeadline();
     snapshot.seat = owner.Seat();
     snapshot.co_seats = owner.CoSeats();

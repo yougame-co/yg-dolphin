@@ -495,6 +495,7 @@ struct RoomTestSnapshot
   std::array<std::vector<int>, MAX_SEATS> groups;
   std::vector<int> linked_seats;
   std::optional<std::chrono::steady_clock::time_point> host_input_deadline;
+  picojson::object mirror;
 };
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                              const std::vector<RoomTestStep>& steps);

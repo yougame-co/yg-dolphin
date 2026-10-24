@@ -7398,3 +7398,38 @@ TEST_F(OrcaRoomRuntime, LocalOrdinalUsesPositionAfterRemoveAndReadd)
   EXPECT_EQ(Orca::Online::LocalIndex(1), -1);
   EXPECT_EQ(Orca::Online::LocalIndex(-1), -1);
 }
+
+namespace
+{
+std::string CoPageWelcome(bool joining, const char* queue, bool doubles, bool mine = false)
+{
+  picojson::value value;
+  picojson::parse(value, CoRoster("welcome", joining, mine, false));
+  value.get<picojson::object>()["room"] = picojson::value(picojson::object{
+      {"queue", picojson::value(queue)}, {"doubles", picojson::value(doubles)}});
+  return value.serialize();
+}
+}  // namespace
+
+TEST(OrcaRoom, CoPageMirrorRequiresFriendsDoublesAndAgreedCap)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv enabled("ORCA_COSEATS", "1");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  for (const char* queue : {"private", "casual", "ranked"})
+    for (const bool doubles : {false, true})
+      for (const bool cap : {false, true})
+      {
+        SCOPED_TRACE(fmt::format("{} doubles={} cap={}", queue, doubles, cap));
+        Orca::Status::SetAppCaps(cap ? "coseats" : "");
+        const auto welcome = CoPageWelcome(false, queue, doubles, true);
+        const auto trace = TraceRoomForTest(TraceOptions(false), {{RK::Message, 0, welcome}});
+        const picojson::value mirror(trace.back().mirror);
+        EXPECT_EQ(mirror.get("lobby").get("maxLocalPlayers").get<double>(),
+                  cap && doubles && std::string_view(queue) == "private" ? 2 : 1);
+        picojson::value original;
+        ASSERT_TRUE(picojson::parse(original, welcome).empty());
+        EXPECT_EQ(mirror.get("participants"), original.get("participants"));
+        EXPECT_EQ(mirror.get("me"), original.get("me"));
+      }
+}
