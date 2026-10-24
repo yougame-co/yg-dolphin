@@ -13,7 +13,6 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/ScopeGuard.h"
-#include "Core/Orca/Profile.h"
 #include "Core/Core.h"
 #include "Core/Orca/BootThrottle.h"
 #include "Core/Orca/Session/Online.h"
@@ -160,8 +159,10 @@ TEST_F(OrcaHarnessInput, OfflineScriptKeepsUnthrottledPacing)
 
 TEST_F(OrcaHarnessInput, StdinScriptKeepsBothLocalPortsIndependent)
 {
-  const auto commands = Orca::GetEnv("ORCA_TEST_COMMANDS");
-  const auto dev = Orca::GetEnv("ORCA_TEST_DEV_GAME");
+  const char* commands_env = std::getenv("ORCA_TEST_COMMANDS");
+  const char* dev_env = std::getenv("ORCA_TEST_DEV_GAME");
+  const std::string commands = commands_env ? commands_env : "";
+  const std::string dev = dev_env ? dev_env : "";
   const auto directory = File::CreateTempDir();
   const std::string script = directory + "/co-input.txt";
   Common::ScopeGuard restore([&] {
