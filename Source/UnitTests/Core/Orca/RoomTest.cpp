@@ -7827,3 +7827,23 @@ TEST(OrcaRoom, CoRemoveErrorDoesNotResolveAPendingAdd)
   EXPECT_EQ(trace[6].co_seats, (std::vector<int>{2}));
   EXPECT_TRUE(HasRoomKind(trace[7], "hello"));
 }
+
+TEST(OrcaRoom, CoCommandErrorsUseTheRoomsRefusalSentences)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  for (const auto& [error, reason] : std::vector<std::pair<const char*, const char*>>{
+      {"No local player slot is available", "full"},
+      {"Only your additional local players can be removed", "not-local"},
+      {"The set is over", "in-match"}, {"This match is complete", "in-match"},
+      {"A future room refusal", "room-refused"}})
+    for (const char* action : {"local-add", "local-remove"})
+    {
+      const auto trace = TraceRoomForTest(TraceOptions(true), {
+          {RK::Message, 0, CoPageWelcome(true, "private", true)},
+          {RK::Message, 1, fmt::format(
+              R"({{"t":"command-error","action":"{}","error":"{}"}})", action, error)}});
+      EXPECT_EQ(trace.back().notices, (std::vector<std::string>{fmt::format(
+          "Room: {} local player isn't available here ({})",
+          std::string_view(action) == "local-add" ? "Add" : "Remove", reason)}));
+    }
+}

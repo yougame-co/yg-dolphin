@@ -5305,8 +5305,11 @@ struct YouGameRoom::Impl
       if (action == "local-add" || action == "local-remove")
       {
         const auto error = Str(m, "error");
-        RefuseLocal(action, error == "not-doubles" || error == "queue" || error == "no-cap" ?
-                                error : "in-match");
+        const std::string reason = error == "No local player slot is available" ? "full" :
+            error == "Only your additional local players can be removed" ? "not-local" :
+            error == "The set is over" || error == "This match is complete" ? "in-match" :
+            "room-refused";
+        RefuseLocal(action, reason);
         if (action == "local-add")
         {
           co_wait_until.reset();
