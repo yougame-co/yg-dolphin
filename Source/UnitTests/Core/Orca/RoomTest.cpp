@@ -6826,7 +6826,8 @@ std::string CoRoster(const char* type, bool joining, bool mine, bool theirs,
   picojson::parse(value, RosterMessage(type, joining, include_peer));
   auto& participants = value.get<picojson::object>()["participants"].get<picojson::array>();
   if (mine)
-    participants.emplace_back(picojson::object{{"connectionId", picojson::value("me")},
+    participants.emplace_back(picojson::object{{"id", picojson::value("local:me:1")},
+        {"connectionId", picojson::value("me")},
         {"slot", picojson::value(2.0)}, {"localIndex", picojson::value(1.0)},
         {"name", picojson::value("Me 2")}});
   if (theirs && include_peer)
@@ -7535,36 +7536,103 @@ TEST(OrcaRoom, CoJoinerAddsBeforeHelloAndWaitsForItsRoster)
       "Room: Add local player isn't available here (in-match)"}));
 }
 
-TEST(OrcaRoom, CoJoinerTimeoutAndCommandErrorsContinueSingleSeat)
+namespace
+{
+bool HasRoomKind(const RoomTestSnapshot& snapshot, const char* kind)
+{
+  for (const auto& wire : snapshot.sent)
+  {
+    picojson::value value;
+    if (picojson::parse(value, wire).empty() && value.get("d").is<picojson::object>() &&
+        value.get("d").get("k").to_str() == kind)
+      return true;
+  }
+  return false;
+}
+const std::string CO_PAGE_ADD = R"({"slug":"co-page","cmd":"local-add"})";
+}
+
+TEST(OrcaRoom, CoJoinerLateAcceptKeepsHelloHeldUntilTheRoster)
 {
   const ScopedEnv session("ORCA_SESSION", "1");
   const ScopedEnv game("YOUGAME_GAME", "co-page");
-  const ScopedEnv enabled("ORCA_COSEATS", "1");
   Orca::Status::SetAppCaps("coseats");
   const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
-  auto options = TraceOptions(true);
-  const auto timeout = TraceRoomForTest(options, {
-      {RK::PageEvent, 0, R"({"slug":"co-page","cmd":"local-add"})"},
-      {RK::Message, 0, CoPageWelcome(true, "private", true)}, {RK::Tick, 2499}, {RK::Tick, 2500},
-      {RK::Message, 2600, CoRoster("lobby", true, true, false)}});
-  EXPECT_TRUE(timeout[2].notices.empty());
-  EXPECT_EQ(timeout[3].notices, (std::vector<std::string>{
-      "Room: Add local player timed out; continuing with one local player"}));
-  EXPECT_FALSE(timeout[3].sent.empty());
-  EXPECT_TRUE(timeout[4].co_seats.empty());
-  for (const char* action : {"local-add", "local-remove"})
-  {
-    const auto refused = TraceRoomForTest(options, {
-        {RK::PageEvent, 0, R"({"slug":"co-page","cmd":"local-add"})"},
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
       {RK::Message, 0, CoPageWelcome(true, "private", true)},
-        {RK::Message, 1, fmt::format(R"({{"t":"command-error","action":"{}","error":"queue"}})", action)},
-        {RK::Tick, 1000}});
-    EXPECT_EQ(refused[2].notices, (std::vector<std::string>{fmt::format(
-        "Room: {} local player isn't available here (queue)",
-        std::string_view(action) == "local-add" ? "Add" : "Remove")}));
-    EXPECT_TRUE(refused[2].co_seats.empty());
-    EXPECT_FALSE(refused[3].sent.empty());
+      {RK::PageEvent, 1, CO_PAGE_ADD}, {RK::Message, 2, PeerHello(true)},
+      {RK::Tick, 2501}, {RK::Tick, 9000},
+      {RK::Message, 9001, CoRoster("lobby", true, true, false)}, {RK::Tick, 9002}});
+  EXPECT_FALSE(HasRoomKind(trace[3], "hello"));
+  EXPECT_FALSE(HasRoomKind(trace[4], "hello"));
+  EXPECT_EQ(trace[5].co_seats, (std::vector<int>{2}));
+  EXPECT_TRUE(HasRoomKind(trace[6], "hello"));
+  EXPECT_TRUE(trace[3].notices.empty());
+}
+
+TEST(OrcaRoom, CoJoinerAddErrorResolvesTheHeldHello)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
+      {RK::Message, 0, CoPageWelcome(true, "private", true)},
+      {RK::PageEvent, 1, CO_PAGE_ADD}, {RK::Message, 2, PeerHello(true)},
+      {RK::Message, 3000, R"({"t":"command-error","action":"local-add","error":"No local player slot is available"})"},
+      {RK::Tick, 3001}});
+  EXPECT_TRUE(trace[3].co_seats.empty());
+  EXPECT_TRUE(HasRoomKind(trace[4], "hello"));
+}
+
+TEST(OrcaRoom, CoJoinerTimeoutCancelsBeforeSendingHelloOrLeaves)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  for (const bool removed : {false, true})
+  {
+    std::vector<RoomTestStep> steps{
+        {RK::Message, 0, CoPageWelcome(true, "private", true)},
+        {RK::PageEvent, 1, CO_PAGE_ADD}, {RK::Message, 2, PeerHello(true)},
+        {RK::Tick, 10000}, {RK::Tick, 10001},
+        {RK::Message, 11000, CoRoster("lobby", true, true, false)}, {RK::Tick, 11001}};
+    if (removed)
+      steps.push_back({RK::Message, 12000, CoPageWelcome(true, "private", true)});
+    steps.push_back({RK::Tick, 20001});
+    const auto trace = TraceRoomForTest(TraceOptions(true), steps);
+    EXPECT_TRUE(trace[3].notices.empty());
+    EXPECT_EQ(trace[4].notices, (std::vector<std::string>{
+        "Room: Add local player timed out; waiting for its removal"}));
+    EXPECT_FALSE(HasRoomKind(trace[4], "hello"));
+    EXPECT_FALSE(HasRoomKind(trace[6], "hello"));
+    bool remove_sent = false;
+    for (const auto& wire : trace[5].sent)
+    {
+      picojson::value value;
+      ASSERT_TRUE(picojson::parse(value, wire).empty());
+      remove_sent |= value.get("t").to_str() == "local-remove";
+    }
+    EXPECT_TRUE(remove_sent);
+    if (removed)
+    {
+      EXPECT_TRUE(trace[7].co_seats.empty());
+      EXPECT_TRUE(HasRoomKind(trace.back(), "hello"));
+    }
+    else
+    {
+      EXPECT_EQ(trace.back().state, RoomState::Ended);
+      EXPECT_EQ(trace.back().status, "Room: Local player removal did not finish; leave and rejoin the room");
+      EXPECT_FALSE(HasRoomKind(trace.back(), "hello"));
+    }
   }
+  // No response at all cannot prove whether the add was accepted: leave at the cleanup bound.
+  const auto missing = TraceRoomForTest(TraceOptions(true), {
+      {RK::Message, 0, CoPageWelcome(true, "private", true)}, {RK::PageEvent, 1, CO_PAGE_ADD},
+      {RK::Message, 2, PeerHello(true)}, {RK::Tick, 10001}, {RK::Tick, 20001}});
+  EXPECT_EQ(missing.back().state, RoomState::Ended);
+  EXPECT_FALSE(HasRoomKind(missing.back(), "hello"));
 }
 
 TEST_F(OrcaRoomRuntime, LaggingRoomRosterCannotRetireTheHostsOwnCoSeat)

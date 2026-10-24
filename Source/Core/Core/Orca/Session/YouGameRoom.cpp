@@ -60,7 +60,9 @@ constexpr auto SEND_GAP = std::chrono::milliseconds(10);
 constexpr auto PING_EVERY = std::chrono::seconds(1);
 constexpr auto HELLO_EVERY = std::chrono::seconds(1);
 // Two room round trips normally finish well inside this; stay below the 8 s host wait.
-constexpr auto CO_SEAT_WAIT = std::chrono::milliseconds(2500);
+// Allow delayed room round trips, then bound cleanup independently. Never enter a session
+// while the room may still assign us an unaccounted local participant.
+constexpr auto CO_SEAT_WAIT = std::chrono::seconds(10);
 constexpr size_t MAX_INBOX = 1024;
 // The server answers every ping (one a second), so a connection silent this long is dead even if
 // sends still succeed into the socket buffer (the network vanished, the laptop slept). Not much
@@ -1307,7 +1309,8 @@ struct YouGameRoom::Impl
   bool session_active = false;  // under mutex
   bool local_add_pending = false;  // under mutex: an accepted add reserves solo ownership
   std::optional<Clock::time_point> co_wait_until;
-  bool co_wait_expired = false;
+  bool co_wait_expired = false;  // cancellation: wait for the removal roster
+  std::set<std::string> co_removals;
   Clock::time_point last_heard{};
 
   // Under the desktop app, the room is mirrored to the YouGame page through the app's bridge
@@ -4253,7 +4256,7 @@ struct YouGameRoom::Impl
     // A joiner in a room without its friend's game (a stale invite, or a host that left, restarted
     // or arrived second) would wait forever for a keyframe, so it gives up soon after its welcome
     // unless the host has said hello. After that, the host's leave covers it.
-    if (joining && !host_seen && welcomed_at && now - *welcomed_at >= HOST_WAIT)
+    if (joining && !co_wait_until && !host_seen && welcomed_at && now - *welcomed_at >= HOST_WAIT)
     {
       End("Your friend isn't in that game any more", "peer_left");
       return;
@@ -4334,21 +4337,30 @@ struct YouGameRoom::Impl
     // every second until the newcomer's first packet arrives.
     if (co_wait_until)
     {
-      if (!my_co_seats.empty())
+      if (co_wait_expired)
+      {
+        if (now >= *co_wait_until)
+        {
+          const std::string line =
+              "Room: Local player removal did not finish; leave and rejoin the room";
+          LocalStatus(line);
+          End(line, "room-refused");
+          return;
+        }
+      }
+      else if (!my_co_seats.empty())
       {
         co_wait_until.reset();
         last_hello = {};
       }
-      else if (now >= *co_wait_until || !Orca::Status::Cap("coseats"))
+      else if (now >= *co_wait_until)
       {
-        {
-          std::lock_guard lock(mutex);
-          local_add_pending = false;
-        }
-        co_wait_until.reset();
         co_wait_expired = true;
-        LocalStatus("Room: Add local player timed out; continuing with one local player");
-        last_hello = {};
+        co_wait_until = now + CO_SEAT_WAIT;
+        LocalStatus("Room: Add local player timed out; waiting for its removal");
+        // The add's participant id is assigned by rooms. A delayed accepted roster supplies
+        // that id; Roster sends its removal and waits for the confirming roster. If no add
+        // response ever arrives, the cleanup deadline leaves instead of assuming one seat.
       }
     }
     if (!co_wait_until &&
@@ -4694,6 +4706,7 @@ struct YouGameRoom::Impl
     // Order by localIndex, independent of participant/slot order in the roster.
     std::map<std::string, std::map<int, Participant>> connections;
     std::map<int, std::string> names;
+    std::vector<std::string> local_co_ids;
     for (const auto& p : room_participants)
     {
       if (!p.is<picojson::object>())
@@ -4705,14 +4718,8 @@ struct YouGameRoom::Impl
                                                 std::optional<int>(0);
       if (id.empty() || !slot || !index)
         continue;
-      if (id == me && *index > 0 && co_wait_expired)
-      {
-        // A delayed reply to a timed-out request must not turn into a P5 admission.
-        const auto participant = Str(o, "id");
-        if (participant.starts_with("local:"))
-          SendJson({{"t", picojson::value("local-remove")}, {"id", picojson::value(participant)}});
-        continue;
-      }
+      if (id == me && *index > 0 && Str(o, "id").starts_with("local:"))
+        local_co_ids.push_back(Str(o, "id"));
       names[*slot] = CleanName(Str(o, "name"));
       connections[id].emplace(*index, Participant{*slot, Str(o, "name")});
     }
@@ -4772,13 +4779,32 @@ struct YouGameRoom::Impl
       }
       for (auto& owners : former_co_owners)
         std::erase_if(owners, [&](const std::string& id) { return !connections.contains(id); });
-      if (!my_co_seats.empty())
+      if (!co_wait_expired && !my_co_seats.empty())
         local_add_pending = false;
       for (const int previous : previous_local)
         if (std::ranges::find(my_co_seats, previous) == my_co_seats.end())
           removed_local.push_back(previous);
       my_seat = seat;
       friends_room = queue_known && queue == "private";
+    }
+    if (co_wait_expired)
+    {
+      for (const auto& participant : local_co_ids)
+        if (co_removals.insert(participant).second)
+          SendJson({{"t", picojson::value("local-remove")},
+                    {"id", picojson::value(participant)}});
+      if (!co_removals.empty() && my_co_seats.empty())
+      {
+        co_removals.clear();
+        co_wait_until.reset();
+        co_wait_expired = false;
+        {
+          std::lock_guard lock(mutex);
+          local_add_pending = false;
+        }
+        last_hello = {};
+        LocalStatus("Room: Add local player cancelled; continuing with one local player");
+      }
     }
     for (const int removed : removed_local)
     {
@@ -5286,7 +5312,7 @@ struct YouGameRoom::Impl
           std::lock_guard lock(mutex);
           local_add_pending = false;
         }
-        co_wait_expired = action == "local-add";
+        co_wait_expired = false;
         last_hello = {};
       }
       WARN_LOG_FMT(NETPLAY, "Orca room: {} refused: {}", Str(m, "action"), Str(m, "error"));
