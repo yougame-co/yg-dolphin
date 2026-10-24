@@ -1302,6 +1302,7 @@ struct YouGameRoom::Impl
   std::optional<Clock::time_point> welcomed_at;
   bool host_seen = false;
   bool hello_sent = false;  // I/O thread: P4 joiner adds stop at its first hello.
+  bool co_hello_pending = false;  // A held hello must still follow the co-seat roster.
   bool session_active = false;  // under mutex
   bool local_add_pending = false;  // under mutex: an accepted add reserves solo ownership
   std::optional<Clock::time_point> co_wait_until;
@@ -3200,6 +3201,7 @@ struct YouGameRoom::Impl
     {
       co_wait_expired = false;
       co_wait_until = Now() + CO_SEAT_WAIT;
+      co_hello_pending = true;
     }
     SendJson(command);
   }
@@ -4343,7 +4345,8 @@ struct YouGameRoom::Impl
         last_hello = {};
       }
     }
-    if (!co_wait_until && (now - last_hello >= HELLO_EVERY || offer_now.exchange(false)))
+    if (!co_wait_until &&
+        (co_hello_pending || now - last_hello >= HELLO_EVERY || offer_now.exchange(false)))
     {
       last_hello = now;
       std::map<int, KeyframeInfo> offers;
@@ -4368,7 +4371,8 @@ struct YouGameRoom::Impl
           return;
         }
         const bool retry_resume = peer.resume_requested && now >= peer.resume_retry_at;
-        if (peer.resume_requested ? retry_resume : (!peer.heard || !peer.heard_us))
+        if (peer.resume_requested ? retry_resume :
+                                   (co_hello_pending || !peer.heard || !peer.heard_us))
         {
           picojson::object d;
           d["k"] = picojson::value("hello");
@@ -4414,6 +4418,7 @@ struct YouGameRoom::Impl
           SendTo(id, KeyframeOfferToJson(offer->second));
         }
       }
+      co_hello_pending = false;
     }
 
     LinkPeers();
