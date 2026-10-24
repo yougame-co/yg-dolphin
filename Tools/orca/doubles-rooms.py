@@ -92,6 +92,10 @@ def role_caps(role, local, queue_mode):
             (" host results locks" if queue_mode else "") + "\n")
 
 
+def room_assignment(text, room, named):
+    return re.search(rf"in room {re.escape(room)} on seat (\d+)" if named else r"on seat (\d+)", text)
+
+
 class FixturePage:
     """The local page's bridge: tickets and an explicit one-time Add request."""
     def __init__(self, site, role, add):
@@ -1400,8 +1404,8 @@ def run(args):
                         process.stdin.flush()
                         queue_commanded = True
                         print(f"peer {role}: joining friend from the casual queue select", flush=True)
-                    assignment = re.search((rf"in room {re.escape(args.room)} on seat (\d+)" if args.queue or role == args.friend_from_queue
-                                            else r"on seat (\d+)"), text)
+                    assignment = room_assignment(text, args.room,
+                                                 args.queue or role == args.friend_from_queue)
                     if assignment:
                         if int(assignment[1]) != ports_by_role[role]:
                             raise RuntimeError(f"peer {role} owns unexpected seat {assignment[1]}")
@@ -1530,8 +1534,8 @@ def run(args):
                     continue
                 if role:
                     text = (Path(work) / f"peer-{role}.log").read_text()
-                    assignment = re.search((rf"in room {re.escape(args.room)} on seat (\d+)" if args.queue
-                                            else r"on seat (\d+)"), text)
+                    assignment = room_assignment(text, args.room,
+                                                 args.queue or role == args.friend_from_queue)
                     match = re.search(r"plugged into port (\d+) at frame (\d+)", text)
                     if (not assignment or not match or int(match[1]) not in (2, 3, 4) or
                             match[1] != assignment[1]):

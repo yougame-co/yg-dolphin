@@ -20,6 +20,14 @@ spec.loader.exec_module(fixture)
 
 
 class CoSeatFixtureTest(unittest.TestCase):
+    def test_friend_from_queue_uses_its_destination_room_assignment(self):
+        text = ("Orca room: in room qhome1 on seat 1, hosting\n"
+                "Orca room: in room doubles444 on seat 2, joining\n"
+                "Drop-in: plugged into port 2 at frame 1964\n")
+        self.assertEqual(fixture.room_assignment(text, "doubles444", True)[1], "2")
+        self.assertEqual(fixture.room_assignment(text, "doubles444", False)[1], "1")
+        self.assertIsNone(fixture.room_assignment(text, "another444", True))
+
     def test_fixture_page_adds_only_after_its_own_welcome_and_only_once(self):
         page = fixture.FixturePage("http://127.0.0.1:1", 1, True)
         welcome = {"id": 1, "type": "mpRoom", "me": "Doubles1",
