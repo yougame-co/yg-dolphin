@@ -1312,7 +1312,7 @@ def run(args):
                     command += ["-C", f"Dolphin.Core.DefaultISO={args.disc}", "-e", args.pplus]
                 else:
                     command += ["-e", args.disc]
-                process = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE,
+                process = subprocess.Popen(command, env=environment, cwd=user, stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
                 lines = queue.Queue()
                 def read_output(proc=process, output=lines, role_number=role):

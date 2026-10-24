@@ -18,6 +18,21 @@ spec.loader.exec_module(fixture)
 
 
 class CoSeatFixtureTest(unittest.TestCase):
+    def test_emulator_working_directory_is_its_isolated_user(self):
+        class Inspected(Exception):
+            pass
+        def spawn(command, **kwargs):
+            kwargs["stderr"].close()
+            self.assertEqual(str(kwargs["cwd"]), command[command.index("-u") + 1])
+            raise Inspected()
+        args = SimpleNamespace(site="http://127.0.0.1:1", room="test", hold_expiry=False,
+            roles="0,1", input_role=[], blackout_role=[], events=None, defer_role=[], refused_role=[],
+            transport="direct", probe=None, input=None, profile=None, pplus=None, mod_dir=None,
+            binary="fake-orca", disc="unused", keep_logs=None)
+        with patch.object(fixture.subprocess, "Popen", side_effect=spawn):
+            with self.assertRaises(Inspected):
+                fixture.run(args)
+
     def test_packet_activity_covers_both_local_ports(self):
         rooms = fixture.Rooms()
         rooms.record("co", "Doubles1", {"k": "p", "s": 2, "c": 1,
