@@ -92,6 +92,34 @@ def role_caps(role, local, queue_mode):
             (" host results locks" if queue_mode else "") + "\n")
 
 
+class FixturePage:
+    """The local page's bridge: tickets and an explicit one-time Add request."""
+    def __init__(self, site, role, add):
+        self.site, self.role, self.add = site, role, add
+        self.requested = False
+
+    def receive(self, line):
+        if not line.startswith("yg "):
+            return []
+        request = json.loads(line[3:])
+        kind = request.get("type")
+        if kind not in {"hello", "mpTicket", "mpRoom"} or "id" not in request:
+            return []
+        result = {}
+        if kind == "mpTicket":
+            body = {key: value for key, value in request.items() if key not in {"id", "type"}}
+            body.update(dev="orca-doubles-test", player_id=f"Doubles{self.role}",
+                        name=f"Doubles{self.role}")
+            result = post_fixture(self.site, "/api/multiplayer/ticket", body)
+        messages = ["yg " + json.dumps({"re": request["id"], "ok": True, "result": result}) + "\n"]
+        mine = [p for p in request.get("participants", []) if p.get("connectionId") == request.get("me")]
+        if (kind == "mpRoom" and self.add and not self.requested and len(mine) == 1 and
+                request.get("lobby", {}).get("maxLocalPlayers") == 2):
+            self.requested = True
+            messages.append("yg " + json.dumps({"push": {"slug": "doubles-fixture", "cmd": "local-add"}}) + "\n")
+        return messages
+
+
 def file_argument(value):
     # Preserve PATH executable names; pin real relative files before the isolated child chdir.
     return str(Path(value).resolve()) if Path(value).is_file() else value
@@ -1209,7 +1237,7 @@ def run(args):
     for name, default in {"role_binary": [], "expect_version_refusal": [], "queue": None,
                           "expect_queue_ending": None, "expect_report_replay": False,
                           "expect_ranked_reconciliation": False, "expect_fight": [],
-                          "local": [], "scratch": None}.items():
+                          "local": [], "scratch": None, "friend_from_queue": None}.items():
         if not hasattr(args, name):
             setattr(args, name, default)
     address = urllib.parse.urlsplit(args.site)
@@ -1219,6 +1247,8 @@ def run(args):
         raise ValueError("--hold-expiry needs at least 120 seconds for the 90-second hold")
     roles = [int(role) for role in args.roles.split(",")]
     local = local_counts(args.local if isinstance(args.local, list) else [])
+    if args.friend_from_queue is not None and (args.friend_from_queue not in roles or args.queue or local):
+        raise ValueError("--friend-from-queue needs a single-seat friends joiner in this run")
     if (args.queue or getattr(args, "ordinary", False)) and local:
         raise ValueError("local players require friends doubles")
     if not set(local) <= set(roles) or sum(local.get(role, 1) for role in roles) > 4:
@@ -1279,8 +1309,9 @@ def run(args):
                                "ORCA_TEST_PLAYER": f"Doubles{role}", "ORCA_NAME": f"Doubles{role}",
                                "ORCA_DIRECT": "1", "ORCA_DIRECT_LOOPBACK": "1", "ORCA_DIRECT_STUN": "0"}
                 if role in local:
-                    environment["ORCA_TEST_LOCAL_PLAYERS"] = "2"
-                if args.queue:
+                    environment["YOUGAME_STDIO"] = "1"
+                    environment["YOUGAME_GAME"] = "doubles-fixture"
+                if args.queue or role == args.friend_from_queue:
                     # Public matchmaking is entered by host/join from the game's own lobby.
                     # ORCA_ROOM's startup shortcut intentionally does not arm the queue header.
                     environment["ORCA_ROOM"] = f"qhome{role}"
@@ -1325,15 +1356,24 @@ def run(args):
                 process = subprocess.Popen(command, env=environment, cwd=user, stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
                 lines = queue.Queue()
-                def read_output(proc=process, output=lines, role_number=role):
+                page = FixturePage(args.site, role, role in local)
+                def read_output(proc=process, output=lines, role_number=role, page=page):
                     with open(Path(work) / f"peer-{role_number}.stdout.log", "w") as log:
                         for line in proc.stdout:
                             log.write(line)
                             log.flush()
                             output.put(line.rstrip())
+                            if role_number in local:
+                                replies = page.receive(line)
+                                if replies:
+                                    proc.stdin.write("".join(replies))
+                                    proc.stdin.flush()
                 threading.Thread(target=read_output, daemon=True).start()
                 players.append((role, process, stderr, lines))
-                process.stdin.write(role_caps(role, local, args.queue))
+                caps = role_caps(role, local, args.queue)
+                if role == args.friend_from_queue:
+                    caps = caps.rstrip() + " host queue2 pick-casual\n"
+                process.stdin.write(caps)
                 if input_path and local:
                     # One script may contain independent rules for both of this role's ports.
                     process.stdin.write("test-input " + str(Path(input_path).resolve()) + "\n")
@@ -1353,7 +1393,14 @@ def run(args):
                         process.stdin.write(f"{'host' if role == 0 else 'join'} {args.room}\n")
                         process.stdin.flush()
                         queue_commanded = True
-                    assignment = re.search((rf"in room {re.escape(args.room)} on seat (\d+)" if args.queue
+                    if (role == args.friend_from_queue and not queue_commanded and
+                            "Online menu: exit code 30: orca menu online casual" in text and
+                            re.search(r"Scene frame .* -> scSelctCharacter", text)):
+                        process.stdin.write(f"join {args.room}\n")
+                        process.stdin.flush()
+                        queue_commanded = True
+                        print(f"peer {role}: joining friend from the casual queue select", flush=True)
+                    assignment = re.search((rf"in room {re.escape(args.room)} on seat (\d+)" if args.queue or role == args.friend_from_queue
                                             else r"on seat (\d+)"), text)
                     if assignment:
                         if int(assignment[1]) != ports_by_role[role]:
@@ -1613,6 +1660,8 @@ def main():
     parser.add_argument("--expect-queue-ending", choices=("network", "forfeit"),
                         help="verify legacy network ending or the fixture's ranked forfeit after a 90 s hold")
     parser.add_argument("--scratch", help="directory for isolated temporary users/logs")
+    parser.add_argument("--friend-from-queue", type=int, choices=range(1, 4),
+                        help="join the friend's room only after this role reaches the casual queue select")
     parser.add_argument("--defer-role", action="append", default=[], type=int, choices=range(4))
     parser.add_argument("--refused-role", action="append", default=[], type=int, choices=range(1, 4),
                         help="require room_full for only this newcomer, which must never plug in")

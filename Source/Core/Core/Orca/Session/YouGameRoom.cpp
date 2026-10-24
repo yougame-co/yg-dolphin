@@ -59,7 +59,6 @@ constexpr const char* CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 constexpr auto SEND_GAP = std::chrono::milliseconds(10);
 constexpr auto PING_EVERY = std::chrono::seconds(1);
 constexpr auto HELLO_EVERY = std::chrono::seconds(1);
-// Two room round trips normally finish well inside this; stay below the 8 s host wait.
 // Allow delayed room round trips, then bound cleanup independently. Never enter a session
 // while the room may still assign us an unaccounted local participant.
 constexpr auto CO_SEAT_WAIT = std::chrono::seconds(10);
