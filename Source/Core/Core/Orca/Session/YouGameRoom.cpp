@@ -1655,7 +1655,8 @@ struct YouGameRoom::Impl
     picojson::object lobby;
     lobby["version"] = picojson::value(1.0);
     lobby["minPlayers"] = picojson::value(2.0);
-    lobby["maxLocalPlayers"] = picojson::value(1.0);
+    // Build constant: the room's lobby key must agree even when the app lacks co-seats.
+    lobby["maxLocalPlayers"] = picojson::value(options.friends_room ? 2.0 : 1.0);
     lobby["compatibility"] = picojson::value(options.compatibility);
 
     const std::string bridge = Env("YOUGAME_BRIDGE"), token = Env("YOUGAME_TOKEN");

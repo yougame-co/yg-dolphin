@@ -6997,7 +6997,7 @@ TEST_F(OrcaRoomRuntime, FreshTicketReusesTheOriginalLobby)
     const auto lobbies = Request("/state/" + code).get("ticket_lobbies");
     ASSERT_TRUE(lobbies.is<picojson::array>());
     ASSERT_EQ(lobbies.get<picojson::array>().size(), 2u);
-    EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 1);
+    EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 2);
     picojson::value expected;
     ASSERT_TRUE(picojson::parse(expected, lobby).empty());
     EXPECT_EQ(lobbies.get<picojson::array>()[1], expected);
@@ -7015,7 +7015,7 @@ TEST_F(OrcaRoomRuntime, FreshTicketKeepsTicketLobbyWithoutWelcomeLobby)
   const auto lobbies = Request("/state/" + code).get("ticket_lobbies");
   ASSERT_TRUE(lobbies.is<picojson::array>());
   ASSERT_EQ(lobbies.get<picojson::array>().size(), 2u);
-  EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 1);
+  EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 2);
   picojson::value expected;
   ASSERT_TRUE(picojson::parse(expected, lobby).empty());
   EXPECT_EQ(lobbies.get<picojson::array>()[1], expected);
