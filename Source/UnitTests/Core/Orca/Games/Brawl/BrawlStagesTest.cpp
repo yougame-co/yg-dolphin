@@ -1426,3 +1426,46 @@ TEST(OrcaStageCursors, EdgesAreSeenOnceAndTilesAreTheLayouts)
                                   (brawl.page_button.y0 + brawl.page_button.y1) / 2),
             StageCursors::PAGE_BUTTON);
 }
+
+TEST_F(OrcaBrawlStages, FrigateIsARankedCounterpickAtTheProbedTile)
+{
+  FakeMemory m = Game("scSelStage");
+  State state;
+  state.set.game = 2;
+  state.set.last_winner = 1;
+  state.phase = Phase::Recorded;
+  WriteState(m, state);
+  Boundary(m);
+  Push(m, 1, Y);
+  auto cursors = StageCursors::Read(m);
+  ASSERT_TRUE(cursors);
+  cursors->cursors[0].x = 27 * 16;
+  cursors->cursors[0].y = 168;  // 10.5 units
+  StageCursors::Write(m, *cursors);
+  Push(m, 0, A);
+  EXPECT_EQ(ReadState(m)->progress.picked, FrigateOrpheon);
+  EXPECT_EQ(StageForStageId(0x0C), FrigateOrpheon);
+  m.Write32(TASK + 0x224, 2);
+  m.Write32(TASK + 0x258, 0x01);
+  Boundary(m);
+  EXPECT_EQ(m.Read32(TASK + 0x258), 0x0Cu);
+}
+
+TEST_F(OrcaBrawlStages, ALaterPickOnTheMeleePageGoesThroughThePageButton)
+{
+  FakeMemory m = Game("scSelStage");
+  State state;
+  state.set.game = 2;
+  state.set.last_winner = 1;
+  state.phase = Phase::Recorded;
+  WriteState(m, state);
+  Boundary(m);
+  Push(m, 1, Y);
+  Aim(m, 0, PokemonStadium);
+  Push(m, 0, A);
+  EXPECT_EQ(ReadState(m)->progress.picked, PokemonStadium);
+  m.Write32(TASK + 0x228, 0);
+  Boundary(m);
+  EXPECT_FLOAT_EQ(CursorX(m), 23.0f);
+  EXPECT_FLOAT_EQ(CursorY(m), -18.11f);
+}

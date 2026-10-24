@@ -62,7 +62,7 @@ constexpr std::array<Tile, 7> kBrawlTiles{{
 constexpr std::array<Tile, 8> kBrawlRankedTiles{{
     kBrawlTiles[0], kBrawlTiles[1], kBrawlTiles[2], kBrawlTiles[3],
     kBrawlTiles[4], kBrawlTiles[5], kBrawlTiles[6],
-    {7, 0, R(-17.25f, 1.75f, -11.25f, 7.75f)},  // Frigate Orpheon, provisional
+    {7, 0, R(24.25f, 7.25f, 29.75f, 13.25f)},  // Frigate Orpheon, slot 10
 }};
 
 // ---- Project+ v3.2, 2024 Proposed preset, page 0 (probed the same way) ----

@@ -200,7 +200,7 @@ constexpr std::array<Tile, kRankedStages> kTiles{{
     {0, 11, -1.6f, 4.46f},   // Yoshi's Island (0x0C)
     {0, 1, 4.7f, 15.74f},    // Final Destination (0x01)
     {0, 2, 11.3f, 15.74f},   // Delfino Plaza (0x02)
-    {0, 10, -14.0f, 4.5f},  // Frigate Orpheon (0x0B), provisional in the source commit
+    {0, 10, 27.0f, 10.5f},   // Frigate Orpheon (0x0B)
 }};
 // The page-switch button, bottom right on both pages.
 constexpr float PAGE_BUTTON_X = 23.0f;
