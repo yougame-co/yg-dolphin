@@ -7581,3 +7581,20 @@ TEST_F(OrcaRoomRuntime, LaggingRoomRosterCannotRetireTheHostsOwnCoSeat)
   EXPECT_EQ(session->LeadOf(3), 0);
   EXPECT_EQ(session->Plan()[3], plan[3]);
 }
+
+TEST_F(OrcaRoomRuntime, QueueTicketRequestAndReconnectKeepOneLocalPlayer)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    const std::string code = std::string("cop4") + queue;
+    auto room = Open(code, fmt::format(R"({{"queue":"{}","lobby":{{"maxLocalPlayers":1}}}})", queue),
+                     true, false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+    std::string ticket, store, error;
+    ASSERT_TRUE(room->FreshTicket(true, &ticket, &store, &error)) << error;
+    const auto lobbies = Request("/state/" + code).get("ticket_lobbies");
+    ASSERT_EQ(lobbies.get<picojson::array>().size(), 2u);
+    for (const auto& lobby : lobbies.get<picojson::array>())
+      EXPECT_EQ(lobby.get("maxLocalPlayers").get<double>(), 1);
+  }
+}
