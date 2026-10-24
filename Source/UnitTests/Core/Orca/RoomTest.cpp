@@ -390,6 +390,30 @@ TEST(OrcaRoomPingRange, MalformedProbesDoNotConsumeTheEchoBudget)
       R"({{"n":"{}","t":"probe-ack"}})", std::string(64, 'a'))}));
 }
 
+TEST(OrcaRoomPingRange, JitteredProbeSpacingStillCollectsBothSamples)
+{
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "casual")},
+      {RK::SocketMessage, 0, R"({"t":"probe","n":"late"})"},
+      {RK::SocketMessage, 850, R"({"t":"probe","n":"on-time"})"},
+  });
+  EXPECT_EQ(trace[1].sent, (std::vector<std::string>{R"({"n":"late","t":"probe-ack"})"}));
+  EXPECT_EQ(trace[2].sent, (std::vector<std::string>{R"({"n":"on-time","t":"probe-ack"})"}));
+}
+
+TEST(OrcaRoomPingRange, TenProbesWithinOneSecondHaveAtMostThreeReplies)
+{
+  std::vector<RoomTestStep> steps{{RK::Message, 0, QueueRoster("welcome", "ranked")}};
+  for (int ms = 0; ms < 1000; ms += 100)
+    steps.push_back({RK::SocketMessage, ms, fmt::format(R"({{"t":"probe","n":"n{}"}})", ms)});
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+  std::vector<int> acknowledged;
+  for (size_t i = 1; i < trace.size(); ++i)
+    if (!trace[i].sent.empty())
+      acknowledged.push_back(steps[i].milliseconds);
+  EXPECT_EQ(acknowledged, (std::vector<int>{0, 400, 800}));
+}
+
 TEST(OrcaRoomPingRange, FloodAndRepeatedNoncesAreBounded)
 {
   std::vector<RoomTestStep> steps{{RK::Message, 0, QueueRoster("welcome", "casual")}};
@@ -405,7 +429,7 @@ TEST(OrcaRoomPingRange, FloodAndRepeatedNoncesAreBounded)
   }
   ASSERT_EQ(acknowledged.size(), 6u);
   for (size_t i = 1; i < acknowledged.size(); ++i)
-    EXPECT_GE(acknowledged[i] - acknowledged[i - 1], 900);
+    EXPECT_GE(acknowledged[i] - acknowledged[i - 1], 400);
   const auto repeated = TraceRoomForTest(QueueTraceOptions(), {
       {RK::Message, 0, QueueRoster("welcome", "casual")},
       {RK::Message, 0, R"({"t":"probe","n":"same"})"},

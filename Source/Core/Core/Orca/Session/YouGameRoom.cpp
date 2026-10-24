@@ -4992,9 +4992,10 @@ struct YouGameRoom::Impl
         std::ranges::find(probe_nonces, nonce) != probe_nonces.end())
       return;
     const auto now = Now();
-    // Worker issues ~1/s for 5 s. Allow scheduling jitter, but at most six unique replies in 6 s.
+    // Worker issues ~1/s for 5 s. A 400 ms gap tolerates jitter while bounding bursts to 3/s;
+    // the room still gets at most six unique replies within this lifetime 6 s window.
     if ((probe_started && now - *probe_started >= std::chrono::seconds(6)) ||
-        (probe_last && now - *probe_last < std::chrono::milliseconds(900)))
+        (probe_last && now - *probe_last < std::chrono::milliseconds(400)))
       return;
     if (!probe_started)
       probe_started = now;
