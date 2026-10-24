@@ -566,6 +566,12 @@ void SetSessionActive(bool active)
     room->SetSessionActive(active);
 }
 
+bool TryStartSession(const std::vector<int>& co_seats)
+{
+  const auto room = Room();
+  return room && room->TryStartSession(co_seats);
+}
+
 std::vector<int> GroupOf(int seat)
 {
   const auto room = Room();

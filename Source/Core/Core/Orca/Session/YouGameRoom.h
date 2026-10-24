@@ -216,6 +216,7 @@ public:
   std::vector<int> CoSeats() const;
   // CPU thread: published before constructing/after releasing the rollback session.
   void SetSessionActive(bool active);
+  bool TryStartSession(const std::vector<int>& co_seats);
   // The roster's local ordinal (-1 for an absent/invalid seat).
   int LocalIndex(int seat, bool only_mine = false) const;
   // A seat's machine group, lead first then co-seats by localIndex (empty if absent).

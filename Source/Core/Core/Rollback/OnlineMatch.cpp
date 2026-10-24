@@ -1473,9 +1473,12 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
 {
   ++match.host_boundaries;
   match.doubles = test_room ? test_room->Doubles() : Orca::Online::RoomDoubles();
+  bool locals_changed = false;
   if (!match.session && (test_room || Orca::Online::InRoom()))
   {
-    match.co_seats = test_room ? test_room->CoSeats() : Orca::Online::CoSeats();
+    const auto locals = test_room ? test_room->CoSeats() : Orca::Online::CoSeats();
+    locals_changed = locals != match.co_seats;
+    match.co_seats = locals;
     Orca::UX::SetLocalPadCount(match.co_seats.empty() ? 1 : 2);
   }
   const bool in_room = test_room ? test_room->Connected() : Orca::Online::InRoom();
@@ -1872,6 +1875,11 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   }
   if (match.keyframe->frame < match.recovery_keyframe_from)
     return;
+  if (!match.session && (locals_changed ||
+      (match.keyframe->frame >= match.log_base &&
+       !(test_room ? test_room->TryStartSession(match.co_seats) :
+                     Orca::Online::TryStartSession(match.co_seats)))))
+    return;
   int live_from = next;
   if (match.doubles && match.session)
     for (const auto& [seat, arrival] : match.waiting)
@@ -1924,10 +1932,6 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
       // Anything that arrived while solo (a departed friend's last packets) belongs to no one.
       auto* transport = test_room ? test_room : Orca::Online::Transport();
       transport->Receive();
-      if (test_room)
-        test_room->SetSessionActive(true);
-      else
-        Orca::Online::SetSessionActive(true);
       match.session = std::make_unique<Orca::Net::Session>(config, *match.port,
                                                           *transport);
       match.stall_budget.Clear();

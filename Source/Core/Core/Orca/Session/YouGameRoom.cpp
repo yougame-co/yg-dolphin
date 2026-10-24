@@ -1302,6 +1302,7 @@ struct YouGameRoom::Impl
   bool host_seen = false;
   bool hello_sent = false;  // I/O thread: P4 joiner adds stop at its first hello.
   bool session_active = false;  // under mutex
+  bool local_add_pending = false;  // under mutex: an accepted add reserves solo ownership
   std::optional<Clock::time_point> co_wait_until;
   bool co_wait_expired = false;
   Clock::time_point last_heard{};
@@ -3152,16 +3153,16 @@ struct YouGameRoom::Impl
     Orca::Status::Line(line);
   }
 
-  std::string LocalRefusal() const
+  std::string LocalRefusalLocked() const
   {
-    std::lock_guard lock(mutex);
     if (!Orca::Status::Cap("coseats") || Env("ORCA_COSEATS") == "0")
       return "no-cap";
     if (queue != "private" || !options.friends_room || ticket_tourney)
       return "queue";
     if (!doubles)
       return "not-doubles";
-    if (session_active || (joining && hello_sent))
+    if (state == RoomState::Ended || stop || leave_requested || session_active ||
+        (joining && hello_sent))
       return "in-match";
     return {};
   }
@@ -3175,17 +3176,27 @@ struct YouGameRoom::Impl
   void SendLocalCommand(const picojson::object& command)
   {
     const auto action = Str(command, "t");
-    if (const auto reason = LocalRefusal(); !reason.empty())
+    std::string reason;
+    {
+      std::lock_guard lock(mutex);
+      reason = LocalRefusalLocked();
+      if (reason.empty() && action == "local-add")
+      {
+        if (local_add_pending || !my_co_seats.empty())
+          reason = "in-match";
+        else
+          local_add_pending = true;
+      }
+    }
+    if (!reason.empty())
     {
       RefuseLocal(action, reason);
       return;
     }
     if (action == "local-add")
     {
-      if (co_wait_until || !my_co_seats.empty())
-        return;
-      if (joining)
-        co_wait_until = Now() + CO_SEAT_WAIT;
+      co_wait_expired = false;
+      co_wait_until = Now() + CO_SEAT_WAIT;
     }
     SendJson(command);
   }
@@ -4319,6 +4330,10 @@ struct YouGameRoom::Impl
       }
       else if (now >= *co_wait_until || !Orca::Status::Cap("coseats"))
       {
+        {
+          std::lock_guard lock(mutex);
+          local_add_pending = false;
+        }
         co_wait_until.reset();
         co_wait_expired = true;
         LocalStatus("Room: Add local player timed out; continuing with one local player");
@@ -4743,6 +4758,8 @@ struct YouGameRoom::Impl
       }
       for (auto& owners : former_co_owners)
         std::erase_if(owners, [&](const std::string& id) { return !connections.contains(id); });
+      if (!my_co_seats.empty())
+        local_add_pending = false;
       for (const int previous : previous_local)
         if (std::ranges::find(my_co_seats, previous) == my_co_seats.end())
           removed_local.push_back(previous);
@@ -5035,7 +5052,7 @@ struct YouGameRoom::Impl
       }
       LinkPeers();
       Roster(m);
-      if (first_welcome && options.local_players > 1)
+      if (first_welcome && options.local_players > 1 && my_co_seats.empty())
         SendLocalCommand({{"t", picojson::value("local-add")}});
       if (QueueRecovery() &&
           (m.count("hold_ms") || (m.count("recovering") && m.at("recovering").is<bool>() &&
@@ -5251,6 +5268,10 @@ struct YouGameRoom::Impl
         RefuseLocal(action, error == "not-doubles" || error == "queue" || error == "no-cap" ?
                                 error : "in-match");
         co_wait_until.reset();
+        {
+          std::lock_guard lock(mutex);
+          local_add_pending = false;
+        }
         co_wait_expired = action == "local-add";
         last_hello = {};
       }
@@ -5690,7 +5711,10 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
       room.SendPageCommands();
       break;
     case RoomTestStep::Kind::SessionActive:
-      owner.SetSessionActive(step.close_code != 0);
+      if (step.close_code)
+        input_held = owner.TryStartSession(owner.CoSeats());
+      else
+        owner.SetSessionActive(false);
       break;
     case RoomTestStep::Kind::Tournament:
       room.ticket_tourney = true;
@@ -5820,6 +5844,16 @@ void YouGameRoom::SetSessionActive(bool active)
 {
   std::lock_guard lock(m_impl->mutex);
   m_impl->session_active = active;
+}
+
+bool YouGameRoom::TryStartSession(const std::vector<int>& co_seats)
+{
+  std::lock_guard lock(m_impl->mutex);
+  if (m_impl->local_add_pending || m_impl->my_co_seats != co_seats ||
+      m_impl->state == RoomState::Ended)
+    return false;
+  m_impl->session_active = true;
+  return true;
 }
 
 int YouGameRoom::LocalIndex(int seat, bool only_mine) const

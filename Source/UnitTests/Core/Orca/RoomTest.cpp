@@ -7598,3 +7598,28 @@ TEST_F(OrcaRoomRuntime, QueueTicketRequestAndReconnectKeepOneLocalPlayer)
       EXPECT_EQ(lobby.get("maxLocalPlayers").get<double>(), 1);
   }
 }
+
+TEST(OrcaRoom, PendingLocalAddReservesTheSoloHostUntilItsRosterArrives)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  const ScopedEnv enabled("ORCA_COSEATS", "1");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, CoPageWelcome(false, "private", true)},
+      {RK::PageEvent, 1, R"({"slug":"co-page","cmd":"local-add"})"},
+      {RK::SessionActive, 2, "", 1},
+      {RK::PageEvent, 3, R"({"slug":"co-page","cmd":"local-add"})"},
+      {RK::Message, 4, CoRoster("lobby", false, true, false)},
+      {RK::SessionActive, 5, "", 1}});
+  EXPECT_EQ(trace[1].sent, (std::vector<std::string>{R"({"t":"local-add"})"}));
+  ASSERT_TRUE(trace[2].input_held.has_value());
+  EXPECT_FALSE(*trace[2].input_held);
+  EXPECT_TRUE(trace[3].sent.empty());
+  EXPECT_EQ(trace[3].notices, (std::vector<std::string>{
+      "Room: Add local player isn't available here (in-match)"}));
+  EXPECT_EQ(trace[4].co_seats, (std::vector<int>{2}));
+  ASSERT_TRUE(trace[5].input_held.has_value());
+  EXPECT_TRUE(*trace[5].input_held);
+}
