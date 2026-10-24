@@ -41,8 +41,6 @@ struct RoomOptions
   bool friends_room = true;
   // Transport policy can be disabled for the healthy-session baseline comparison.
   bool recovery_enabled = true;
-  // Explicit local picker intent at room entry. Admission still requires all co-seat gates.
-  int local_players = 1;
   // A joiner's own controls (Orca::Events::OwnControls), sent in its hello so the host puts them in
   // its port (KeyframeInfo::Name::controls). Empty: none.
   std::vector<u8> controls;

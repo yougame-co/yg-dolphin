@@ -7883,3 +7883,109 @@ TEST(OrcaRoom, CoJoinerAcceptsKeyframeOffersOnlyAfterItsPendingAddResolves)
   ASSERT_EQ(trace[6].events.size(), 1u);
   EXPECT_EQ(trace[6].events[0].kind, PeerEvent::Kind::Keyframe);
 }
+
+TEST(OrcaRoom, SingleSeatSessionStartKeepsLegacyNoRoomAndEndedRoomBehavior)
+{
+  EXPECT_TRUE(Orca::Online::TryStartSession({}));
+  EXPECT_FALSE(Orca::Online::TryStartSession({2}));
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, CoPageWelcome(false, "private", true)},
+      {RK::SocketClose, 1, "room-closed", 4004}, {RK::SessionActive, 2, "", 1}});
+  ASSERT_EQ(trace[1].state, RoomState::Ended);
+  ASSERT_TRUE(trace[2].input_held);
+  EXPECT_TRUE(*trace[2].input_held);
+}
+
+TEST_F(OrcaRoomRuntime, LocalRosterCountSurvivesMissingDevicesAndIgnoresStraySeatTags)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv stdio("YOUGAME_STDIO", "1");
+  const ScopedEnv virtual_only("ORCA_VIRTUAL_PAD_ONLY", "1");
+  // Open() uses the loopback dev ticket, so start the controller stream separately.
+  const ScopedEnv ticket_stdio("YOUGAME_STDIO", "0");
+  Orca::UX::StartControllerStreamFromStdio();
+  const Common::ScopeGuard cleanup([] {
+    Orca::Status::SetOutput(nullptr);
+    Orca::UX::StopControllerStream();
+    Orca::UX::SetLocalPadCount(1);
+  });
+  int sequence = 0;
+  for (const bool pair : {false, true})
+  {
+    const auto snapshot = [&](bool tag_second) {
+      picojson::array pads;
+      for (int index = 0; index < 2; ++index)
+      {
+        picojson::array buttons;
+        for (int button = 0; button < 17; ++button)
+          buttons.emplace_back(picojson::object{{"value", picojson::value(button == index ? 1.0 : 0.0)},
+              {"pressed", picojson::value(button == index)}});
+        picojson::object pad{{"index", picojson::value(static_cast<double>(index))},
+            {"mapping", picojson::value("standard")},
+            {"axes", picojson::value(picojson::array(4, picojson::value(0.0)))},
+            {"buttons", picojson::value(buttons)}};
+        if (index == 0 || tag_second)
+          pad["seat"] = picojson::value(static_cast<double>(pair ? index : 1));
+        pads.emplace_back(pad);
+      }
+      picojson::object value{{"schema", picojson::value(1.0)},
+          {"session", picojson::value("roster-count")},
+          {"sequence", picojson::value(static_cast<double>(++sequence))},
+          {"sentAt", picojson::value(1000.0)}, {"receivedAt", picojson::value(1000.0)},
+          {"owned", picojson::value(false)}, {"suspended", picojson::value(false)},
+          {"ports", picojson::value(picojson::array{})}, {"pads", picojson::value(pads)}};
+      const ScopedEnv controllers_stdio("YOUGAME_STDIO", "1");
+      EXPECT_TRUE(Orca::Bridge::Route({"yg " + picojson::value(picojson::object{
+          {"push", picojson::value(picojson::object{{"type", picojson::value("controllers")},
+              {"snapshot", picojson::value(value)}})}}).serialize()}).empty());
+    };
+    snapshot(false);
+    const std::string code = pair ? "corosterpair" : "corostersolo";
+    auto room = Open(code, pair ?
+        R"({"joining":false,"doubles":true,"co_seats":{"me":[2],"peer":[3]}})" :
+        R"({"joining":false,"doubles":true,"co_seats":{"peer":[3]}})", false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->ArrivalPending(); }));
+    RoomHashGame game;
+    auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                          std::string* error) {
+      return room->FreshTicket(fresh, ticket, server, error);
+    });
+    auto* output = std::tmpfile();
+    ASSERT_NE(output, nullptr);
+    const Common::ScopeGuard close([&] { Orca::Status::SetOutput(nullptr); std::fclose(output); });
+    const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(core.system, *room, game,
+        FriendsReplay(1524, 1600), 1600, {}, true, std::move(store), false,
+        [&](const std::function<void()>&) {
+          const ScopedEnv printing("ORCA_SESSION", "1");
+          Orca::Status::SetOutput(output);
+          snapshot(false);
+          ASSERT_TRUE(Orca::UX::LocalPad(0, true));
+          EXPECT_EQ(Orca::UX::LocalPad(0, true)->button, PAD_BUTTON_A);
+          if (pair)
+          {
+            const auto neutral = Orca::UX::LocalPad(1, true);
+            ASSERT_TRUE(neutral);
+            EXPECT_TRUE(neutral->isConnected);
+            EXPECT_EQ(neutral->button, 0);
+            EXPECT_EQ(neutral->stickX, 128);
+          }
+          snapshot(true);
+          EXPECT_EQ(Orca::UX::LocalPad(0, true)->button, PAD_BUTTON_A);
+          if (pair)
+            EXPECT_EQ(Orca::UX::LocalPad(1, true)->button, PAD_BUTTON_X);
+        });
+    EXPECT_TRUE(result.error.empty()) << result.error;
+    if (pair)
+    {
+      EXPECT_EQ(room->CoSeats(), (std::vector<int>{2}));
+      EXPECT_EQ(room->GroupOf(2), (std::vector<int>{0, 2}));
+    }
+    std::rewind(output);
+    std::string lines;
+    char buffer[256]{};
+    while (std::fgets(buffer, sizeof(buffer), output))
+      lines += buffer;
+    EXPECT_EQ(lines, pair ? "orca seats 1=pad:0 2=none 3=none 4=none\n"
+                            "orca seats 1=pad:0 2=pad:1 3=none 4=none\n" : "");
+  }
+}

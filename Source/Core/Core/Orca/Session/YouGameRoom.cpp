@@ -5906,7 +5906,7 @@ bool YouGameRoom::TryStartSession(const std::vector<int>& co_seats)
 {
   std::lock_guard lock(m_impl->mutex);
   if (m_impl->local_add_pending || m_impl->my_co_seats != co_seats ||
-      m_impl->state == RoomState::Ended)
+      (!co_seats.empty() && m_impl->state == RoomState::Ended))
     return false;
   m_impl->session_active = true;
   return true;
