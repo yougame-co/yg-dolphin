@@ -626,7 +626,7 @@ TEST_F(OrcaBrawlStages, ATakenStageTheStepsDontAllowIsReplaced)
   Push(m, 1, Y);
   RS::SetView view = ReadState(m)->set;
   view.characters = {0, 2};
-  const RS::Plan plan = RS::PlanGame(Rulesets::Brawl2025(), view);
+  const RS::Plan plan = RS::PlanGame(*Rulesets::ByBlock(1), view);
   ASSERT_NE(RS::Current(plan, ReadState(m)->progress), nullptr);
   ASSERT_EQ(RS::Current(plan, ReadState(m)->progress)->kind, RS::StepKind::Pick);
   // The game's cursor rests on Delfino, then A lands on Final Destination (port 1 won there: DSR).
