@@ -8179,3 +8179,21 @@ TEST(OrcaRoom, SoloHostDoesNotPlugALocalSeatDuringAddCleanup)
     EXPECT_EQ(frames[frame][2], UNPLUGGED_PAD) << frame;
   EXPECT_EQ(frames[7][2], Pad{});  // A later, completed Add really plugs it.
 }
+
+TEST(OrcaRoom, CoPageStatusDistinguishesFullFromNotReady)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::PageEvent, 0, R"({"slug":"co-page","cmd":"local-remove","id":"local:me:1"})"},
+      {RK::Message, 1, CoPageWelcome(false, "private", true)}, {RK::PageEvent, 2, CO_PAGE_ADD},
+      {RK::Message, 3, CoRoster("lobby", false, true, false)}, {RK::PageEvent, 4, CO_PAGE_ADD}});
+  EXPECT_TRUE(trace[0].sent.empty());
+  EXPECT_EQ(trace[0].notices, (std::vector<std::string>{
+      "Room: Remove local player isn't available here (not-ready)"}));
+  EXPECT_TRUE(trace[4].sent.empty());
+  EXPECT_EQ(trace[4].notices, (std::vector<std::string>{
+      "Room: Add local player isn't available here (full)"}));
+}

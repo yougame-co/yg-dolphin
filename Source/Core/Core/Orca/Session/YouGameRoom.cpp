@@ -3203,6 +3203,11 @@ struct YouGameRoom::Impl
   void SendLocalCommand(const picojson::object& command)
   {
     const auto action = Str(command, "t");
+    if (action == "local-remove" && !welcomed_at)
+    {
+      RefuseLocal(action, "not-ready");
+      return;
+    }
     if (action == "local-add" && !welcomed_at)
     {
       page_add_before_welcome = true;
@@ -3224,7 +3229,9 @@ struct YouGameRoom::Impl
         reason = "not-local";
       if (reason.empty() && action == "local-add")
       {
-        if (local_add_pending || !my_co_seats.empty())
+        if (!my_co_seats.empty())
+          reason = "full";
+        else if (local_add_pending)
           reason = "in-match";
         else
           local_add_pending = true;
