@@ -7504,25 +7504,25 @@ TEST(OrcaRoom, CoJoinerAddsBeforeHelloAndWaitsForItsRoster)
   const ScopedEnv enabled("ORCA_COSEATS", "1");
   Orca::Status::SetAppCaps("coseats");
   const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
-  auto options = TraceOptions(true);
-  options.local_players = 2;
-  const auto trace = TraceRoomForTest(options, {
+  const auto trace = TraceRoomForTest(TraceOptions(true), {
+      {RK::PageEvent, 0, R"({"slug":"co-page","cmd":"local-add"})"},
       {RK::Message, 0, CoPageWelcome(true, "private", true)},
       {RK::Message, 1, PeerHello(true)}, {RK::Tick, 1000},
       {RK::Message, 1200, CoRoster("lobby", true, true, false)}, {RK::Tick, 1201},
       {RK::PageEvent, 1202, R"({"slug":"co-page","cmd":"local-add"})"}});
-  ASSERT_EQ(trace[0].sent, (std::vector<std::string>{R"({"t":"local-add"})"}));
-  for (const auto& wire : trace[2].sent)
+  EXPECT_TRUE(trace[0].sent.empty());
+  ASSERT_EQ(trace[1].sent, (std::vector<std::string>{R"({"t":"local-add"})"}));
+  for (const auto& wire : trace[3].sent)
   {
     picojson::value value;
     ASSERT_TRUE(picojson::parse(value, wire).empty());
     const auto& data = value.get("d");
     EXPECT_FALSE(data.is<picojson::object>() && data.get("k").to_str() == "hello");
   }
-  EXPECT_EQ(trace[3].co_seats, (std::vector<int>{2}));
-  ASSERT_FALSE(trace[4].sent.empty());
+  EXPECT_EQ(trace[4].co_seats, (std::vector<int>{2}));
+  ASSERT_FALSE(trace[5].sent.empty());
   bool hello = false;
-  for (const auto& wire : trace[4].sent)
+  for (const auto& wire : trace[5].sent)
   {
     picojson::value value;
     ASSERT_TRUE(picojson::parse(value, wire).empty());
@@ -7530,38 +7530,40 @@ TEST(OrcaRoom, CoJoinerAddsBeforeHelloAndWaitsForItsRoster)
     hello |= data.is<picojson::object>() && data.get("k").to_str() == "hello";
   }
   EXPECT_TRUE(hello);
-  EXPECT_TRUE(trace[5].sent.empty());
-  EXPECT_EQ(trace[5].notices, (std::vector<std::string>{
+  EXPECT_TRUE(trace[6].sent.empty());
+  EXPECT_EQ(trace[6].notices, (std::vector<std::string>{
       "Room: Add local player isn't available here (in-match)"}));
 }
 
 TEST(OrcaRoom, CoJoinerTimeoutAndCommandErrorsContinueSingleSeat)
 {
   const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
   const ScopedEnv enabled("ORCA_COSEATS", "1");
   Orca::Status::SetAppCaps("coseats");
   const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
   auto options = TraceOptions(true);
-  options.local_players = 2;
   const auto timeout = TraceRoomForTest(options, {
+      {RK::PageEvent, 0, R"({"slug":"co-page","cmd":"local-add"})"},
       {RK::Message, 0, CoPageWelcome(true, "private", true)}, {RK::Tick, 2499}, {RK::Tick, 2500},
       {RK::Message, 2600, CoRoster("lobby", true, true, false)}});
-  EXPECT_TRUE(timeout[1].notices.empty());
-  EXPECT_EQ(timeout[2].notices, (std::vector<std::string>{
+  EXPECT_TRUE(timeout[2].notices.empty());
+  EXPECT_EQ(timeout[3].notices, (std::vector<std::string>{
       "Room: Add local player timed out; continuing with one local player"}));
-  EXPECT_FALSE(timeout[2].sent.empty());
-  EXPECT_TRUE(timeout[3].co_seats.empty());
+  EXPECT_FALSE(timeout[3].sent.empty());
+  EXPECT_TRUE(timeout[4].co_seats.empty());
   for (const char* action : {"local-add", "local-remove"})
   {
     const auto refused = TraceRoomForTest(options, {
-        {RK::Message, 0, CoPageWelcome(true, "private", true)},
+        {RK::PageEvent, 0, R"({"slug":"co-page","cmd":"local-add"})"},
+      {RK::Message, 0, CoPageWelcome(true, "private", true)},
         {RK::Message, 1, fmt::format(R"({{"t":"command-error","action":"{}","error":"queue"}})", action)},
         {RK::Tick, 1000}});
-    EXPECT_EQ(refused[1].notices, (std::vector<std::string>{fmt::format(
+    EXPECT_EQ(refused[2].notices, (std::vector<std::string>{fmt::format(
         "Room: {} local player isn't available here (queue)",
         std::string_view(action) == "local-add" ? "Add" : "Remove")}));
-    EXPECT_TRUE(refused[1].co_seats.empty());
-    EXPECT_FALSE(refused[2].sent.empty());
+    EXPECT_TRUE(refused[2].co_seats.empty());
+    EXPECT_FALSE(refused[3].sent.empty());
   }
 }
 
@@ -7643,7 +7645,7 @@ TEST_F(OrcaRoomRuntime, TournamentReconnectKeepsOneWithoutReturnedLobby)
   EXPECT_EQ(lobbies.get<picojson::array>()[1].get("maxLocalPlayers").get<double>(), 1);
 }
 
-TEST(OrcaRoom, CoStartupUsesTheFullAssignmentAvailableAtWelcome)
+TEST(OrcaRoom, CoStartupNeverAddsWithoutAPageCommand)
 {
   const ScopedEnv session("ORCA_SESSION", "1");
   const ScopedEnv stdio("YOUGAME_STDIO", "1");
@@ -7677,13 +7679,28 @@ TEST(OrcaRoom, CoStartupUsesTheFullAssignmentAvailableAtWelcome)
     const auto event = picojson::value(picojson::object{{"push", picojson::value(picojson::object{
         {"type", picojson::value("controllers")}, {"snapshot", picojson::value(snapshot)}})}});
     EXPECT_TRUE(Orca::Bridge::Route({"yg " + event.serialize()}).empty());
-    const auto trace = TraceRoomForTest(TraceOptions(true), {
-        {RK::Message, 0, CoPageWelcome(true, "private", true)}});
-    EXPECT_EQ(trace[0].sent.size(), pair ? 1u : 0u);
-    if (pair)
+    // Adapter ports always carry seats, even when the page never requested Player 2.
+    snapshot["owned"] = picojson::value(true);
+    picojson::array ports;
+    for (int port = 0; port < 4; ++port)
+      ports.emplace_back(picojson::object{{"port", picojson::value(static_cast<double>(port))},
+          {"seat", picojson::value(static_cast<double>(port))},
+          {"connected", picojson::value(port < 2)},
+          {"type", port < 2 ? picojson::value("wired") : picojson::value()},
+          {"buttons", picojson::value(0.0)},
+          {"axes", picojson::value(picojson::array(4, picojson::value(128.0)))},
+          {"triggers", picojson::value(picojson::array(2, picojson::value(0.0)))},
+          {"origin", picojson::value(picojson::array(6, picojson::value(128.0)))}});
+    snapshot["ports"] = picojson::value(ports);
+    const auto adapters = picojson::value(picojson::object{{"push", picojson::value(picojson::object{
+        {"type", picojson::value("controllers")}, {"snapshot", picojson::value(snapshot)}})}});
+    EXPECT_TRUE(Orca::Bridge::Route({"yg " + adapters.serialize()}).empty());
+    for (const bool joining : {false, true})
     {
-      ASSERT_EQ(trace[0].sent.size(), 1u);
-      EXPECT_EQ(trace[0].sent[0], R"({"t":"local-add"})");
+      const auto trace = TraceRoomForTest(TraceOptions(joining), {
+          {RK::Message, 0, CoPageWelcome(joining, "private", true)}});
+      EXPECT_TRUE(trace[0].sent.empty());
+      EXPECT_TRUE(trace[0].co_seats.empty());
     }
   }
 }

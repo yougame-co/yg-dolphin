@@ -1302,6 +1302,7 @@ struct YouGameRoom::Impl
   std::optional<Clock::time_point> welcomed_at;
   bool host_seen = false;
   bool hello_sent = false;  // I/O thread: P4 joiner adds stop at its first hello.
+  bool page_add_before_welcome = false;
   bool co_hello_pending = false;  // A held hello must still follow the co-seat roster.
   bool session_active = false;  // under mutex
   bool local_add_pending = false;  // under mutex: an accepted add reserves solo ownership
@@ -3180,6 +3181,11 @@ struct YouGameRoom::Impl
   void SendLocalCommand(const picojson::object& command)
   {
     const auto action = Str(command, "t");
+    if (action == "local-add" && !welcomed_at)
+    {
+      page_add_before_welcome = true;
+      return;
+    }
     std::string reason;
     {
       std::lock_guard lock(mutex);
@@ -5060,23 +5066,8 @@ struct YouGameRoom::Impl
       }
       LinkPeers();
       Roster(m);
-      if (first_welcome && my_co_seats.empty())
-      {
-        bool enabled;
-        {
-          std::lock_guard lock(mutex);
-          enabled = CoSeatsEnabledLocked();
-        }
-        if (enabled)
-        {
-          double age_ms = 0;
-          const auto snapshot = Orca::UX::LatestSnapshot(&age_ms);
-          const auto choices = snapshot ? Orca::UX::ChooseLocalPads(*snapshot, age_ms, 2) :
-              std::array<std::optional<Orca::UX::LocalChoice>, Orca::UX::MAX_LOCAL>{};
-          if (options.local_players > 1 || (choices[0] && choices[1]))
-            SendLocalCommand({{"t", picojson::value("local-add")}});
-        }
-      }
+      if (first_welcome && std::exchange(page_add_before_welcome, false))
+        SendLocalCommand({{"t", picojson::value("local-add")}});
       if (QueueRecovery() &&
           (m.count("hold_ms") || (m.count("recovering") && m.at("recovering").is<bool>() &&
                                   m.at("recovering").get<bool>())))
