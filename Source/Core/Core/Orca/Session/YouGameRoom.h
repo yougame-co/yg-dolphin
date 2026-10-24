@@ -41,6 +41,8 @@ struct RoomOptions
   bool friends_room = true;
   // Transport policy can be disabled for the healthy-session baseline comparison.
   bool recovery_enabled = true;
+  // Explicit local picker intent at room entry. Admission still requires all co-seat gates.
+  int local_players = 1;
   // A joiner's own controls (Orca::Events::OwnControls), sent in its hello so the host puts them in
   // its port (KeyframeInfo::Name::controls). Empty: none.
   std::vector<u8> controls;
@@ -212,6 +214,8 @@ public:
   int Seat() const;
   // Our other seats, ordered by localIndex. Empty until the roster names any.
   std::vector<int> CoSeats() const;
+  // CPU thread: published before constructing/after releasing the rollback session.
+  void SetSessionActive(bool active);
   // The roster's local ordinal (-1 for an absent/invalid seat).
   int LocalIndex(int seat, bool only_mine = false) const;
   // A seat's machine group, lead first then co-seats by localIndex (empty if absent).
@@ -463,6 +467,9 @@ struct RoomTestStep
     ReportGame,
     GameStart,
     Stall,
+    PageEvent,
+    SessionActive,
+    Tournament,
   };
   Kind kind;
   int milliseconds = 0;

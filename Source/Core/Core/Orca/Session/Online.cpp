@@ -37,6 +37,8 @@
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/YouGameRoom.h"
+#include "Core/Orca/UX/ControllerSource.h"
+#include "Core/Orca/UX/Probe.h"
 #include "Core/Rollback/ReplayStream.h"
 
 namespace Orca::Online
@@ -266,6 +268,11 @@ void StartLocked(Net::RoomOptions options)
   if (Rollback::ReplayStream::ProductMode())
     return;
   options.compatibility = CompatibilityKey();
+  double age_ms = 0;
+  const auto snapshot = UX::LatestSnapshot(&age_ms);
+  if ((snapshot && UX::ChooseLocalPads(*snapshot, age_ms, 2)[1]) ||
+      (UX::TestKnobsAllowed() && Env("ORCA_TEST_LOCAL_PLAYERS") == "2"))
+    options.local_players = 2;
   if (const Profile* profile = ActiveProfile())
   {
     std::string game = profile->game_id;
@@ -551,6 +558,12 @@ int LocalIndex(int seat)
   const auto co_seats = room->CoSeats();
   const auto co = std::ranges::find(co_seats, seat);
   return co == co_seats.end() ? -1 : static_cast<int>(co - co_seats.begin()) + 1;
+}
+
+void SetSessionActive(bool active)
+{
+  if (const auto room = Room())
+    room->SetSessionActive(active);
 }
 
 std::vector<int> GroupOf(int seat)

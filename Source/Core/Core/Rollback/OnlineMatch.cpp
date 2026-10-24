@@ -923,6 +923,7 @@ void GoSolo(Match& match, const char* why, const char* state = "playing")
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: back to solo play at frame {} ({}): {} rollbacks, {} checksums matched",
                  match.running + 1, why, stats.rollbacks, stats.checksums_matched);
   match.session.reset();
+  Orca::Online::SetSessionActive(false);
   match.plugging.clear();
   match.idle_frames = 0;
   match.port->SetCatchingUp(false);
@@ -1923,6 +1924,10 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
       // Anything that arrived while solo (a departed friend's last packets) belongs to no one.
       auto* transport = test_room ? test_room : Orca::Online::Transport();
       transport->Receive();
+      if (test_room)
+        test_room->SetSessionActive(true);
+      else
+        Orca::Online::SetSessionActive(true);
       match.session = std::make_unique<Orca::Net::Session>(config, *match.port,
                                                           *transport);
       match.stall_budget.Clear();
@@ -2546,6 +2551,7 @@ void FinishReplay(Match& match)
   std::array<Orca::Net::SeatPlan, Orca::Net::MAX_SEATS> plan{};
   plan[match.host_seat] = {0, Orca::Net::NEVER, 0};
   config.plan = plan;
+  Orca::Online::SetSessionActive(true);
   match.session =
       std::make_unique<Orca::Net::Session>(config, *match.port, *Orca::Online::Transport());
   match.stall_budget.Clear();
@@ -4007,6 +4013,7 @@ std::optional<int> Boundary(Core::System& system,
     if (match.store)
       match.store->Cancel();
     match.session.reset();
+    Orca::Online::SetSessionActive(false);
     match.port.reset();
     match.job.reset();
     match.download.reset();
@@ -5035,6 +5042,7 @@ void End(const char* reason)
   if (match.store)
     match.store->Cancel();
   match.session.reset();
+  Orca::Online::SetSessionActive(false);
   match.port.reset();
   match.download.reset();
   match.replaying.reset();

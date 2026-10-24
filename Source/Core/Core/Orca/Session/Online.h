@@ -117,6 +117,7 @@ std::optional<bool> Joining();
 Net::Transport* Transport();
 int Seat();
 std::vector<int> CoSeats();
+void SetSessionActive(bool active);
 int LocalIndex(int seat);
 std::vector<int> GroupOf(int seat);
 std::vector<Net::PeerEvent> TakePeerEvents();

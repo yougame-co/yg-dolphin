@@ -7433,3 +7433,128 @@ TEST(OrcaRoom, CoPageMirrorRequiresFriendsDoublesAndAgreedCap)
         EXPECT_EQ(mirror.get("me"), original.get("me"));
       }
 }
+
+TEST(OrcaRoom, CoPageCommandsPinEveryGateAndStatus)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  const ScopedEnv enabled("ORCA_COSEATS", "1");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  struct Gate { const char* queue; bool doubles; bool cap; bool active; bool tournament; const char* reason; };
+  for (const auto& gate : std::vector<Gate>{
+      {"private", true, true, false, false, ""},
+      {"casual", true, true, false, false, "queue"},
+      {"ranked", true, true, false, false, "queue"},
+      {"private", true, true, false, true, "queue"},
+      {"private", false, true, false, false, "not-doubles"},
+      {"private", true, false, false, false, "no-cap"},
+      {"private", true, true, true, false, "in-match"}})
+    for (const char* action : {"local-add", "local-remove"})
+    {
+      SCOPED_TRACE(fmt::format("{} {}", action, gate.reason));
+      Orca::Status::SetAppCaps(gate.cap ? "coseats" : "");
+      std::vector<RoomTestStep> steps{
+          {RK::Message, 0, CoPageWelcome(false, gate.queue, gate.doubles)},
+          {RK::SessionActive, 1, "", gate.active ? 1u : 0u}};
+      if (gate.tournament)
+        steps.push_back({RK::Tournament, 1});
+      steps.push_back({RK::PageEvent, 2, fmt::format(
+          R"({{"slug":"co-page","cmd":"{}","id":"local:me:1"}})", action)});
+      const auto trace = TraceRoomForTest(TraceOptions(false), steps);
+      const auto& last = trace.back();
+      if (std::string_view(gate.reason).empty())
+      {
+        ASSERT_EQ(last.sent.size(), 1u);
+        picojson::value sent;
+        ASSERT_TRUE(picojson::parse(sent, last.sent[0]).empty());
+        EXPECT_EQ(sent.get("t").to_str(), action);
+        EXPECT_EQ(sent.get<picojson::object>().size(), std::string_view(action) == "local-add" ? 1u : 2u);
+        if (std::string_view(action) == "local-remove")
+          EXPECT_EQ(sent.get("id").to_str(), "local:me:1");
+        EXPECT_TRUE(last.notices.empty());
+      }
+      else
+      {
+        EXPECT_TRUE(last.sent.empty());
+        const auto expected = fmt::format("Room: {} local player isn't available here ({})",
+            std::string_view(action) == "local-add" ? "Add" : "Remove", gate.reason);
+        EXPECT_EQ(last.notices, (std::vector<std::string>{expected}));
+        EXPECT_EQ(last.status, expected);
+      }
+    }
+  Orca::Status::SetAppCaps("coseats");
+  const auto ignored = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, CoPageWelcome(false, "private", true)},
+      {RK::PageEvent, 1, R"({"slug":"another-page","cmd":"local-add"})"},
+      {RK::PageEvent, 2, R"({"slug":"co-page","cmd":"local-remove","id":"me"})"}});
+  EXPECT_TRUE(ignored[1].sent.empty());
+  EXPECT_TRUE(ignored[1].notices.empty());
+  EXPECT_TRUE(ignored[2].sent.empty());
+  EXPECT_TRUE(ignored[2].notices.empty());
+}
+
+TEST(OrcaRoom, CoJoinerAddsBeforeHelloAndWaitsForItsRoster)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  const ScopedEnv enabled("ORCA_COSEATS", "1");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  auto options = TraceOptions(true);
+  options.local_players = 2;
+  const auto trace = TraceRoomForTest(options, {
+      {RK::Message, 0, CoPageWelcome(true, "private", true)},
+      {RK::Message, 1, PeerHello(true)}, {RK::Tick, 1000},
+      {RK::Message, 1200, CoRoster("lobby", true, true, false)}, {RK::Tick, 1201},
+      {RK::PageEvent, 1202, R"({"slug":"co-page","cmd":"local-add"})"}});
+  ASSERT_EQ(trace[0].sent, (std::vector<std::string>{R"({"t":"local-add"})"}));
+  for (const auto& wire : trace[2].sent)
+  {
+    picojson::value value;
+    ASSERT_TRUE(picojson::parse(value, wire).empty());
+    EXPECT_NE(value.get("d").get("k").to_str(), "hello");
+  }
+  EXPECT_EQ(trace[3].co_seats, (std::vector<int>{2}));
+  ASSERT_FALSE(trace[4].sent.empty());
+  bool hello = false;
+  for (const auto& wire : trace[4].sent)
+  {
+    picojson::value value;
+    ASSERT_TRUE(picojson::parse(value, wire).empty());
+    hello |= value.get("d").get("k").to_str() == "hello";
+  }
+  EXPECT_TRUE(hello);
+  EXPECT_TRUE(trace[5].sent.empty());
+  EXPECT_EQ(trace[5].notices, (std::vector<std::string>{
+      "Room: Add local player isn't available here (in-match)"}));
+}
+
+TEST(OrcaRoom, CoJoinerTimeoutAndCommandErrorsContinueSingleSeat)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv enabled("ORCA_COSEATS", "1");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  auto options = TraceOptions(true);
+  options.local_players = 2;
+  const auto timeout = TraceRoomForTest(options, {
+      {RK::Message, 0, CoPageWelcome(true, "private", true)}, {RK::Tick, 2499}, {RK::Tick, 2500},
+      {RK::Message, 2600, CoRoster("lobby", true, true, false)}});
+  EXPECT_TRUE(timeout[1].notices.empty());
+  EXPECT_EQ(timeout[2].notices, (std::vector<std::string>{
+      "Room: Add local player timed out; continuing with one local player"}));
+  EXPECT_FALSE(timeout[2].sent.empty());
+  EXPECT_TRUE(timeout[3].co_seats.empty());
+  for (const char* action : {"local-add", "local-remove"})
+  {
+    const auto refused = TraceRoomForTest(options, {
+        {RK::Message, 0, CoPageWelcome(true, "private", true)},
+        {RK::Message, 1, fmt::format(R"({{"t":"command-error","action":"{}","error":"queue"}})", action)},
+        {RK::Tick, 1000}});
+    EXPECT_EQ(refused[1].notices, (std::vector<std::string>{fmt::format(
+        "Room: {} local player isn't available here (queue)",
+        std::string_view(action) == "local-add" ? "Add" : "Remove")}));
+    EXPECT_TRUE(refused[1].co_seats.empty());
+    EXPECT_FALSE(refused[2].sent.empty());
+  }
+}
