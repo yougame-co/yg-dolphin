@@ -7388,11 +7388,11 @@ stays 1, and no key construction function changes.
 Forced upgrade: the engine has no queue minimum-version setting. ORCA_NOTES' release workflow
 says the app forces the newest engine and the site's queue rejects older builds with
 `409 orca_outdated`; Tools/orca/upstream-sync.py's release steps describe the same gate.
-The external release manifest is `runtime/orca/manifest.json`: orca-lead must publish its
-`version` as `0.3.82` with this train's final commit and new artifacts. If the release contract
-also maintains a `minEngine` floor, set it to `0.3.82`; no desktop protocol changed, so no new
-`minDesktop` floor is required by this port. This repo contains neither that manifest nor the
-site/desktop implementation of those fields; they were not accessed or changed here.
+Orca-lead settled the release handoff on 2026-10-24: the staging swap moves the external
+`runtime/orca/manifest.json` `version` to `0.3.82`, and the site's `409 orca_outdated` queue gate
+enforces it. No separate `minEngine`/`minDesktop` edit is needed, and nothing outside the engine
+repo is part of this task. The engine compatibility bump and final source/package version bump
+are the in-repo changes; no external file or service was accessed or changed here.
 
 
 **D3D revert-forward:** `8b0b4bc8ae` reapplies `ef746ea873` cleanly. The entire D3DMain.cpp matches
@@ -7466,3 +7466,88 @@ to ef746ea873. No pushes, network service requests, window/GPU boots, signing or
 The full suite generated an untracked root `imgui.ini`; it is not committed or removed (deletion
 outside the build directory is forbidden). Logs and prepared local verification scripts stay in
 `build-stagelists/`. The source/package versions remain 0.3.81 until the final authorized bump.
+
+**Run 3 continuation (2026-10-24):** base check at `90060df8fa Record the ranked compatibility
+validation blocker` returned `BASE-OK` for `dd700be102`. Kept `90060df8fa` as the history of the
+earlier run; its blocker was resolved by Luis's explicit run-3 exception. Separate commit
+`e33c413067` updates only `OrcaMod.GoldenLegacyCompatibilityKey`'s current suffix and explanatory
+comment to `ux=32.1`, retaining both old serialization goldens. This is the additional existing
+test changed beyond the list above. Run-3 results follow after validation.
+
+The full binary ran once in run 3 through `room-fix-tests.py --gtest_brief=1`: **2,543 tests in
+207 suites, 2,520 passed, 23 skipped, 0 failures** (697,376 ms). Both requested Mac targets built
+with `make -j2 tests dolphin-nogui`; `-j2` follows the later hard machine rule. The first incremental
+invocation omitted the explicit ccache directory; it was repeated with
+`CCACHE_DIR=/Volumes/YGWorktrees/ccache`, which is explicit on subsequent builds. Reference cache
+options were retained, except code signing is off as required and the build cache version is
+0.3.82. Source/package default version changes are reserved for the final commit.
+
+Hashlogs: reused staging-0381/hashlog/new/YG Dolphin.app and verified its embedded full commit
+`dd700be1029fffa6a8b926eefa85016aab7983c6`; the eab fallback was not needed. RSBE01, PPLUS32 and
+PPLUS321 each ran baseline and port, cold and warm: all **12 boots exited 0**, each log has **601
+entries at frames 0-600**, and all cold/warm/baseline/port comparisons have **0 differences**.
+All boots used `-p headless -v Null`, disabled local input and all six specified SDL device paths,
+the heavy slot, shared build lock and run-lock wrapper. Logs and summaries are under
+`build-stagelists/`; no disc or launcher/card source was changed.
+
+Cumulative validation of the resumed local commits (full-suite build at `e33c413067`):
+
+| Commit | Change | Validation |
+| --- | --- | --- |
+| `e56b44289c` | Ranked-only 2026 rules, masks and layout | Stage/rules unit tests; baseline regression fails as expected |
+| `606098949e` | Probed Frigate tile and current ranked inputs | Frigate unit test; replay and paired runs below |
+| `0d06db7b8d` | Original Frigate probe record | Documentation diff check |
+| `f0822c9a6e` | Original sync record | Documentation diff check |
+| `6c31ea7702` | Ranked Random/native-text agreements | Replay and paired runs below |
+| `24813e834c` | Original review record | Documentation diff check |
+| `62f5dcea9c` | Ranked 30/10/20/6 ledge limits | Verdict/boundary unit tests; baseline regression fails as expected |
+| `f0419afa39` | Global UX compatibility 31 to 32 | Compatibility fixture and full suite after the approved fixture update |
+| `8b0b4bc8ae` | D3D temporary-device probe default | Byte-identical to `ef746ea873`; Mac build and full suite |
+| `e60737a30f` | Ruleset/boundary coverage | Full suite, including all eight added tests |
+| `4680c78a88` | Port resolutions and scope | Documentation diff check |
+| `90060df8fa` | Earlier validation blocker history, retained | Historical run-2 result; superseded by run-3 green suite |
+| `e33c413067` | Approved UX suffix fixture update | Full suite; both earlier serialization goldens retained |
+
+Ranked rollback replays (`YG_SYNCTEST=7`), all exit 0 / PASS / **0 RAM mismatches**:
+
+| Input | Frames | Re-run frames |
+| --- | --- | --- |
+| `bf-ranked-bo3.txt` | 1700-12000 | 72,051 |
+| `bf-css-random.txt` | 1440-5000 | 24,871 |
+| `bf-native-text.txt` | 1440-8000 | 45,871 |
+| `bf-sss-cursors.txt` | 1700-9000 | 51,051 |
+| `pplus-sss-cursors-ranked.txt` (`PPLUS32`) | 170-6000 | 40,761 |
+
+Total: **234,605 re-run frames**. As ORCA.md's harness contract explains, the device-state-only
+differences (icache, GPU dirty flags and host counters) are expected; the RAM mismatch count is the
+pass criterion. The BO3 log confirms BF/FD/Lylat strikes (001/021/025), YI, both Delfino/Frigate
+bans (040/0c0), PS1 across the page turn, then skipped bans and Frigate, and the 2-1 verdict.
+The agreement inputs reach Smashville, then Battlefield; Project+ retains its Battlefield pick.
+
+**Paired validation and stop (2026-10-24):** the localhost BO3 pair passed, exits 0/0,
+**177 matched checksums on each side, 0 desyncs**, 19 identical stage-state events and three
+identical game verdicts. It played the new list through YI, PS1 and Frigate for the 2-1 set.
+
+The next paired case, `bf-css-random.txt`, did not reach a fight or verdict. Both processes exited
+0 with 77 matched checksums each and 0 desyncs, but only initialization-stage traces (3/2 events)
+and 0/0 verdicts, so the driver correctly failed. `ORCA_TEST_QUEUE_PICK` supplies the matched
+joiner's identity in standalone harness mode only (`Harness.cpp`, `SnapshotModesAllowed()`);
+the paired stub had joined before the solo input readied and supplied no queue identity.
+
+A separate untracked fixture attempt supplied synthetic queue identity in the joiner's hello.
+That was rejected as inconsistent fixture metadata: exits 0/0, 0/0 matched checksums, no verdicts,
+and the driver failed. No engine code, compatibility decision or existing assertion was changed
+to accommodate either fixture. Correct paired queue2 validation needs the app's full local
+ready/host/join identity flow, rather than the standalone injection or a rewritten hello field.
+Stopped under the task's hard blocker rule; no further fixture changes or test runs followed.
+
+Remaining: valid paired Random/native-text runs, paired cursor and Project+ runs (the driver
+stopped before them), CLI key-template/selftest, and the final 0.3.82 version commit. The source
+and package defaults are still 0.3.81: the prepared version edits were withdrawn, retaining the
+requirement to commit the version last after the gates pass. `keyCode` remains the previously
+independently calculated `f86645e20656efe5` because its fingerprinted functions are unchanged;
+the UX suffix changes to `32.1`. D3DMain.cpp still matches `ef746ea873` byte for byte. The full
+suite, all 12 hashlog boots and all five standalone replays passed as recorded above. The fixture
+processes had already exited when cleanup was checked; no process was killed. `imgui.ini` was
+already untracked at resume and remains untouched. All changes are local; no push or external
+service request was made.
