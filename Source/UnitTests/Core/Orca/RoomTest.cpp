@@ -22,6 +22,9 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include "Core/Orca/Bridge.h"
+#include "Core/Orca/UX/ControllerSource.h"
+
 #include "Common/CommonPaths.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
@@ -7622,4 +7625,62 @@ TEST(OrcaRoom, PendingLocalAddReservesTheSoloHostUntilItsRosterArrives)
   EXPECT_EQ(trace[4].co_seats, (std::vector<int>{2}));
   ASSERT_TRUE(trace[5].input_held.has_value());
   EXPECT_TRUE(*trace[5].input_held);
+}
+
+TEST_F(OrcaRoomRuntime, TournamentReconnectKeepsOneWithoutReturnedLobby)
+{
+  const std::string code = "cop4tourney";
+  auto room = Open(code, R"({"tourney":1})");
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+  std::string ticket, store, error;
+  ASSERT_TRUE(room->FreshTicket(true, &ticket, &store, &error)) << error;
+  const auto lobbies = Request("/state/" + code).get("ticket_lobbies");
+  ASSERT_EQ(lobbies.get<picojson::array>().size(), 2u);
+  EXPECT_EQ(lobbies.get<picojson::array>()[0].get("maxLocalPlayers").get<double>(), 2);
+  EXPECT_EQ(lobbies.get<picojson::array>()[1].get("maxLocalPlayers").get<double>(), 1);
+}
+
+TEST(OrcaRoom, CoStartupUsesTheFullAssignmentAvailableAtWelcome)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv stdio("YOUGAME_STDIO", "1");
+  const ScopedEnv enabled("ORCA_COSEATS", "1");
+  Orca::Status::SetAppCaps("coseats");
+  Orca::UX::StartControllerStreamFromStdio();
+  const Common::ScopeGuard cleanup([] {
+    Orca::UX::StopControllerStream();
+    Orca::Status::SetAppCaps("");
+  });
+  for (const bool pair : {false, true})
+  {
+    picojson::array pads;
+    for (const int ordinal : pair ? std::vector<int>{0, 1} : std::vector<int>{1})
+    {
+      picojson::array buttons;
+      for (int index = 0; index < 17; ++index)
+        buttons.emplace_back(picojson::object{{"value", picojson::value(0.0)},
+                                              {"pressed", picojson::value(false)}});
+      pads.emplace_back(picojson::object{{"index", picojson::value(static_cast<double>(ordinal))},
+          {"seat", picojson::value(static_cast<double>(ordinal))},
+          {"mapping", picojson::value("standard")},
+          {"axes", picojson::value(picojson::array(4, picojson::value(0.0)))},
+          {"buttons", picojson::value(buttons)}});
+    }
+    picojson::object snapshot{{"schema", picojson::value(1.0)}, {"session", picojson::value("co-startup")},
+        {"sequence", picojson::value(pair ? 2.0 : 1.0)}, {"sentAt", picojson::value(1000.0)},
+        {"receivedAt", picojson::value(1000.0)}, {"owned", picojson::value(false)},
+        {"suspended", picojson::value(false)}, {"ports", picojson::value(picojson::array{})},
+        {"pads", picojson::value(pads)}};
+    const auto event = picojson::value(picojson::object{{"push", picojson::value(picojson::object{
+        {"type", picojson::value("controllers")}, {"snapshot", picojson::value(snapshot)}})}});
+    EXPECT_TRUE(Orca::Bridge::Route({"yg " + event.serialize()}).empty());
+    const auto trace = TraceRoomForTest(TraceOptions(true), {
+        {RK::Message, 0, CoPageWelcome(true, "private", true)}});
+    EXPECT_EQ(trace[0].sent.size(), pair ? 1u : 0u);
+    if (pair)
+    {
+      ASSERT_EQ(trace[0].sent.size(), 1u);
+      EXPECT_EQ(trace[0].sent[0], R"({"t":"local-add"})");
+    }
+  }
 }

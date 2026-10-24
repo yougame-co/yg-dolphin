@@ -270,7 +270,9 @@ void StartLocked(Net::RoomOptions options)
   options.compatibility = CompatibilityKey();
   double age_ms = 0;
   const auto snapshot = UX::LatestSnapshot(&age_ms);
-  if ((snapshot && UX::ChooseLocalPads(*snapshot, age_ms, 2)[1]) ||
+  const auto choices = snapshot ? UX::ChooseLocalPads(*snapshot, age_ms, 2) :
+      std::array<std::optional<UX::LocalChoice>, UX::MAX_LOCAL>{};
+  if ((Status::Cap("coseats") && choices[0] && choices[1]) ||
       (UX::TestKnobsAllowed() && Env("ORCA_TEST_LOCAL_PLAYERS") == "2"))
     options.local_players = 2;
   if (const Profile* profile = ActiveProfile())

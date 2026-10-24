@@ -35,6 +35,7 @@
 #include "Core/Orca/Session/DirectLink.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/Online.h"
+#include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Session/RoomResilience.h"
 #include "Core/Orca/Status.h"
@@ -1840,10 +1841,13 @@ struct YouGameRoom::Impl
     keyframes_url = KeyframesUrl(Str(reply, "keyframes"));
     std::lock_guard lock(mutex);
     code = room;
+    ticket_tourney = Int(reply, "tourney", 1, 1).has_value();
     ticket_lobby = lobby;
     if (const auto original = reply.find("lobby");
         original != reply.end() && original->second.is<picojson::object>())
       ticket_lobby = original->second.get<picojson::object>();
+    else if (ticket_tourney)
+      ticket_lobby["maxLocalPlayers"] = picojson::value(1.0);  // The site forces tournament tickets to one.
     current_ticket = *ticket;
     ticket_minted = Now();
     role_known = true;
@@ -1851,7 +1855,6 @@ struct YouGameRoom::Impl
       ParseIce(it->second, &ice);
     ice_minted = Clock::now();
     ticket_direct = TicketAllowsDirect(reply);
-    ticket_tourney = Int(reply, "tourney", 1, 1).has_value();
     return true;
   }
 
@@ -5052,8 +5055,23 @@ struct YouGameRoom::Impl
       }
       LinkPeers();
       Roster(m);
-      if (first_welcome && options.local_players > 1 && my_co_seats.empty())
-        SendLocalCommand({{"t", picojson::value("local-add")}});
+      if (first_welcome && my_co_seats.empty())
+      {
+        bool enabled;
+        {
+          std::lock_guard lock(mutex);
+          enabled = CoSeatsEnabledLocked();
+        }
+        if (enabled)
+        {
+          double age_ms = 0;
+          const auto snapshot = Orca::UX::LatestSnapshot(&age_ms);
+          const auto choices = snapshot ? Orca::UX::ChooseLocalPads(*snapshot, age_ms, 2) :
+              std::array<std::optional<Orca::UX::LocalChoice>, Orca::UX::MAX_LOCAL>{};
+          if (options.local_players > 1 || (choices[0] && choices[1]))
+            SendLocalCommand({{"t", picojson::value("local-add")}});
+        }
+      }
       if (QueueRecovery() &&
           (m.count("hold_ms") || (m.count("recovering") && m.at("recovering").is<bool>() &&
                                   m.at("recovering").get<bool>())))
