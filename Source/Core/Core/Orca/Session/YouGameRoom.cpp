@@ -3179,7 +3179,7 @@ struct YouGameRoom::Impl
     Orca::Status::Line(line);
   }
 
-  std::string LocalRefusalLocked() const
+  std::string LocalRefusalLocked(bool removing) const
   {
     if (!Orca::Status::Cap("coseats") || Env("ORCA_COSEATS") == "0")
       return "no-cap";
@@ -3187,8 +3187,8 @@ struct YouGameRoom::Impl
       return "queue";
     if (!doubles)
       return "not-doubles";
-    if (state == RoomState::Ended || stop || leave_requested || session_active ||
-        (joining && hello_sent))
+    if (state == RoomState::Ended || stop || leave_requested ||
+        (!removing && (session_active || (joining && hello_sent))))
       return "in-match";
     return {};
   }
@@ -3210,7 +3210,17 @@ struct YouGameRoom::Impl
     std::string reason;
     {
       std::lock_guard lock(mutex);
-      reason = LocalRefusalLocked();
+      const bool removing = action == "local-remove";
+      reason = LocalRefusalLocked(removing);
+      if (reason.empty() && removing &&
+          !std::ranges::any_of(room_participants, [&](const picojson::value& participant) {
+            if (!participant.is<picojson::object>())
+              return false;
+            const auto& p = participant.get<picojson::object>();
+            return Str(p, "id") == Str(command, "id") && Str(p, "connectionId") == me &&
+                   Int(p, "localIndex", 1, MAX_SEATS - 1).has_value();
+          }))
+        reason = "not-local";
       if (reason.empty() && action == "local-add")
       {
         if (local_add_pending || !my_co_seats.empty())
