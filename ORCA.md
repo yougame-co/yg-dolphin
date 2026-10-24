@@ -1625,7 +1625,7 @@ away.
 
 | Offset | What |
 |---|---|
-| `+0x00` | Header: `YGM1`, version 1, mode (0 none, 1 casual, 2 ranked), ruleset (1 Brawl Supernova 2025, 2 Project+ 2024), `+0x07` coin, `+0x08` room hash, `+0x0C` queue flags |
+| `+0x00` | Header: `YGM1`, version 1, mode (0 none, 1 casual, 2 ranked), ruleset (1 Brawl: Supernova 2026 ranked, existing casual; 2 Project+ 2024), `+0x07` coin, `+0x08` room hash, `+0x0C` queue flags |
 | `+0x10`-`+0x8F` | Project+'s stage flow (`MatchBlock::State`) |
 | `+0x80`-`+0xBF` | Brawl's stage flow (`BrawlStages`; each game uses its own range) |
 | `+0xC0`-`+0xCF` | Ranked ready timer, no-show, plugged ports |
@@ -2258,7 +2258,7 @@ carries into the game (Zero Suit Samus, Sheik, Project+'s Nana-led Ice Climbers)
 ends and held for that player while the select ends. State: 16 bytes at `+0x200` (magic `YGCO`, the
 step, the first picker, the lock-ins, the step's start frame, the kept L and R at `+0x20E`).
 
-Not yet: Supernova 2025's exact order (ban, the loser's stage, then characters).
+Not yet: Supernova's exact order (bans, the loser's stage, then characters).
 
 ### The queue's character select
 

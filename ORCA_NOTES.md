@@ -7393,3 +7393,50 @@ The external release manifest is `runtime/orca/manifest.json`: orca-lead must pu
 also maintains a `minEngine` floor, set it to `0.3.82`; no desktop protocol changed, so no new
 `minDesktop` floor is required by this port. This repo contains neither that manifest nor the
 site/desktop implementation of those fields; they were not accessed or changed here.
+
+
+**D3D revert-forward:** `8b0b4bc8ae` reapplies `ef746ea873` cleanly. The entire D3DMain.cpp matches
+that source commit byte for byte (`git diff --exit-code ef746ea873 -- <file>`). Temporary-device
+probes are the default; `ORCA_TEST_D3D_PROBE=deferred` retains the alternate path. D3D11 is not
+compiled on this Mac; validation here covers clean application and the Mac targets/tests.
+
+**Port resolutions (today's train wins outside the approved ranked rules):**
+- The old C++ rules tables and ledge constants moved to checked JSON. Added a ranked 2026 file;
+  retained the 2025 file for casual and the Project+ file byte for byte. No generic step, rating,
+  verdict or dormant co-seat logic was replaced with Oct 6 code.
+- The proposal also changed casual and reordered its indices. Those changes were omitted. The
+  train's seven indices and casual layout remain; ranked appends Frigate at index 7. Its starter
+  mask is `0x3D`, counterpicks `0xC2`. Timer defaults still use the train's first-allowed-index rule
+  (BF, Lylat, Smashville struck by default, then YI picked). No casual or Project+ assertion changed.
+- Kept the newer Random marker, button-release latch, cursor starts above Random, and turn-only
+  page ownership. `bf-sss-cursors.txt` had changed context; all four ranked Brawl inputs now use
+  those starts and the current page owner. The BO3 input moves one extra frame down to Lylat/YI
+  and the page button; the three agreement inputs let port 2 turn both pages while striking.
+- Did not reset UX compatibility to the proposal's 21: it advances the train's 31 to 32 separately.
+- Original probe/sync/review notes were retained as historical evidence. Review notes needed manual
+  insertion at the current section boundary. Current run results are recorded separately below.
+
+**Existing tests changed (all other existing assertions retained):**
+- `OrcaBrawlStages.GameOneStrikesOnTheStageSelect`: FD is now a starter; use Delfino to test a
+  refused counterpick and FD as the taken starter.
+- `OrcaBrawlStages.ThePickersAPicks`: FD replaces PS1 as the legal game-1 pick. The separate new
+  `ALaterPickOnTheMeleePageGoesThroughThePageButton` preserves coverage of the Melee-page route.
+- `OrcaBrawlStages.AgreementSkipsTheStepsButNeverTakesAStruckStage`: Delfino is the counterpick.
+- `OrcaBrawlStages.LaterGamesAgreementIgnoresDsrNotTheBan`: apply both bans before testing agreement.
+- `OrcaBrawlStages.APageTurnGoesThroughThePageButton`: PS1 cannot be proposed in game 1.
+- `OrcaBrawlStages.ResultsMakeTheSetAndLaterGamesBanThenPick`: count and displayed cue are two bans.
+- `OrcaBrawlStages.AStageTakenDuringStrikesTakesTheDefaults`: the new starters with stable indices
+  default to YI rather than PS1/Smashville.
+- `OrcaRulesets.BuiltinsAreTheOldTables`: only the block-1 dispatch pointer changes to ranked 2026;
+  all old table assertions (including casual and Project+) remain.
+- `OrcaRankedSet.BrawlTimeOutLedgeLimitThenStocksThenPercent`: 30/31 replace 35/36; exactly 20 MK
+  grabs also test stocks deciding. The old ledge-limit exception expressly authorizes this update.
+- `OrcaRankedSet.BrawlTieMeansATiebreakGame`: exactly 10 is within; 11 loses by ledge limit.
+
+Eight added tests cover the active stage list/two optional bans, ranked stage-switch mask, compiled
+2026 data, Meta Knight clause, Frigate tile, later Melee-page pick, 30/10/20/6 limits and MK's 6/7
+boundary. `keyCode` is unchanged: `f86645e20656efe5`; the fingerprinted key functions are byte
+identical to dd700be102, while the UX value they consume changes. Baseline checks: clean at
+`dd700be102 YG Dolphin 0.3.81`, `BASE-OK`. Initial configure and `make -j2 tests dolphin-nogui`
+succeeded with the tools cache options and `CCACHE_DIR=/Volumes/YGWorktrees/ccache`; `-j2` follows
+the later hard machine rule. Regression and final validation remain pending the shared lock.
