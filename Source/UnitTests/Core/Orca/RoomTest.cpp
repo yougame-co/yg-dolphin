@@ -9099,3 +9099,51 @@ TEST(OrcaRoomRankedDoubles, LocalAddIsRefusedWithRankedReasonBeforeSending)
     EXPECT_TRUE(trace.back().co_seats.empty());
   }
 }
+
+TEST_F(OrcaRoomRuntime, RankedDoublesTicketsOmitLocalSeatsAtMintAndRefresh)
+{
+  for (const bool explicit_mode : {false, true})
+  {
+    SCOPED_TRACE(explicit_mode);
+    const std::string code = explicit_mode ? "rankedlsmode" : "rankedlsroom";
+    Request("/configure/" + code,
+        R"({"queue":"ranked","doubles":true,"joining":false,"peers":3,"teams":true})");
+    auto options = TraceOptions(false);
+    options.room_code = code;
+    options.mode = explicit_mode ? "orca-rsbe01-2v2-ranked" : "orca-rsbe01";
+    auto room = std::make_unique<YouGameRoom>(options);
+    ASSERT_TRUE(Wait([&] { return room->Doubles(); }));
+    std::string ticket, store, error;
+    ASSERT_TRUE(room->FreshTicket(true, &ticket, &store, &error)) << error;
+    const auto seats = Request("/state/" + code).get("ticket_local_seats");
+    ASSERT_TRUE(seats.is<picojson::array>());
+    ASSERT_EQ(seats.get<picojson::array>().size(), 2u);
+    if (explicit_mode)
+      EXPECT_TRUE(seats.get<picojson::array>()[0].is<picojson::null>());
+    else
+      EXPECT_EQ(seats.get<picojson::array>()[0].get<double>(), 1);
+    EXPECT_TRUE(seats.get<picojson::array>()[1].is<picojson::null>());
+  }
+}
+
+TEST(OrcaRoomRankedDoubles, TicketSeatsAreAbsentForRankedRequestsAndKnownRooms)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  for (const bool explicit_mode : {false, true})
+  {
+    auto options = TraceOptions(false);
+    if (explicit_mode)
+      options.mode = "orca-rsbe01-2v2-ranked";
+    const auto trace = TraceRoomForTest(options, {
+        {RK::PageEvent, 0, CO_PAGE_ADD},
+        {RK::Message, 1, RankedArrival("welcome", 1)}});
+    if (explicit_mode)
+      EXPECT_FALSE(trace[0].ticket_local_seats);
+    else
+      EXPECT_EQ(trace[0].ticket_local_seats, 2);
+    EXPECT_FALSE(trace[1].ticket_local_seats);
+  }
+}

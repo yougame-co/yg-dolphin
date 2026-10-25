@@ -1781,9 +1781,11 @@ struct YouGameRoom::Impl
     return WriteText(text, timeout, probe);
   }
 
-  int TicketLocalSeats() const
+  std::optional<int> TicketLocalSeats() const
   {
     std::lock_guard lock(mutex);
+    if ((queue_known && queue == "ranked" && doubles) || options.mode.ends_with("-2v2-ranked"))
+      return std::nullopt;
     if (!my_co_seats.empty() || (local_add_pending && !inherited_co_cleanup))
       return 2;
     const bool allowed = Orca::Status::Cap("coseats") && Env("ORCA_COSEATS") != "0" &&
@@ -1933,7 +1935,8 @@ struct YouGameRoom::Impl
       request["type"] = picojson::value("mpTicket");
       request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
       request["mode"] = picojson::value(options.mode);
-      request["ls"] = picojson::value(static_cast<double>(TicketLocalSeats()));
+      if (const auto seats = TicketLocalSeats())
+        request["ls"] = picojson::value(static_cast<double>(*seats));
       request["ranked"] = picojson::value(false);
       request["room"] = picojson::value(room);
       request["lobby"] = picojson::value(lobby);
@@ -1959,7 +1962,8 @@ struct YouGameRoom::Impl
       request["name"] = picojson::value(options.player_name);
       request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
       request["mode"] = picojson::value(options.mode);
-      request["ls"] = picojson::value(static_cast<double>(TicketLocalSeats()));
+      if (const auto seats = TicketLocalSeats())
+        request["ls"] = picojson::value(static_cast<double>(*seats));
       request["room"] = picojson::value(room);
       request["lobby"] = picojson::value(lobby);
       if (!post(site + "/api/multiplayer/ticket", request, {{"Content-Type", "application/json"}},
@@ -2040,7 +2044,8 @@ struct YouGameRoom::Impl
     picojson::object request;
     request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
     request["mode"] = picojson::value(options.mode);
-    request["ls"] = picojson::value(static_cast<double>(TicketLocalSeats()));
+    if (const auto seats = TicketLocalSeats())
+      request["ls"] = picojson::value(static_cast<double>(*seats));
     request["room"] = picojson::value(room);
     request["lobby"] = picojson::value(lobby);
     const auto mint_cap = deadline ?

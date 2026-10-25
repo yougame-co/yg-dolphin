@@ -46,6 +46,10 @@ def roster(code, cfg, kind="welcome"):
             result["participants"].append({"id": f"{connection}:co:{slot}",
                 "connectionId": connection, "slot": slot, "localIndex": ordinal,
                 "name": f"{connection} local {ordinal + 1}"})
+    if cfg.get("teams"):
+        for participant in result["participants"]:
+            participant["team"] = participant["slot"] % 2
+            participant["localIndex"] = 0
     return result
 
 

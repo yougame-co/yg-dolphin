@@ -524,7 +524,7 @@ struct RoomTestSnapshot
   std::vector<int> linked_seats;
   std::optional<std::chrono::steady_clock::time_point> host_input_deadline;
   std::map<int, int> teams;
-  int ticket_local_seats = 1;
+  std::optional<int> ticket_local_seats = 1;
   picojson::object mirror;
   std::string published_mirror;
   unsigned mirror_serializations = 0;
