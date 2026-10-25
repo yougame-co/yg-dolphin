@@ -6273,70 +6273,84 @@ TEST(OrcaDoublesAdmission, WindowFillsEarlyAndLateArrivalsWaitForMenus)
 TEST_F(OrcaRoomRuntime, DoublesBatchOffersOneCaptureWithEveryPortValue)
 {
   FriendsHeadlessCore core;
-  const std::string code = "batch444";
-  auto room = Open(code, R"({"joining":false,"peers":3,"doubles":true})", false);
-  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
-  ASSERT_TRUE(room->Doubles());
-  constexpr int origin = 1524, current = 1600;
-  ReplayArchive replay = FriendsReplay(origin, current);
-  RoomHashGame game;
-  auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
-                                        std::string* error) {
-    return room->FreshTicket(fresh, ticket, server, error);
-  });
-  const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
-      core.system, *room, game, replay, current, {}, true, std::move(store));
-  EXPECT_EQ(result.seats, (std::vector<int>{1, 2, 3}));
-  EXPECT_EQ(result.keyframe_frame, current);
-  EXPECT_FALSE(result.fresh_start);
-  ASSERT_TRUE(Wait([&] {
-    const auto state = Request("/state/" + code);
-    std::set<std::string> recipients;
-    for (const auto& message : state.get("messages").get<picojson::array>())
-      if (message.get("d").is<picojson::object>() && message.get("d").get("k").to_str() == "kf")
-        recipients.insert(message.get("to").to_str());
-    return recipients.size() == 3;
-  }));
-  const auto state = Request("/state/" + code);
-  std::set<std::string> captures;
-  std::set<std::string> recipients;
-  std::optional<std::vector<KeyframeInfo::Name>> names;
-  for (const auto& message : state.get("messages").get<picojson::array>())
+  for (const char* queue : {"private", "casual"})
   {
-    const auto& data = message.get("d");
-    if (!data.is<picojson::object>() || data.get("k").to_str() != "kf")
-      continue;
-    const auto offer = KeyframeOfferFromJson(data.get<picojson::object>());
-    ASSERT_TRUE(offer);
-    EXPECT_TRUE(offer->shared);
-    EXPECT_EQ(offer->frame, current);
-    captures.insert(offer->id);
-    recipients.insert(message.get("to").to_str());
-    if (!names)
-      names = offer->names;
-    EXPECT_EQ(offer->names, *names);
-    std::set<int> ports;
-    for (const auto& name : offer->names)
+    SCOPED_TRACE(queue);
+    const std::string code = std::string("btch") + queue;
+    auto room = Open(code, fmt::format(
+        R"({{"joining":false,"peers":3,"doubles":true,"queue":"{}"}})", queue), false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+    ASSERT_TRUE(room->Doubles());
+    constexpr int origin = 1524, current = 1600;
+    ReplayArchive replay = FriendsReplay(origin, current);
+    RoomHashGame game;
+    auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                          std::string* error) {
+      return room->FreshTicket(fresh, ticket, server, error);
+    });
+    const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
+        core.system, *room, game, replay, current, {}, true, std::move(store));
+    EXPECT_EQ(result.seats, (std::vector<int>{1, 2, 3}));
+    EXPECT_EQ(result.keyframe_frame, current);
+    EXPECT_FALSE(result.fresh_start);
+    ASSERT_TRUE(Wait([&] {
+      const auto state = Request("/state/" + code);
+      std::set<std::string> recipients;
+      for (const auto& message : state.get("messages").get<picojson::array>())
+        if (message.get("d").is<picojson::object>() && message.get("d").get("k").to_str() == "kf")
+          recipients.insert(message.get("to").to_str());
+      return recipients.size() == 3;
+    }));
+    const auto state = Request("/state/" + code);
+    std::set<std::string> captures;
+    std::set<std::string> recipients;
+    std::optional<std::vector<KeyframeInfo::Name>> names;
+    for (const auto& message : state.get("messages").get<picojson::array>())
     {
-      ports.insert(name.seat);
-      if (name.seat > 0)
-        EXPECT_EQ(name.controls, (std::vector<u8>{static_cast<u8>(name.seat)}));
+      const auto& data = message.get("d");
+      if (!data.is<picojson::object>() || data.get("k").to_str() != "kf")
+        continue;
+      const auto offer = KeyframeOfferFromJson(data.get<picojson::object>());
+      ASSERT_TRUE(offer);
+      EXPECT_TRUE(offer->shared);
+      EXPECT_EQ(offer->frame, current);
+      captures.insert(offer->id);
+      recipients.insert(message.get("to").to_str());
+      if (!names)
+        names = offer->names;
+      EXPECT_EQ(offer->names, *names);
+      std::set<int> ports;
+      for (const auto& name : offer->names)
+      {
+        ports.insert(name.seat);
+        if (name.seat > 0)
+          EXPECT_EQ(name.controls, (std::vector<u8>{static_cast<u8>(name.seat)}));
+      }
+      EXPECT_EQ(ports, (std::set<int>{0, 1, 2, 3}));
     }
-    EXPECT_EQ(ports, (std::set<int>{0, 1, 2, 3}));
+    EXPECT_EQ(captures.size(), 1u);
+    EXPECT_EQ(recipients.size(), 3u);
   }
-  EXPECT_EQ(captures.size(), 1u);
-  EXPECT_EQ(recipients.size(), 3u);
 }
 
-TEST_F(OrcaRoomRuntime, DoublesFlagCannotEnableQueueRooms)
+TEST_F(OrcaRoomRuntime, CasualDoublesUsesAllFourSeats)
 {
-  for (const auto* queue : {"ranked", "casual"})
-  {
-    auto room = Open(std::string("ndbl") + queue,
-                     fmt::format(R"({{"queue":"{}","doubles":true}})", queue));
-    ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
-    EXPECT_FALSE(room->Doubles());
-  }
+  auto room = Open("casdbl4", R"({"queue":"casual","doubles":true,"peers":3,"joining":false})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  EXPECT_TRUE(room->Doubles());
+  EXPECT_EQ(room->Queue(), "casual");
+  EXPECT_EQ(room->PlayQueue(), "private");
+  std::set<int> seats;
+  ASSERT_TRUE(Wait([&] {
+    for (const auto& event : room->TakePeerEvents())
+      if (event.kind == PeerEvent::Kind::Arrived)
+      {
+        EXPECT_TRUE(event.doubles);
+        seats.insert(event.seat);
+      }
+    return seats.size() == 3;
+  }));
+  EXPECT_EQ(seats, (std::set<int>{1, 2, 3}));
 }
 
 TEST_F(OrcaRoomRuntime, BatchEnvelopeDeliversOnlyThisRecipientsPacket)
@@ -8461,4 +8475,61 @@ TEST(OrcaRoom, JoinerPageAddAfterTheWelcomeTickIsAMidSessionAdd)
       "Room: Add local player isn't available here (in-match)"}));
   EXPECT_TRUE(trace[3].co_seats.empty());
   // The page must send Add with or before joining; after hello it needs P5.
+}
+
+TEST(OrcaRoom, QueueDoublesWelcomeAndRankedRefusal)
+{
+  for (const char* queue : {"private", "casual", "ranked"})
+  {
+    SCOPED_TRACE(queue);
+    bool doubles = false;
+    const auto welcome = CoPageWelcome(false, queue, true);
+    const auto trace = TraceRoomForTest(TraceOptions(false), {
+        {RK::Message, 0, welcome}, {RK::Message, 1, welcome}, {RK::Tick, 1001}},
+        [&](YouGameRoom& room) { doubles = room.Doubles(); });
+    if (std::string_view(queue) == "ranked")
+    {
+      EXPECT_FALSE(doubles);
+      EXPECT_EQ(trace.back().state, RoomState::Ended);
+      EXPECT_EQ(trace.back().status, "Room: ranked doubles needs a newer YG Dolphin");
+      size_t lines = 0;
+      for (const auto& step : trace)
+        lines += std::count(step.notices.begin(), step.notices.end(),
+                            "Room: ranked doubles needs a newer YG Dolphin");
+      EXPECT_EQ(lines, 1u);
+      EXPECT_TRUE(trace.back().sent.empty());
+    }
+    else
+    {
+      EXPECT_TRUE(doubles);
+      EXPECT_NE(trace.back().state, RoomState::Ended);
+      EXPECT_TRUE(picojson::value(trace.back().mirror).get("doubles").get<bool>());
+      EXPECT_EQ(picojson::value(trace.back().mirror).get("size").get<double>(), 4);
+    }
+  }
+}
+
+TEST(OrcaRoom, CasualDoublesDoesNotSendSinglesResults)
+{
+  picojson::value welcome;
+  ASSERT_TRUE(picojson::parse(welcome, QueueRoster("welcome", "casual", "false", false)).empty());
+  auto& room = welcome.get<picojson::object>()["room"].get<picojson::object>();
+  room["doubles"] = picojson::value(true);
+  room["size"] = picojson::value(4.0);
+  auto start = welcome;
+  start.get<picojson::object>()["t"] = picojson::value("start");
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, welcome.serialize()}, {RK::Message, 1, start.serialize()},
+      {RK::GameStart, 2, "", 120}, {RK::ReportGame, 3, "1", 120},
+      {RK::Tick, 5}});
+  for (const auto& step : trace)
+    for (const auto& wire : step.sent)
+    {
+      picojson::value message;
+      ASSERT_TRUE(picojson::parse(message, wire).empty());
+      EXPECT_NE(message.get("t").to_str(), "begin");
+      EXPECT_NE(message.get("t").to_str(), "game-start");
+      EXPECT_NE(message.get("t").to_str(), "game-report");
+      EXPECT_NE(message.get("t").to_str(), "finish");
+    }
 }

@@ -294,6 +294,8 @@ public:
   // The room's queue from its welcome: "private" (a friends room, and until the welcome), "casual"
   // or "ranked".
   std::string Queue() const;
+  // Gameplay policy: doubles uses the friends four-seat select until team rules/results ship.
+  std::string PlayQueue() const;
   bool Doubles() const;
   // Friends policy before welcome, or a casual/ranked welcome with room.recovery:true.
   bool RoomRecovery() const;

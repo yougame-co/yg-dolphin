@@ -1357,6 +1357,7 @@ struct YouGameRoom::Impl
   size_t probe_count = 0;
   bool stay = false;
   bool doubles = false;
+  bool ranked_doubles_refused = false;  // I/O thread: one refusal for the room.
   int room_size = MAX_SEATS;
   std::string match_id;
   std::string last_match_id;  // The server may clear the roster match before sending its result.
@@ -3079,7 +3080,7 @@ struct YouGameRoom::Impl
       std::lock_guard lock(mutex);
       room["queue"] = picojson::value(queue);
       room["size"] = picojson::value(static_cast<double>(room_size));
-      room["doubles"] = picojson::value(doubles && queue == "private");
+      room["doubles"] = picojson::value(doubles);
     }
     room["host"] = ended ? picojson::value() : picojson::value(host);
     room["readyIds"] = picojson::value(picojson::array{});
@@ -3634,6 +3635,9 @@ struct YouGameRoom::Impl
   // validates it again; the emulator reports a private tournament game as a casual game.
   std::string ReportQueue() const
   {
+    // Team results arrive separately. Keep doubles on the friends-room reporting policy.
+    if (doubles)
+      return "private";
     return queue == "private" && ticket_tourney ? "casual" : queue;
   }
 
@@ -4453,7 +4457,7 @@ struct YouGameRoom::Impl
           d["h"] = picojson::value(!joining);
           {
             std::lock_guard lock(mutex);
-            if (doubles && queue == "private")
+            if (doubles)
               d["doubles"] = picojson::value(true);
           }
           // Friends-only boot identity enables fresh drop-in/host relaunch.
@@ -4855,7 +4859,7 @@ struct YouGameRoom::Impl
         if (std::ranges::find(my_co_seats, previous) == my_co_seats.end())
           removed_local.push_back(previous);
       my_seat = seat;
-      friends_room = queue_known && queue == "private";
+      friends_room = queue_known && (queue == "private" || doubles);
     }
     if (co_wait_expired)
     {
@@ -5026,6 +5030,8 @@ struct YouGameRoom::Impl
     }
     const auto& m = value.get<picojson::object>();
     const std::string t = Str(m, "t");
+    if (ranked_doubles_refused)
+      return;
     if (t == "probe")
     {
       OnProbe(m);
@@ -5175,6 +5181,7 @@ struct YouGameRoom::Impl
         }
       }
 
+      bool refuse_ranked_doubles = false;
       if (const auto r = m.find("room"); r != m.end() && r->second.is<picojson::object>())
       {
         const auto& room = r->second.get<picojson::object>();
@@ -5190,13 +5197,24 @@ struct YouGameRoom::Impl
                            room.at("recovery").get<bool>();
         stay = room.count("stay") && room.at("stay").evaluate_as_boolean();
         room_size = Int(room, "size", 2, MAX_SEATS).value_or(MAX_SEATS);
-        doubles = queue == "private" && room.count("doubles") &&
-                  room.at("doubles").is<bool>() && room.at("doubles").get<bool>();
+        const bool wants_doubles = room.count("doubles") && room.at("doubles").is<bool>() &&
+                                   room.at("doubles").get<bool>();
+        refuse_ranked_doubles = queue == "ranked" && wants_doubles;
+        doubles = wants_doubles && queue != "ranked" &&
+                  (queue == "private" || room_size == MAX_SEATS);
         if (queue != "private")
         {
           NOTICE_LOG_FMT(NETPLAY, "Orca room: a matchmade {} room{}", queue,
                          stay ? " (the players stay together)" : "");
         }
+      }
+      if (refuse_ranked_doubles)
+      {
+        ranked_doubles_refused = true;
+        const std::string line = "Room: ranked doubles needs a newer YG Dolphin";
+        LocalStatus(line);
+        End(line, "room_mismatch");
+        return;
       }
       if (QueueRecovery())
       {
@@ -5257,7 +5275,8 @@ struct YouGameRoom::Impl
       }
       {
         std::lock_guard lock(mutex);
-        probe_room = queue_known && !ticket_tourney && (queue == "casual" || queue == "ranked");
+        probe_room = queue_known && !ticket_tourney && !doubles &&
+                     (queue == "casual" || queue == "ranked");
         NOTICE_LOG_FMT(NETPLAY, "Orca room: in room {} on seat {}, {}", code, seat + 1,
                        joining ? "joining" : "hosting");
         if (state == RoomState::Connecting)
@@ -5792,7 +5811,7 @@ struct YouGameRoom::Impl
       int local;
       {
         std::lock_guard lock(mutex);
-        enabled = doubles && queue == "private";
+        enabled = doubles;
         local = seat;
       }
       if (!enabled || !peer.announced || !d.count("p") || !d.at("p").is<picojson::array>())
@@ -6508,10 +6527,16 @@ std::string YouGameRoom::Queue() const
   return m_impl->queue;
 }
 
+std::string YouGameRoom::PlayQueue() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->doubles ? "private" : m_impl->queue;
+}
+
 bool YouGameRoom::Doubles() const
 {
   std::lock_guard lock(m_impl->mutex);
-  return m_impl->doubles && m_impl->queue == "private";
+  return m_impl->doubles;
 }
 
 bool YouGameRoom::MatchLive() const

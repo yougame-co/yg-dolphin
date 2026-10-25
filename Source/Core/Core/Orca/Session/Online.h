@@ -49,7 +49,8 @@ void RequestHost(const std::string& code);
 std::optional<std::string> TakeHostRequest();
 
 // ---- Matchmade rooms ----
-// The room's queue: "private" (a friends room, or no room), "casual" or "ranked".
+// Gameplay policy: "private" for friends/doubles (or no room), otherwise "casual" or "ranked".
+// YouGameRoom::Queue keeps the room service's queue for the mirror and tickets.
 std::string RoomQueue();
 bool RoomDoubles();
 // A room match is running and its result isn't in yet.

@@ -382,7 +382,7 @@ std::optional<std::string> TakeHostRequest()
 std::string RoomQueue()
 {
   const auto room = Room();
-  return room ? room->Queue() : "private";
+  return room ? room->PlayQueue() : "private";
 }
 
 bool RoomDoubles()
