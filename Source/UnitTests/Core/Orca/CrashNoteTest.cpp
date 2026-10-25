@@ -1,6 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -192,6 +193,56 @@ TEST(OrcaCrashNote, FaultNamesOnlyTheFatalCodes)
   EXPECT_EQ(Orca::CrashNote::FaultName(0xE06D7363), nullptr);
   EXPECT_EQ(Orca::CrashNote::FaultName(0x406D1388), nullptr);
   EXPECT_EQ(Orca::CrashNote::FaultName(0x40010006), nullptr);
+}
+
+TEST(OrcaCrashNote, FaultStackFormatsModuleOffsetsAndStripsPaths)
+{
+  using namespace Orca::CrashNote;
+  const StackFrame frames[] = {{"C:\\build\\yg-dolphin.exe", 0x1234},
+                               {"/system/ntdll.dll", 0x118095},
+                               {{}, 0x7FFA12345678},
+                               {"bad\nname\t.dll", 0}};
+  char out[512];
+  const size_t length = FormatFaultStack(out, sizeof(out), frames);
+  EXPECT_EQ(std::string(out, length),
+            "Orca: exception stack yg-dolphin.exe+0x1234 ntdll.dll+0x118095 "
+            "?+0x7FFA12345678 bad?name?.dll+0x0");
+  EXPECT_EQ(length, std::strlen(out));
+  FormatFaultStack(out, sizeof(out), {});
+  EXPECT_STREQ(out, "Orca: exception stack unavailable");
+}
+
+TEST(OrcaCrashNote, FaultStackLimitsFramesAndKeepsCompleteTokensWithinAppLimit)
+{
+  using namespace Orca::CrashNote;
+  std::array<StackFrame, 30> frames;
+  frames.fill({"a", 1});
+  char out[512];
+  const size_t length = FormatFaultStack(out, sizeof(out), frames);
+  EXPECT_EQ(std::string(out, length), "Orca: exception stack" +
+                                        std::string(" a+0x1 a+0x1 a+0x1 a+0x1 a+0x1 a+0x1") +
+                                        " a+0x1 a+0x1 a+0x1 a+0x1 a+0x1 a+0x1" +
+                                        " a+0x1 a+0x1 a+0x1 a+0x1 a+0x1 a+0x1" +
+                                        " a+0x1 a+0x1 a+0x1 a+0x1 a+0x1 a+0x1 ...");
+  frames.fill({"yg-dolphin.exe", 0x123456789ABCDEF0});
+  const size_t capped = FormatFaultStack(out, sizeof(out), frames);
+  EXPECT_LE(capped + 1, MAX_FAULT_STACK_LINE);
+  EXPECT_TRUE(std::string_view(out).ends_with("yg-dolphin.exe+0x123456789ABCDEF0 ..."));
+  // Don't print half a module/offset when the caller's buffer is smaller.
+  char small[32];
+  FormatFaultStack(small, sizeof(small), frames);
+  EXPECT_STREQ(small, "Orca: exception stack ...");
+  char tiny[5];
+  EXPECT_EQ(FormatFaultStack(tiny, sizeof(tiny), frames), 4u);
+  EXPECT_STREQ(tiny, "Orca");
+  EXPECT_EQ(FormatFaultStack(nullptr, 0, frames), 0u);
+  char one = 'x';
+  EXPECT_EQ(FormatFaultStack(&one, 1, frames), 0u);
+  EXPECT_EQ(one, '\0');
+  const std::string huge(400, 'm');
+  const StackFrame huge_frame[] = {{huge, 1}};
+  FormatFaultStack(out, sizeof(out), huge_frame);
+  EXPECT_STREQ(out, "Orca: exception stack ...");
 }
 
 TEST(OrcaCrashNote, FaultLineNamesTheModuleOffsetAndGraphicsDevice)

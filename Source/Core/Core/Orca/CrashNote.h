@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -87,6 +88,19 @@ const char* FaultName(u32 code);
 // first-chance line)
 // into `out`; returns its length.
 size_t FormatFault(char* out, size_t size, const Fault& fault);
+
+constexpr size_t MAX_FAULT_STACK_FRAMES = 24;
+// Includes the newline added by the writer; the app retains at most 300 bytes per line.
+constexpr size_t MAX_FAULT_STACK_LINE = 300;
+struct StackFrame
+{
+  std::string_view module;
+  // Module-relative, or the absolute address when module is empty.
+  u64 offset = 0;
+};
+// Fixed storage only. Basenames, ASCII, complete frame tokens, at most 24 frames and 299 text
+// bytes (plus NUL). An empty capture says "unavailable"; omitted frames are marked " ...".
+size_t FormatFaultStack(char* out, size_t size, std::span<const StackFrame> frames) noexcept;
 
 // Windows: from here on, a fault that ends Orca (an access violation outside fastmem and the
 // rollback snapshots, an illegal instruction, a failed assert's breakpoint) prints its line

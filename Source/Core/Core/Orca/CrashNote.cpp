@@ -144,6 +144,47 @@ size_t FormatFault(char* out, size_t size, const Fault& fault)
   return line.Length();
 }
 
+size_t FormatFaultStack(char* out, size_t size, std::span<const StackFrame> frames) noexcept
+{
+  const size_t capacity = std::min(size, MAX_FAULT_STACK_LINE);
+  FixedLine line(out, capacity);
+  line << "Orca: exception stack";
+  if (frames.empty())
+    line << " unavailable";
+  size_t shown = 0;
+  for (const StackFrame& frame : frames.first(std::min(frames.size(), MAX_FAULT_STACK_FRAMES)))
+  {
+    std::string_view module = frame.module;
+    if (const size_t slash = module.find_last_of("/\\"); slash != std::string_view::npos)
+      module.remove_prefix(slash + 1);
+    if (module.empty())
+      module = "?";
+    // Reserve enough space for the entire token and a possible omission marker. Never leave an
+    // offset cut in half: it would look valid but resolve to the wrong address in the PDB.
+    if (module.size() >= MAX_FAULT_STACK_LINE)
+      break;
+    char token[MAX_FAULT_STACK_LINE];
+    FixedLine next(token, sizeof(token));
+    next << " ";
+    for (const unsigned char c : module)
+    {
+      const char safe = c > ' ' && c < 0x7F ? static_cast<char>(c) : '?';
+      next << std::string_view(&safe, 1);
+    }
+    next << "+";
+    next.Hex(frame.offset);
+    const size_t reserve = shown + 1 < frames.size() ? 4 : 0;
+    if (!capacity || line.Length() + next.Length() + reserve >= capacity ||
+        next.Length() == sizeof(token) - 1)
+      break;
+    line << std::string_view(token, next.Length());
+    ++shown;
+  }
+  if (shown < frames.size())
+    line << " ...";
+  return line.Length();
+}
+
 std::string TypeName(std::string_view decorated)
 {
   std::string_view s = decorated;
