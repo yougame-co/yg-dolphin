@@ -8975,3 +8975,96 @@ TEST(OrcaRoomRankedDoubles, ADesyncFinalIsVoidAndKeepsItsReasonOnTheVerdict)
   ASSERT_FALSE(trace.back().results.empty());
   EXPECT_NE(trace.back().results.back().find("\"why\":\"desync\""), std::string::npos);
 }
+
+
+namespace
+{
+std::string RankedArrival(const char* kind, int count, bool nested = false)
+{
+  picojson::value value;
+  picojson::parse(value, RankedDoublesRoster(kind));
+  auto& m = value.get<picojson::object>();
+  if (std::string_view(kind) != "start")
+    m.erase("matchId");
+  m["participants"].get<picojson::array>().resize(count);
+  m["players"].get<picojson::array>().resize(count);
+  if (nested)
+  {
+    auto& room = m["room"].get<picojson::object>();
+    for (const char* field : {"participants", "lifecycle", "revision", "matchId"})
+      if (m.count(field))
+      {
+        room[field] = m.at(field);
+        m.erase(field);
+      }
+  }
+  return value.serialize();
+}
+}
+
+TEST(OrcaRoomRankedDoubles, ArrivalsAreAdmittedUntilFourCanBegin)
+{
+  for (const bool nested : {false, true})
+  {
+    SCOPED_TRACE(nested);
+    int step = 0;
+    const auto trace = TraceRoomForTest(TraceOptions(false), {
+        {RK::Message, 0, RankedArrival("welcome", 1, nested)}, {RK::Tick, 1},
+        {RK::Message, 2, RankedArrival("join", 2, nested)}, {RK::Tick, 3},
+        {RK::Message, 4, RankedArrival("join", 3, nested)}, {RK::Tick, 5},
+        {RK::Message, 6, RankedArrival("join", 4, nested)}, {RK::Tick, 7},
+        {RK::Message, 8, RankedArrival("start", 4, nested)}},
+        [&](YouGameRoom& room) { if (step++ == 0) room.SetOpponentPlugged(true); });
+    for (size_t i = 0; i < trace.size(); ++i)
+    {
+      EXPECT_NE(trace[i].state, RoomState::Ended) << i;
+      EXPECT_EQ(std::ranges::any_of(trace[i].sent, [](const auto& wire) {
+        return wire.find("\"t\":\"begin\"") != std::string::npos;
+      }), i == 7) << i;
+    }
+    EXPECT_EQ(picojson::value(trace.back().mirror).get("matchId").to_str(), "doubles-set");
+    EXPECT_EQ(trace.back().teams.size(), 4u);
+  }
+}
+
+TEST(OrcaRoomRankedDoubles, InvalidArrivalsRefuseOnceAndSeenSeatsKeepTheirTeam)
+{
+  for (int bad = 0; bad < 7; ++bad)
+  {
+    SCOPED_TRACE(bad);
+    picojson::value value;
+    picojson::parse(value, RankedArrival("join", 3));
+    auto& ps = value.get<picojson::object>()["participants"].get<picojson::array>();
+    if (bad == 0) ps[1].get<picojson::object>()["team"] = picojson::value(0.0);
+    if (bad == 1) ps[0].get<picojson::object>()["team"] = picojson::value(1.0);
+    if (bad == 2) ps[2].get<picojson::object>()["localIndex"] = picojson::value(1.0);
+    if (bad == 3) ps[2].get<picojson::object>()["slot"] = picojson::value(1.0);
+    if (bad == 4) ps[2].get<picojson::object>()["id"] = picojson::value("p1");
+    if (bad == 5) ps[2].get<picojson::object>()["connectionId"] = picojson::value("p1");
+    if (bad == 6) ps[2].get<picojson::object>()["id"] = picojson::value(std::string(129, 'x'));
+    const auto trace = TraceRoomForTest(TraceOptions(false), {
+        {RK::Message, 0, RankedArrival("welcome", 2)},
+        // Removing a seat must not forget its earlier team.
+        {RK::Message, 1, RankedArrival("lobby", 1)},
+        {RK::Message, 2, value.serialize()}, {RK::Message, 3, value.serialize()}});
+    EXPECT_NE(trace[0].state, RoomState::Ended);
+    EXPECT_NE(trace[1].state, RoomState::Ended);
+    EXPECT_EQ(trace[2].state, RoomState::Ended);
+    EXPECT_EQ(trace[2].error_code, "room_mismatch");
+    size_t refusals = 0;
+    for (const auto& step : trace)
+      refusals += std::count(step.notices.begin(), step.notices.end(),
+          "Room: ranked doubles requires four single-seat players and two complete teams");
+    EXPECT_EQ(refusals, 1u);
+  }
+}
+
+TEST(OrcaRoomRankedDoubles, PartialStartCannotFreezeAMatch)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, RankedArrival("welcome", 3)},
+      {RK::Message, 1, RankedArrival("start", 3)}});
+  EXPECT_NE(trace[0].state, RoomState::Ended);
+  EXPECT_EQ(trace[1].state, RoomState::Ended);
+  EXPECT_TRUE(picojson::value(trace[1].mirror).get("matchId").is<picojson::null>());
+}

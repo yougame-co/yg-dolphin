@@ -1419,6 +1419,7 @@ struct YouGameRoom::Impl
   bool stay = false;
   bool doubles = false;
   std::map<int, int> seat_teams;  // Under mutex; empty means no complete room assignment.
+  std::map<int, int> ranked_seen_teams;  // A slot retains its team even while absent.
   std::map<int, int> match_teams;  // Frozen with match_participants, including departures.
   bool teams_ignored = false;  // I/O thread: invalid maps are ignored for this room's lifetime.
   bool teams_notice = false;
@@ -3837,6 +3838,9 @@ struct YouGameRoom::Impl
     {
       return;
     }
+    if (doubles && room_queue == "ranked" &&
+        !ValidRankedTeams({{"participants", picojson::value(room_participants)}}, true))
+      return;
     begin_sent = Clock::now();
     ++begin_tries;
     NOTICE_LOG_FMT(NETPLAY, "Orca room: beginning the room's {} match (revision {}, try {})",
@@ -4410,7 +4414,7 @@ struct YouGameRoom::Impl
   // "start": the room's match began.
   void OnStart(const picojson::object& m)
   {
-    if (doubles && queue == "ranked" && !ValidRankedTeams(m))
+    if (doubles && queue == "ranked" && !ValidRankedTeams(m, true))
     {
       RefuseRankedTeams();
       return;
@@ -4442,6 +4446,11 @@ struct YouGameRoom::Impl
     // After LobbyFields: the new match's id, so its count starts from what this process knew of it.
     NoteKnownGames();
     match_participants = lobby_participants;
+    if (doubles && queue == "ranked")
+    {
+      auto participants = m.at("participants").get<picojson::array>();
+      ReadTeams(participants);
+    }
     {
       std::lock_guard lock(mutex);
       match_teams = doubles && queue == "ranked" ? seat_teams : std::map<int, int>{};
@@ -4964,13 +4973,13 @@ struct YouGameRoom::Impl
       Orca::UX::SetEnd::Current().CasualOpponentLeft(Orca::UX::SetEnd::NowMs());
   }
 
-  bool ValidRankedTeams(const picojson::object& message) const
+  bool ValidRankedTeams(const picojson::object& message, bool complete = false) const
   {
     const auto found = message.find("participants");
     if (found == message.end() || !found->second.is<picojson::array>())
       return false;
     const auto& participants = found->second.get<picojson::array>();
-    if (participants.size() != 4)
+    if (participants.empty() || participants.size() > 4 || (complete && participants.size() != 4))
       return false;
     std::set<std::string> ids, connections;
     std::map<int, int> teams;
@@ -4988,10 +4997,13 @@ struct YouGameRoom::Impl
           !ids.insert(id).second || !connections.insert(connection).second ||
           !teams.emplace(*slot, *team).second)
         return false;
-      ++count[*team];
+      if (++count[*team] > 2)
+        return false;
+      if (const auto seen = ranked_seen_teams.find(*slot);
+          seen != ranked_seen_teams.end() && seen->second != *team)
+        return false;
     }
-    return count[0] == 2 && count[1] == 2 &&
-           (seat_teams.empty() || seat_teams == teams);
+    return !complete || (count[0] == 2 && count[1] == 2);
   }
 
   void RefuseRankedTeams()
@@ -5070,6 +5082,8 @@ struct YouGameRoom::Impl
     }
     room_participants = it->second.get<picojson::array>();
     ReadTeams(room_participants);
+    if (doubles && queue == "ranked" && match_participants.empty())
+      ranked_seen_teams.insert(seat_teams.begin(), seat_teams.end());
     if (const auto rev = Int(m, "revision", 0, MAX_FRAME))
       revision = *rev;
     struct Participant
@@ -5364,7 +5378,14 @@ struct YouGameRoom::Impl
       WARN_LOG_FMT(NETPLAY, "Orca room: ignored an unreadable message ({} bytes)", text.size());
       return;
     }
-    const auto& m = value.get<picojson::object>();
+    auto& m = value.get<picojson::object>();
+    if (const auto room = m.find("room"); room != m.end() && room->second.is<picojson::object>())
+    {
+      for (const char* field : {"participants", "lifecycle", "revision", "matchId"})
+        if (const auto detail = room->second.get<picojson::object>().find(field);
+            !m.count(field) && detail != room->second.get<picojson::object>().end())
+          m.emplace(field, detail->second);
+    }
     const std::string t = Str(m, "t");
     if (ranked_doubles_refused)
       return;
@@ -5741,7 +5762,8 @@ struct YouGameRoom::Impl
       if (pending_ranked_final && Str(m, "matchId") != Str(*pending_ranked_final, "matchId"))
         return;
       OnStart(m);
-      Roster(m);
+      if (!ranked_doubles_refused)
+        Roster(m);
     }
     else if (t == "game-result")
     {
