@@ -112,6 +112,8 @@ size_t FormatFaultStack(char* out, size_t size, std::span<const StackFrame> fram
 // from there can't be dispatched. Other threads'
 // faults may still be caught (a driver catches its own), so the unhandled-exception filter prints
 // those, then hands them to the filter before it. At most 8 different lines per run, each once.
+// Each reported fault is followed by FormatFaultStack's module/offset line, unwound from its
+// CONTEXT (up to 24 native frames; stops at missing/damaged unwind data, including JIT code).
 // Elsewhere it does nothing (macOS writes its own crash report).
 void InstallFaultReporter();
 

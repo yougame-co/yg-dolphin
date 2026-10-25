@@ -16,6 +16,13 @@
 #include "Common/FileUtil.h"
 #include "Core/Orca/CrashNote.h"
 
+#ifdef _WIN32
+#include <thread>
+#include <windows.h>
+
+#include "Core/Core.h"
+#endif
+
 namespace
 {
 // The panic alert the Mac shows at the same point of the same boot (bug reports c60426c4 and
@@ -298,3 +305,61 @@ TEST(OrcaCrashNote, FaultLineNamesTheModuleOffsetAndGraphicsDevice)
   EXPECT_EQ(Orca::CrashNote::FormatFault(small, sizeof(small), breakpoint), 15u);
   EXPECT_STREQ(small, "Orca: exception");
 }
+
+#if defined(_WIN32) && GTEST_HAS_DEATH_TEST
+namespace
+{
+__declspec(noinline) void RaiseStackTestFault()
+{
+  // A synthetic exception, without damaging memory. Keep a native caller frame in release builds.
+  RaiseException(0xC0000374, 0, 0, nullptr);
+  volatile int returned = 1;
+  (void)returned;
+}
+
+void CatchStackTestFault()
+{
+  __try
+  {
+    RaiseStackTestFault();
+  }
+  __except (EXCEPTION_EXECUTE_HANDLER)
+  {
+  }
+}
+
+void PrepareStackTestFault()
+{
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+  SetUnhandledExceptionFilter(nullptr);
+  Orca::CrashNote::InstallFaultReporter();
+}
+}  // namespace
+
+TEST(OrcaCrashNoteDeathTest, WorkerFaultIncludesNativeCaller)
+{
+  // Before stack capture this produces only the exception/address line, so the regex fails.
+  EXPECT_EXIT(
+      {
+        PrepareStackTestFault();
+        std::thread worker(RaiseStackTestFault);
+        worker.join();
+        ExitProcess(0);
+      },
+      ::testing::ExitedWithCode(static_cast<int>(0xC0000374)),
+      "Orca: exception stack .*tests\\.exe\\+0x\\w+");
+}
+
+TEST(OrcaCrashNoteDeathTest, CaughtCpuFirstChanceIncludesNativeCaller)
+{
+  EXPECT_EXIT(
+      {
+        PrepareStackTestFault();
+        Core::DeclareAsCPUThread();
+        CatchStackTestFault();
+        ExitProcess(0);
+      },
+      ::testing::ExitedWithCode(0),
+      "\\(first chance\\).*\r?\nOrca: exception stack .*tests\\.exe\\+0x\\w+");
+}
+#endif
