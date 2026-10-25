@@ -1304,13 +1304,13 @@ struct YouGameRoom::Impl
   std::optional<Clock::time_point> welcomed_at;
   bool host_seen = false;
   bool hello_sent = false;  // I/O thread: P4 joiner adds stop at its first hello.
-  bool page_add_before_welcome = false;
+  std::atomic<bool> page_add_before_welcome{false};
   bool co_hello_pending = false;  // A held hello must still follow the co-seat roster.
   bool session_active = false;  // under mutex
   bool local_add_pending = false;  // under mutex: an accepted add reserves solo ownership
   std::optional<Clock::time_point> co_wait_until;
   bool co_wait_expired = false;  // cancellation: wait for the removal roster
-  bool inherited_co_cleanup = false;
+  std::atomic<bool> inherited_co_cleanup{false};
   std::set<std::string> co_removals;
   Clock::time_point last_heard{};
 
@@ -1677,6 +1677,17 @@ struct YouGameRoom::Impl
     return false;
   }
 
+  int TicketLocalSeats() const
+  {
+    std::lock_guard lock(mutex);
+    if (!my_co_seats.empty() || (local_add_pending && !inherited_co_cleanup))
+      return 2;
+    const bool allowed = Orca::Status::Cap("coseats") && Env("ORCA_COSEATS") != "0" &&
+                         !ticket_tourney && (!queue_known || queue == "private" ||
+                                            (queue == "casual" && doubles));
+    return allowed && page_add_before_welcome ? 2 : 1;
+  }
+
   // The room's ticket and code, from the desktop app's bridge or (tests) the site.
   bool Ticket(std::string* url, std::string* ticket)
   {
@@ -1818,6 +1829,7 @@ struct YouGameRoom::Impl
       request["type"] = picojson::value("mpTicket");
       request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
       request["mode"] = picojson::value(options.mode);
+      request["ls"] = picojson::value(static_cast<double>(TicketLocalSeats()));
       request["ranked"] = picojson::value(false);
       request["room"] = picojson::value(room);
       request["lobby"] = picojson::value(lobby);
@@ -1843,6 +1855,7 @@ struct YouGameRoom::Impl
       request["name"] = picojson::value(options.player_name);
       request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
       request["mode"] = picojson::value(options.mode);
+      request["ls"] = picojson::value(static_cast<double>(TicketLocalSeats()));
       request["room"] = picojson::value(room);
       request["lobby"] = picojson::value(lobby);
       if (!post(site + "/api/multiplayer/ticket", request, {{"Content-Type", "application/json"}},
@@ -1923,6 +1936,7 @@ struct YouGameRoom::Impl
     picojson::object request;
     request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
     request["mode"] = picojson::value(options.mode);
+    request["ls"] = picojson::value(static_cast<double>(TicketLocalSeats()));
     request["room"] = picojson::value(room);
     request["lobby"] = picojson::value(lobby);
     const auto mint_cap = deadline ?
@@ -3193,7 +3207,7 @@ struct YouGameRoom::Impl
   {
     if (!Orca::Status::Cap("coseats") || Env("ORCA_COSEATS") == "0")
       return "no-cap";
-    if (!queue_known || queue != "private" || ticket_tourney)
+    if (!queue_known || (queue != "private" && !(queue == "casual" && doubles)) || ticket_tourney)
       return "queue";
     if (!doubles)
       return "not-doubles";
@@ -3291,7 +3305,7 @@ struct YouGameRoom::Impl
   bool CoSeatsEnabledLocked() const
   {
     return Orca::Status::Cap("coseats") && Env("ORCA_COSEATS") != "0" &&
-           queue_known && doubles && queue == "private" && !ticket_tourney;
+           queue_known && doubles && (queue == "private" || queue == "casual") && !ticket_tourney;
   }
 
   void OnPageEvent(const std::string& line)
@@ -4821,7 +4835,8 @@ struct YouGameRoom::Impl
       if (id == me && *index > 0 && Str(o, "id").starts_with("local:"))
       {
         local_co_ids.push_back(Str(o, "id"));
-        inherited_co_cleanup |= fresh_without_add;
+        if (fresh_without_add)
+          inherited_co_cleanup = true;
         // A fresh process has no controller assignment for a previous process's co-seat.
         if (inherited_co_cleanup)
           continue;
@@ -5271,7 +5286,7 @@ struct YouGameRoom::Impl
                       (page_add_before_welcome && LocalRefusalLocked(false).empty());
       }
       Roster(m, first_welcome && !add_pending);
-      if (first_welcome && std::exchange(page_add_before_welcome, false) && my_co_seats.empty())
+      if (first_welcome && page_add_before_welcome.exchange(false) && my_co_seats.empty())
         SendLocalCommand({{"t", picojson::value("local-add")}});
       if (QueueRecovery() &&
           (m.count("hold_ms") || (m.count("recovering") && m.at("recovering").is<bool>() &&
@@ -6075,6 +6090,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     snapshot.host_input_deadline = owner.HostAwayDeadline();
     snapshot.seat = owner.Seat();
     snapshot.co_seats = owner.CoSeats();
+    snapshot.ticket_local_seats = room.TicketLocalSeats();
     snapshot.teams = owner.Teams();
     for (int slot = 0; slot < MAX_SEATS; ++slot)
     {
