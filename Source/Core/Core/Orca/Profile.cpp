@@ -992,13 +992,16 @@ bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
     return false;
   }
   // The boot inserts the disc with the same alias (Boot.cpp).
-  AliasRevision(*disc);
+  std::string alias_reason;
+  AliasRevision(*disc, &alias_reason);
   const u16 disc_revision = disc->GetRevision().value_or(0);
   if (disc->GetGameID() != profile->disc || disc_revision != profile->revision)
   {
     *error = fmt::format("Orca: profile {} needs {} revision {}; the disc is {} revision {}",
                          profile->game_id, profile->disc, profile->revision, disc->GetGameID(),
                          disc_revision);
+    if (disc->GetGameID() == "RSBE01" && disc_revision == 1)
+      *error = DiscRevisionRefusal(std::move(*error), alias_reason);
     return false;
   }
 
