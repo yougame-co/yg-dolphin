@@ -52,6 +52,7 @@ add_dependencies(tests orca-turn-fixture)
 add_dolphin_test(OrcaSandboxTest Orca/SandboxTest.cpp
   ${CMAKE_SOURCE_DIR}/Source/Core/DolphinNoGUI/Embed.cpp)
 add_dolphin_test(OrcaDiscTest Orca/DiscTest.cpp)
+add_dolphin_test(OrcaSessionIsolationTest Orca/SessionIsolationTest.cpp)
 add_dolphin_test(OrcaDiscVerifyTest Orca/DiscVerifyTest.cpp)
 add_dolphin_test(OrcaPanicDiagTest Orca/PanicDiagTest.cpp)
 add_dolphin_test(OrcaCrashNoteTest Orca/CrashNoteTest.cpp)
