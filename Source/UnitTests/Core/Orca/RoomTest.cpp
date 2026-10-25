@@ -9068,3 +9068,34 @@ TEST(OrcaRoomRankedDoubles, PartialStartCannotFreezeAMatch)
   EXPECT_EQ(trace[1].state, RoomState::Ended);
   EXPECT_TRUE(picojson::value(trace[1].mirror).get("matchId").is<picojson::null>());
 }
+
+TEST(OrcaRoomRankedDoubles, LocalAddIsRefusedWithRankedReasonBeforeSending)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv game("YOUGAME_GAME", "co-page");
+  Orca::Status::SetAppCaps("coseats");
+  const Common::ScopeGuard cleanup([] { Orca::Status::SetAppCaps(""); });
+  for (const bool early : {false, true})
+  {
+    SCOPED_TRACE(early);
+    std::vector<RoomTestStep> steps;
+    if (early)
+      steps.push_back({RK::PageEvent, 0, CO_PAGE_ADD});
+    steps.push_back({RK::Message, 1, RankedArrival("welcome", 1)});
+    if (!early)
+      steps.push_back({RK::PageEvent, 2, CO_PAGE_ADD});
+    steps.push_back({RK::Tick, 3});
+    const auto trace = TraceRoomForTest(TraceOptions(false), steps);
+    size_t refusals = 0;
+    for (const auto& frame : trace)
+    {
+      EXPECT_NE(frame.state, RoomState::Ended);
+      for (const auto& wire : frame.sent)
+        EXPECT_EQ(wire.find("local-add"), std::string::npos);
+      refusals += std::count(frame.notices.begin(), frame.notices.end(),
+          "Room: Ranked doubles is one player per computer (ranked)");
+    }
+    EXPECT_EQ(refusals, 1u);
+    EXPECT_TRUE(trace.back().co_seats.empty());
+  }
+}

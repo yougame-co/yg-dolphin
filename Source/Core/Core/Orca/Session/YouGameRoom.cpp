@@ -3317,6 +3317,8 @@ struct YouGameRoom::Impl
 
   std::string LocalRefusalLocked(bool removing) const
   {
+    if (!removing && doubles && queue == "ranked")
+      return "ranked";
     if (!Orca::Status::Cap("coseats") || Env("ORCA_COSEATS") == "0")
       return "no-cap";
     if (!queue_known || (queue != "private" && !(queue == "casual" && doubles)) || ticket_tourney)
@@ -3331,6 +3333,11 @@ struct YouGameRoom::Impl
 
   void RefuseLocal(const std::string& action, const std::string& reason)
   {
+    if (reason == "ranked")
+    {
+      LocalStatus("Room: Ranked doubles is one player per computer (ranked)");
+      return;
+    }
     LocalStatus(fmt::format("Room: {} local player isn't available here ({})",
                            action == "local-add" ? "Add" : "Remove", reason));
   }
