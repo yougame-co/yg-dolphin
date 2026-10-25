@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -389,6 +390,12 @@ bool RoomDoubles()
 {
   const auto room = Room();
   return room && room->Doubles();
+}
+
+std::map<int, int> RoomTeams()
+{
+  const auto room = Room();
+  return room ? room->Teams() : std::map<int, int>{};
 }
 
 bool MatchLive()

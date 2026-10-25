@@ -4,6 +4,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <string>
 #include <optional>
 #include <string_view>
@@ -53,6 +54,8 @@ std::optional<std::string> TakeHostRequest();
 // YouGameRoom::Queue keeps the room service's queue for the mirror and tickets.
 std::string RoomQueue();
 bool RoomDoubles();
+// Complete room team assignment; metadata only until frame-synchronized team rules ship.
+std::map<int, int> RoomTeams();
 // A room match is running and its result isn't in yet.
 bool MatchLive();
 // A ranked set's room after its verdict, still open: the players stay together on the results

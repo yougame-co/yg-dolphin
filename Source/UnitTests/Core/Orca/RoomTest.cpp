@@ -8533,3 +8533,62 @@ TEST(OrcaRoom, CasualDoublesDoesNotSendSinglesResults)
       EXPECT_NE(message.get("t").to_str(), "finish");
     }
 }
+
+TEST(OrcaRoom, ParticipantTeamsFollowWelcomeLobbyAndStart)
+{
+  auto roster = [](const char* kind, bool swap) {
+    picojson::value value;
+    picojson::parse(value, CoPageWelcome(false, "casual", true));
+    value.get<picojson::object>()["t"] = picojson::value(kind);
+    auto& participants = value.get<picojson::object>()["participants"].get<picojson::array>();
+    participants.emplace_back(picojson::object{{"connectionId", picojson::value("guest")},
+        {"slot", picojson::value(2.0)}, {"localIndex", picojson::value(0.0)}});
+    participants.emplace_back(picojson::object{{"connectionId", picojson::value("peer")},
+        {"slot", picojson::value(3.0)}, {"localIndex", picojson::value(1.0)}});
+    for (auto& p : participants)
+      p.get<picojson::object>()["team"] = picojson::value(
+          double((int(p.get("slot").get<double>()) % 2) ^ int(swap)));
+    return value.serialize();
+  };
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, roster("welcome", false)},
+      {RK::Message, 1, roster("lobby", true)},
+      {RK::Message, 2, roster("start", false)},
+      {RK::Message, 3, CoPageWelcome(false, "casual", true)}});
+  EXPECT_EQ(trace[0].teams, (std::map<int, int>{{0, 0}, {1, 1}, {2, 0}, {3, 1}}));
+  EXPECT_EQ(trace[1].teams, (std::map<int, int>{{0, 1}, {1, 0}, {2, 1}, {3, 0}}));
+  EXPECT_EQ(trace[2].teams, trace[0].teams);
+  EXPECT_TRUE(trace[3].teams.empty());
+}
+
+TEST(OrcaRoom, InvalidOrPartialTeamsAreIgnoredForTheRoomOnce)
+{
+  for (const auto& bad : std::vector<picojson::value>{picojson::value(), picojson::value(-1.0),
+           picojson::value(2.0), picojson::value(0.5), picojson::value(true), picojson::value("0")})
+  {
+    picojson::value good;
+    picojson::parse(good, CoPageWelcome(false, "casual", true));
+    for (auto& p : good.get<picojson::object>()["participants"].get<picojson::array>())
+      p.get<picojson::object>()["team"] = picojson::value(p.get("slot").get<double>());
+    auto invalid = good;
+    auto& p = invalid.get<picojson::object>()["participants"].get<picojson::array>().back().get<picojson::object>();
+    if (bad.is<picojson::null>())
+      p.erase("team");
+    else
+      p["team"] = bad;
+    const auto trace = TraceRoomForTest(TraceOptions(false), {
+        {RK::Message, 0, invalid.serialize()}, {RK::Message, 1, invalid.serialize()},
+        {RK::Message, 2, good.serialize()}});
+    size_t lines = 0;
+    for (const auto& step : trace)
+    {
+      EXPECT_TRUE(step.teams.empty());
+      const picojson::value mirror(step.mirror);
+      for (const auto& participant : mirror.get("participants").get<picojson::array>())
+        EXPECT_EQ(participant.get<picojson::object>().count("team"), 0u);
+      lines += std::count(step.notices.begin(), step.notices.end(),
+                          "Room: invalid or incomplete teams; ignoring teams for this room");
+    }
+    EXPECT_EQ(lines, 1u);
+  }
+}

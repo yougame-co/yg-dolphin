@@ -297,6 +297,8 @@ public:
   // Gameplay policy: doubles uses the friends four-seat select until team rules/results ship.
   std::string PlayQueue() const;
   bool Doubles() const;
+  // Complete seat-to-team assignment from the room, otherwise empty. No guest writes.
+  std::map<int, int> Teams() const;
   // Friends policy before welcome, or a casual/ranked welcome with room.recovery:true.
   bool RoomRecovery() const;
   // A room match is running and its result isn't in yet (for ranked, the whole set).
@@ -511,6 +513,7 @@ struct RoomTestSnapshot
   std::array<std::vector<int>, MAX_SEATS> groups;
   std::vector<int> linked_seats;
   std::optional<std::chrono::steady_clock::time_point> host_input_deadline;
+  std::map<int, int> teams;
   picojson::object mirror;
   std::string published_mirror;
   unsigned mirror_serializations = 0;

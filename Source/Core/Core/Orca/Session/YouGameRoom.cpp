@@ -1357,6 +1357,9 @@ struct YouGameRoom::Impl
   size_t probe_count = 0;
   bool stay = false;
   bool doubles = false;
+  std::map<int, int> seat_teams;  // Under mutex; empty means no complete room assignment.
+  bool teams_ignored = false;  // I/O thread: invalid maps are ignored for this room's lifetime.
+  bool teams_notice = false;
   bool ranked_doubles_refused = false;  // I/O thread: one refusal for the room.
   int room_size = MAX_SEATS;
   std::string match_id;
@@ -4732,6 +4735,44 @@ struct YouGameRoom::Impl
       Orca::UX::SetEnd::Current().CasualOpponentLeft(Orca::UX::SetEnd::NowMs());
   }
 
+  void ReadTeams(picojson::array& participants)
+  {
+    std::map<int, int> parsed;
+    bool any = false, valid = true;
+    for (const auto& participant : participants)
+    {
+      if (!participant.is<picojson::object>())
+      {
+        valid = false;
+        continue;
+      }
+      const auto& p = participant.get<picojson::object>();
+      any |= p.count("team") != 0;
+      const auto slot = Int(p, "slot", 0, MAX_SEATS - 1);
+      const auto team = Int(p, "team", 0, 1);
+      const auto index = p.count("localIndex") ? Int(p, "localIndex", 0, MAX_SEATS - 1) :
+                                                std::optional<int>(0);
+      if (Str(p, "connectionId").empty() || !index || !slot || !team ||
+          !parsed.emplace(*slot, *team).second)
+        valid = false;
+    }
+    const bool invalid = any && !valid;
+    const bool notify_invalid = invalid && !teams_ignored;
+    teams_ignored |= invalid;
+    {
+      std::lock_guard lock(mutex);
+      seat_teams = any && valid && !teams_ignored ? std::move(parsed) : std::map<int, int>{};
+    }
+    if (teams_ignored)
+      for (auto& participant : participants)
+        if (participant.is<picojson::object>())
+          participant.get<picojson::object>().erase("team");
+    if (notify_invalid)
+      LocalStatus("Room: invalid or incomplete teams; ignoring teams for this room");
+    else if (any && valid && !teams_ignored && !std::exchange(teams_notice, true))
+      LocalStatus("Room: teams received; host chooses Team battle and team colours on the select");
+  }
+
   void Roster(const picojson::object& m, bool fresh_without_add = false)
   {
     mirror_dirty = true;
@@ -4754,6 +4795,7 @@ struct YouGameRoom::Impl
       return;
     }
     room_participants = it->second.get<picojson::array>();
+    ReadTeams(room_participants);
     if (const auto rev = Int(m, "revision", 0, MAX_FRAME))
       revision = *rev;
     struct Participant
@@ -6033,6 +6075,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     snapshot.host_input_deadline = owner.HostAwayDeadline();
     snapshot.seat = owner.Seat();
     snapshot.co_seats = owner.CoSeats();
+    snapshot.teams = owner.Teams();
     for (int slot = 0; slot < MAX_SEATS; ++slot)
     {
       snapshot.local_indices[slot] = owner.LocalIndex(slot);
@@ -6531,6 +6574,12 @@ std::string YouGameRoom::PlayQueue() const
 {
   std::lock_guard lock(m_impl->mutex);
   return m_impl->doubles ? "private" : m_impl->queue;
+}
+
+std::map<int, int> YouGameRoom::Teams() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->seat_teams;
 }
 
 bool YouGameRoom::Doubles() const
