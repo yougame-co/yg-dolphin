@@ -38,6 +38,15 @@ foreach(JUICE_PATCH_FILE conn_poll conn_thread conn_mux agent)
 			agent_arm_transmission(agent, entry, 0);
 
 		} else if (msg->error_code == 438)]=])
+    juice_replace_once(source [=[			// Resend request when possible
+			agent_arm_transmission(agent, entry, 0);
+
+		} else if (msg->msg_method == STUN_METHOD_ALLOCATE &&]=]
+      [=[			// A nonce change also starts a new transaction (RFC 8489, 9.2.5).
+			juice_random(entry->transaction_id, STUN_TRANSACTION_ID_SIZE);
+			agent_arm_transmission(agent, entry, 0);
+
+		} else if (msg->msg_method == STUN_METHOD_ALLOCATE &&]=])
   elseif(NOT ORCA_JUICE_UNPATCHED AND JUICE_PATCH_FILE STREQUAL "conn_poll")
     juice_replace_once(source [=[			if ((ret = conn_poll_recv_udp(conn_impl->udp_sock, buffer, BUFFER_SIZE,
 							&src)) <= 0) {

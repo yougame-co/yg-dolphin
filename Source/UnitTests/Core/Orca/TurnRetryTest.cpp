@@ -165,3 +165,8 @@ TEST(OrcaTurnRetry, AllocateAfterChallengeUsesANewTransaction)
 {
   GatherThroughCache(false);
 }
+
+TEST(OrcaTurnRetry, AllocateAfterStaleNonceUsesANewTransaction)
+{
+  GatherThroughCache(true);
+}
