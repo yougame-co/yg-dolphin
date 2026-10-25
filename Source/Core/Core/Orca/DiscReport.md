@@ -42,14 +42,12 @@ export SDL_JOYSTICK_IOKIT=0 SDL_JOYSTICK_MFI=0
 export SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0x0000/0x0000
 ```
 
-Check `uptime` first and wait until the one-minute load is below 20. Wrap each
-full disc read with the shared lock. Shell redirection below writes metadata only;
+A full disc read takes a few minutes. Shell redirection below writes metadata only;
 the report command itself writes only stdout.
 
 ```sh
-flock /Users/luis/Code/brawl-dolphin/build.lock \
-  build-disc-report/Binaries/Orca.app/Contents/MacOS/Orca \
-  --disc-report /Volumes/YGWorktrees/disc-formats-lab/brawl-rev2.wbfs \
+build-disc-report/Binaries/Orca.app/Contents/MacOS/Orca \
+  --disc-report <path to a Brawl Rev 2 image> \
   > build-disc-report/rsbe01-rev2-report.jsonl
 
 python3 - <<'PY'
@@ -66,17 +64,13 @@ reference = {"name": "RSBE01 Rev 2", "partitionOffset": header["partitionOffset"
 (directory / "ref-rsbe01-rev2.json").write_text(json.dumps(reference, indent=2) + "\n")
 PY
 
-time flock /Users/luis/Code/brawl-dolphin/build.lock \
-  build-disc-report/Binaries/Orca.app/Contents/MacOS/Orca \
-  --disc-report /Volumes/YGWorktrees/disc-formats-lab/brawl-rev2.wbfs \
+time build-disc-report/Binaries/Orca.app/Contents/MacOS/Orca \
+  --disc-report <path to a Brawl Rev 2 image> \
   --against build-disc-report/ref-rsbe01-rev2.json \
   > build-disc-report/rsbe01-rev2-against.jsonl
 ```
 
-The release lead can place `build-disc-report/ref-rsbe01-rev2.json` at
-`/Users/luis/Code/brawl-dolphin/notes/lead-records/disc-formats/rebuilt-brawl/ref-rsbe01-rev2.json`.
-That notes directory is outside this task's writable sandbox. The reference
-contains only paths, sizes, hashes, its name and the partition offset.
+The reference `build-disc-report/ref-rsbe01-rev2.json` contains only paths, sizes, hashes, its name and the partition offset.
 
 Synthetic unit tests use an invented GameCube image. Wii header JSON and optional
 offset comparison are tested separately; there is no encrypted Wii unit fixture.
