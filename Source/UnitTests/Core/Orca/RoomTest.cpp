@@ -7736,7 +7736,13 @@ TEST(OrcaRoom, CoPageMirrorRequiresFriendsDoublesAndAgreedCap)
                   cap && doubles && std::string_view(queue) == "private" ? 2 : 1);
         picojson::value original;
         ASSERT_TRUE(picojson::parse(original, welcome).empty());
-        EXPECT_EQ(mirror.get("participants"), original.get("participants"));
+        if (std::string_view(queue) == "ranked" && doubles)
+        {
+          EXPECT_EQ(trace.back().state, RoomState::Ended);
+          EXPECT_TRUE(mirror.get("participants").get<picojson::array>().empty());
+        }
+        else
+          EXPECT_EQ(mirror.get("participants"), original.get("participants"));
         EXPECT_EQ(mirror.get("me"), original.get("me"));
       }
 }
@@ -8497,7 +8503,15 @@ TEST(OrcaRoom, QueueDoublesWelcomeAndRankedRefusal)
         lines += std::count(step.notices.begin(), step.notices.end(),
                             "Room: ranked doubles needs a newer YG Dolphin");
       EXPECT_EQ(lines, 1u);
-      EXPECT_TRUE(trace.back().sent.empty());
+      for (const auto& step : trace)
+        for (const auto& wire : step.sent)
+        {
+          picojson::value message;
+          ASSERT_TRUE(picojson::parse(message, wire).empty());
+          // A forced trace tick may ping; the refused room never sends gameplay or results.
+          EXPECT_EQ(message.get("t").to_str(), "ping");
+        }
+      EXPECT_TRUE(picojson::value(trace.back().mirror).get("participants").get<picojson::array>().empty());
     }
     else
     {
