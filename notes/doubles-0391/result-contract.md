@@ -124,7 +124,7 @@ room's teams before play; results must identify the winning team unambiguously.
 - `Source/Core/Core/Orca/Status.cpp:222` — `caps += " qdoubles rdoubles";`
 - `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4967` — `bool ValidRankedTeams(`
 - `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4997` — `void RefuseRankedTeams()`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:5541` — `refuse_ranked_doubles = queue == "ranked" && wants_doubles &&`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:5538` — `refuse_ranked_doubles = queue == "ranked" && wants_doubles &&`
 - `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3818` — `void TryBegin()`
 - `Source/Core/Core/Orca/Session/YouGameRoom.h:308` — `std::string PlayQueue() const;`
 - `Source/Core/Core/Orca/Games/Brawl/Results.h:36` — `per port at +0x24 + port * 0x2AC:`

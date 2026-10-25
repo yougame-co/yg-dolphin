@@ -1413,7 +1413,7 @@ struct YouGameRoom::Impl
   bool probe_room = false;  // I/O thread: authoritative queue welcome, excluding tournaments.
   // The frame thread closes this path before it queues game 1's start/result. Never reset on rejoin.
   std::atomic<bool> probe_stopped{false};
-  std::optional<Clock::time_point> probe_started, probe_last;
+  std::optional<Clock::time_point> probe_started;
   std::array<std::string, 6> probe_nonces{};  // I/O thread; also the lifetime reply budget.
   size_t probe_count = 0;
   bool stay = false;
@@ -5334,15 +5334,12 @@ struct YouGameRoom::Impl
     if (std::ranges::find(probe_nonces, nonce) != probe_nonces.end())
       return skipped("duplicate");
     const auto now = Now();
-    // Worker issues ~1/s for 5 s. A 400 ms gap tolerates jitter while bounding bursts to 3/s;
-    // the room still gets at most six unique replies within this lifetime 6 s window.
+    // Network delivery may batch distinct probes. Acknowledge each once, still bounded to
+    // six unique replies within this lifetime six-second window.
     if (probe_started && now - *probe_started >= std::chrono::seconds(6))
       return skipped("expired");
-    if (probe_last && now - *probe_last < std::chrono::milliseconds(400))
-      return skipped("gap");
     if (!probe_started)
       probe_started = now;
-    probe_last = now;
     probe_nonces[probe_count++] = nonce;
     SendJson({{"t", picojson::value("probe-ack")}, {"n", n->second}},
              std::chrono::milliseconds(100), true, receipt);
