@@ -4269,6 +4269,11 @@ struct YouGameRoom::Impl
   // "start": the room's match began.
   void OnStart(const picojson::object& m)
   {
+    if (doubles && queue == "ranked" && !ValidRankedTeams(m))
+    {
+      RefuseRankedTeams();
+      return;
+    }
     // All recovery queue rejoins may replay start; retain tally, report ids and game count.
     if (QueueRecovery())
     {
@@ -4799,6 +4804,46 @@ struct YouGameRoom::Impl
       Orca::UX::SetEnd::Current().CasualOpponentLeft(Orca::UX::SetEnd::NowMs());
   }
 
+  bool ValidRankedTeams(const picojson::object& message) const
+  {
+    const auto found = message.find("participants");
+    if (found == message.end() || !found->second.is<picojson::array>())
+      return false;
+    const auto& participants = found->second.get<picojson::array>();
+    if (participants.size() != 4)
+      return false;
+    std::set<std::string> ids, connections;
+    std::map<int, int> teams;
+    std::array<int, 2> count{};
+    for (const auto& value : participants)
+    {
+      if (!value.is<picojson::object>())
+        return false;
+      const auto& p = value.get<picojson::object>();
+      const auto slot = Int(p, "slot", 0, 3), team = Int(p, "team", 0, 1);
+      const auto id = Str(p, "id"), connection = Str(p, "connectionId");
+      if (!slot || !team || id.empty() || id.size() > 128 || connection.empty() ||
+          connection.size() > 128 ||
+          (p.count("localIndex") && Int(p, "localIndex", 0, 0) != 0) ||
+          !ids.insert(id).second || !connections.insert(connection).second ||
+          !teams.emplace(*slot, *team).second)
+        return false;
+      ++count[*team];
+    }
+    return count[0] == 2 && count[1] == 2 &&
+           (seat_teams.empty() || seat_teams == teams);
+  }
+
+  void RefuseRankedTeams()
+  {
+    if (std::exchange(ranked_doubles_refused, true))
+      return;
+    const std::string line =
+        "Room: ranked doubles requires four single-seat players and two complete teams";
+    LocalStatus(line);
+    End(line, "room_mismatch");
+  }
+
   void ReadTeams(picojson::array& participants)
   {
     std::map<int, int> parsed;
@@ -4839,6 +4884,11 @@ struct YouGameRoom::Impl
 
   void Roster(const picojson::object& m, bool fresh_without_add = false)
   {
+    if (doubles && queue == "ranked" && match_participants.empty() && !ValidRankedTeams(m))
+    {
+      RefuseRankedTeams();
+      return;
+    }
     mirror_dirty = true;
     LobbyFields(m);
     // Settlement can clear the gameplay roster before its verdict reaches a recovering game.
@@ -5323,9 +5373,10 @@ struct YouGameRoom::Impl
         room_size = Int(room, "size", 2, MAX_SEATS).value_or(MAX_SEATS);
         const bool wants_doubles = room.count("doubles") && room.at("doubles").is<bool>() &&
                                    room.at("doubles").get<bool>();
-        refuse_ranked_doubles = queue == "ranked" && wants_doubles;
-        doubles = wants_doubles && queue != "ranked" &&
-                  (queue == "private" || room_size == MAX_SEATS);
+        refuse_ranked_doubles = queue == "ranked" && wants_doubles &&
+            (Int(room, "size", 4, 4) != 4 || !ValidRankedTeams(m));
+        doubles = wants_doubles && (queue == "private" || room_size == MAX_SEATS) &&
+                  !refuse_ranked_doubles;
         if (queue != "private")
         {
           NOTICE_LOG_FMT(NETPLAY, "Orca room: a matchmade {} room{}", queue,
@@ -5334,10 +5385,7 @@ struct YouGameRoom::Impl
       }
       if (refuse_ranked_doubles)
       {
-        ranked_doubles_refused = true;
-        const std::string line = "Room: ranked doubles needs a newer YG Dolphin";
-        LocalStatus(line);
-        End(line, "room_mismatch");
+        RefuseRankedTeams();
         return;
       }
       if (QueueRecovery())

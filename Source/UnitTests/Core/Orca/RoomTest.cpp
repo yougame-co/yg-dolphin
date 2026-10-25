@@ -8530,11 +8530,11 @@ TEST(OrcaRoom, QueueDoublesWelcomeAndRankedRefusal)
     {
       EXPECT_FALSE(doubles);
       EXPECT_EQ(trace.back().state, RoomState::Ended);
-      EXPECT_EQ(trace.back().status, "Room: ranked doubles needs a newer YG Dolphin");
+      EXPECT_EQ(trace.back().status, "Room: ranked doubles requires four single-seat players and two complete teams");
       size_t lines = 0;
       for (const auto& step : trace)
         lines += std::count(step.notices.begin(), step.notices.end(),
-                            "Room: ranked doubles needs a newer YG Dolphin");
+                            "Room: ranked doubles requires four single-seat players and two complete teams");
       EXPECT_EQ(lines, 1u);
       for (const auto& step : trace)
         for (const auto& wire : step.sent)
@@ -8697,4 +8697,67 @@ TEST(OrcaRoom, SentLocalAddCountsInTicketsUntilTheRoomAnswers)
   EXPECT_EQ(trace[0].ticket_local_seats, 1);
   for (const int step : {1, 2, 3})
     EXPECT_EQ(trace[step].ticket_local_seats, 2);
+}
+
+namespace
+{
+std::string RankedDoublesRoster(const char* kind, int mine = 0)
+{
+  picojson::array players, participants;
+  for (int slot = 0; slot < 4; ++slot)
+  {
+    const auto id = fmt::format("p{}", slot);
+    players.emplace_back(picojson::object{{"id", picojson::value(id)},
+                                        {"name", picojson::value(id)}});
+    participants.emplace_back(picojson::object{{"id", picojson::value(id)},
+        {"connectionId", picojson::value(id)}, {"slot", picojson::value(double(slot))},
+        {"localIndex", picojson::value(0.0)}, {"team", picojson::value(double(slot % 2))}});
+  }
+  return picojson::value(picojson::object{{"t", picojson::value(kind)},
+      {"lifecycle", picojson::value("game")},
+      {"me", picojson::value(fmt::format("p{}", mine))}, {"host", picojson::value("p0")},
+      {"revision", picojson::value(1.0)}, {"matchId", picojson::value("doubles-set")},
+      {"room", picojson::value(picojson::object{{"queue", picojson::value("ranked")},
+          {"doubles", picojson::value(true)}, {"size", picojson::value(4.0)},
+          {"mode", picojson::value("orca-rsbe01-2v2-ranked")}})},
+      {"players", picojson::value(players)}, {"participants", picojson::value(participants)}}).serialize();
+}
+}
+
+TEST(OrcaRoomRankedDoubles, FourSingleSeatAccountsAreAdmittedAndInvalidMapsRefuseOnce)
+{
+  const auto valid = RankedDoublesRoster("welcome");
+  for (int bad = -1; bad < 8; ++bad)
+  {
+    picojson::value value;
+    ASSERT_TRUE(picojson::parse(value, valid).empty());
+    auto& o = value.get<picojson::object>();
+    auto& ps = o["participants"].get<picojson::array>();
+    if (bad == 0) ps[3].get<picojson::object>().erase("team");
+    if (bad == 1) ps[3].get<picojson::object>()["team"] = picojson::value(0.0);
+    if (bad == 2) ps[3].get<picojson::object>()["team"] = picojson::value(0.5);
+    if (bad == 3) ps[3].get<picojson::object>()["slot"] = picojson::value(2.0);
+    if (bad == 4) ps[3].get<picojson::object>()["connectionId"] = picojson::value("p2");
+    if (bad == 5) ps[3].get<picojson::object>()["localIndex"] = picojson::value(1.0);
+    if (bad == 6) o["room"].get<picojson::object>()["size"] = picojson::value(3.0);
+    if (bad == 7) ps[3].get<picojson::object>()["id"] = picojson::value("p2");
+    bool doubles = false;
+    const auto trace = TraceRoomForTest(TraceOptions(false), {
+        {RK::Message, 0, value.serialize()}, {RK::Message, 1, value.serialize()}},
+        [&](YouGameRoom& room) { doubles = room.Doubles(); });
+    SCOPED_TRACE(bad);
+    if (bad < 0)
+    {
+      EXPECT_TRUE(doubles);
+      EXPECT_NE(trace.back().state, RoomState::Ended);
+      EXPECT_EQ(trace.back().teams.size(), 4u);
+    }
+    else
+    {
+      EXPECT_EQ(trace.back().state, RoomState::Ended);
+      EXPECT_EQ(trace.back().status,
+          "Room: ranked doubles requires four single-seat players and two complete teams");
+      EXPECT_EQ(trace[0].notices.size() + trace[1].notices.size(), 1u);
+    }
+  }
 }
