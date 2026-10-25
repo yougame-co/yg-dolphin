@@ -9147,3 +9147,31 @@ TEST(OrcaRoomRankedDoubles, TicketSeatsAreAbsentForRankedRequestsAndKnownRooms)
     EXPECT_FALSE(trace[1].ticket_local_seats);
   }
 }
+
+TEST(OrcaRoomRankedDoubles, ARoomNoticeWithoutARosterKeepsThePartialSeats)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, RankedArrival("welcome", 2)},
+      {RK::Message, 1, R"({"t":"away","player":{"id":"p1","away":true},"players":[{"id":"p0"},{"id":"p1","away":true}],"host":"p0"})"},
+      {RK::Message, 2, RankedArrival("join", 3)}});
+  for (const auto& frame : trace)
+    EXPECT_NE(frame.state, RoomState::Ended);
+  EXPECT_EQ(trace[1].teams.size(), 2u);
+  EXPECT_EQ(trace[2].teams.size(), 3u);
+}
+
+TEST(OrcaRoomRankedDoubles, ASeatFirstSeenAtStartKeepsItsTeamForTheNextStart)
+{
+  picojson::value changed;
+  picojson::parse(changed, RankedArrival("start", 4));
+  auto& ps = changed.get<picojson::object>()["participants"].get<picojson::array>();
+  ps[2].get<picojson::object>()["team"] = picojson::value(1.0);
+  ps[3].get<picojson::object>()["team"] = picojson::value(0.0);
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, RankedArrival("welcome", 2)},
+      {RK::Message, 1, RankedArrival("start", 4)},
+      {RK::Message, 2, changed.serialize()}});
+  EXPECT_NE(trace[1].state, RoomState::Ended);
+  EXPECT_EQ(trace[2].state, RoomState::Ended);
+  EXPECT_EQ(trace[2].error_code, "room_mismatch");
+}

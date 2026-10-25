@@ -4462,6 +4462,7 @@ struct YouGameRoom::Impl
     {
       auto participants = m.at("participants").get<picojson::array>();
       ReadTeams(participants);
+      ranked_seen_teams.insert(seat_teams.begin(), seat_teams.end());
     }
     {
       std::lock_guard lock(mutex);
@@ -5068,7 +5069,8 @@ struct YouGameRoom::Impl
 
   void Roster(const picojson::object& m, bool fresh_without_add = false)
   {
-    if (doubles && queue == "ranked" && match_participants.empty() && !ValidRankedTeams(m))
+    if (doubles && queue == "ranked" && match_participants.empty() &&
+        m.count("participants") && !ValidRankedTeams(m))
     {
       RefuseRankedTeams();
       return;
