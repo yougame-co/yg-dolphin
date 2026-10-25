@@ -87,21 +87,23 @@ bool CollectFiles(const DiscIO::FileInfo& directory, const std::string& parent,
   }
   return true;
 }
+}  // namespace
 
-std::optional<std::string> HashRange(const DiscIO::Volume& volume,
-                                     const DiscIO::Partition& partition, const FileRange& file)
+std::optional<std::string> Detail::HashRange(const DiscIO::Volume& volume,
+                                          const DiscIO::Partition& partition, std::string_view path,
+                                          u64 offset, u64 size)
 {
-  if (file.offset > MAX_JSON_INTEGER || file.size > MAX_JSON_INTEGER - file.offset)
+  if (offset > MAX_JSON_INTEGER || size > MAX_JSON_INTEGER - offset)
     return std::nullopt;
   auto context = Common::SHA1::CreateContext();
-  std::vector<u8> buffer(static_cast<size_t>(std::min<u64>(1024 * 1024, file.size)));
-  for (u64 position = 0; position < file.size;)
+  std::vector<u8> buffer(static_cast<size_t>(std::min<u64>(1024 * 1024, size)));
+  for (u64 position = 0; position < size;)
   {
-    const size_t length = static_cast<size_t>(std::min<u64>(buffer.size(), file.size - position));
-    if (!volume.Read(file.offset + position, length, buffer.data(), partition))
+    const size_t length = static_cast<size_t>(std::min<u64>(buffer.size(), size - position));
+    if (!volume.Read(offset + position, length, buffer.data(), partition))
       return std::nullopt;
     // Disc tools can rename a title without changing the game. Mask only that field.
-    if (file.path == "sys/boot.bin" && position == 0)
+    if (path == "sys/boot.bin" && position == 0 && length >= 0x60)
       std::fill(buffer.begin() + 0x20, buffer.begin() + 0x60, 0);
     context->Update(buffer.data(), length);
     position += length;
@@ -109,6 +111,8 @@ std::optional<std::string> HashRange(const DiscIO::Volume& volume,
   return LowerSha1(Common::SHA1::DigestToString(context->Finish()));
 }
 
+namespace
+{
 std::optional<u64> DolSize(const DiscIO::Volume& volume, const DiscIO::Partition& partition,
                            u64 offset)
 {
@@ -192,8 +196,8 @@ std::optional<Report> Generate(const std::string& image, std::string* error)
     if (!h3_offset)
       return fail("cannot read game partition H3 offset");
     report.header.h3_sha1 =
-        HashRange(*volume, DiscIO::PARTITION_NONE,
-                  {"h3", partition.offset + *h3_offset, DiscIO::WII_PARTITION_H3_SIZE});
+        Detail::HashRange(*volume, DiscIO::PARTITION_NONE, "h3", partition.offset + *h3_offset,
+                          DiscIO::WII_PARTITION_H3_SIZE);
     if (!report.header.h3_sha1)
       return fail("cannot read game partition H3 table");
   }
@@ -228,7 +232,7 @@ std::optional<Report> Generate(const std::string& image, std::string* error)
             [](const FileRange& a, const FileRange& b) { return a.offset < b.offset; });
   for (const auto& file : files)
   {
-    const auto sha1 = HashRange(*volume, partition, file);
+    const auto sha1 = Detail::HashRange(*volume, partition, file.path, file.offset, file.size);
     if (!sha1)
       return fail("cannot read " + file.path);
     report.files.push_back({file.path, file.size, *sha1});

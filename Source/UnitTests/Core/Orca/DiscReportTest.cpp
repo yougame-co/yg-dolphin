@@ -13,6 +13,7 @@
 #include "Common/Crypto/SHA1.h"
 #include "Common/FileUtil.h"
 #include "Core/Orca/DiscReport.h"
+#include "DiscIO/Volume.h"
 
 namespace
 {
@@ -130,6 +131,25 @@ protected:
   std::string m_directory;
   std::string m_path;
 };
+
+TEST_F(DiscReportTest, BootTitleMaskRespectsRangeLength)
+{
+  const auto volume = DiscIO::CreateVolume(m_path);
+  ASSERT_TRUE(volume);
+  const std::string image = GameCubeImage();
+  for (const u64 length : {0u, 0x1fu, 0x20u, 0x5fu, 0x60u, 0x61u, 0x440u})
+  {
+    SCOPED_TRACE(length);
+    std::string expected = image.substr(0, length);
+    if (length >= 0x60)
+      std::fill(expected.begin() + 0x20, expected.begin() + 0x60, 0);
+    EXPECT_EQ(Report::Detail::HashRange(*volume, DiscIO::PARTITION_NONE, "sys/boot.bin", 0,
+                                      length),
+              Digest(expected));
+    EXPECT_EQ(Report::Detail::HashRange(*volume, DiscIO::PARTITION_NONE, "other.bin", 0, length),
+              Digest(image.substr(0, length)));
+  }
+}
 
 TEST_F(DiscReportTest, EntriesIncludeEveryFileAndSystemFile)
 {

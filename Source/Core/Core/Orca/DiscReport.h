@@ -11,8 +11,22 @@
 
 #include "Common/CommonTypes.h"
 
+namespace DiscIO
+{
+class Volume;
+struct Partition;
+}
+
 namespace Orca::DiscReport
 {
+namespace Detail
+{
+// Shared range reader for report generation and focused tests.
+std::optional<std::string> HashRange(const DiscIO::Volume& volume,
+                                     const DiscIO::Partition& partition, std::string_view path,
+                                     u64 offset, u64 size);
+}  // namespace Detail
+
 struct FileEntry
 {
   std::string path;
