@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstring>
 #include <future>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -238,7 +239,11 @@ bool VolumeWii::ReadUnpatched(u64 offset, u64 length, u8* buffer, const Partitio
     return false;
   const PartitionDetails& partition_details = it->second;
 
-  const u64 image_size = m_reader->GetDataSize();
+  // LowerBound readers synthesize blank data past GetDataSize(), so it isn't an end-of-disc
+  // limit. Use only the address-space limit there; accurate/upper bounds remain finite.
+  const u64 image_size = m_reader->GetDataSizeType() == DataSizeType::LowerBound ?
+                             std::numeric_limits<u64>::max() :
+                             m_reader->GetDataSize();
   const u64 data_offset = *partition_details.data_offset;
   if (partition.offset > image_size || data_offset > image_size - partition.offset)
     return false;

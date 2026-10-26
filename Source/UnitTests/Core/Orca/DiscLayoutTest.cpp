@@ -39,6 +39,7 @@
 #include "Core/Orca/RebuildStandard.h"
 #include "Core/Orca/StandardBlob.h"
 #include "DiscIO/Blob.h"
+#include "DiscIO/CISOBlob.h"
 #include "DiscIO/DiscExtractor.h"
 #include "DiscIO/DiscUtils.h"
 #include "DiscIO/Filesystem.h"
@@ -47,6 +48,7 @@
 #include "DiscIO/VolumeWad.h"
 #include "DiscIO/VolumeWii.h"
 #include "DiscIO/WIABlob.h"
+#include "DiscIO/WbfsBlob.h"
 #include "OrcaDiscTool/OutputFile.h"
 
 namespace
@@ -78,21 +80,36 @@ void Text(std::vector<u8>* bytes, size_t offset, const std::string& value)
 class FixtureBlob final : public DiscIO::BlobReader
 {
 public:
-  explicit FixtureBlob(std::vector<u8> data) : m_data(std::move(data)) {}
+  explicit FixtureBlob(std::vector<u8> data,
+                       DiscIO::DataSizeType size_type = DiscIO::DataSizeType::Accurate)
+      : m_data(std::move(data)), m_size_type(size_type)
+  {
+  }
   DiscIO::BlobType GetBlobType() const override { return DiscIO::BlobType::PLAIN; }
   std::unique_ptr<DiscIO::BlobReader> CopyReader() const override
   {
-    return std::make_unique<FixtureBlob>(m_data);
+    return std::make_unique<FixtureBlob>(m_data, m_size_type);
   }
   u64 GetRawSize() const override { return m_data.size(); }
   u64 GetDataSize() const override { return m_data.size(); }
-  DiscIO::DataSizeType GetDataSizeType() const override { return DiscIO::DataSizeType::Accurate; }
+  DiscIO::DataSizeType GetDataSizeType() const override { return m_size_type; }
   u64 GetBlockSize() const override { return 0; }
   bool HasFastRandomAccessInBlock() const override { return true; }
   std::string GetCompressionMethod() const override { return {}; }
   std::optional<int> GetCompressionLevel() const override { return {}; }
   bool Read(u64 offset, u64 size, u8* out) override
   {
+    if (m_size_type == DiscIO::DataSizeType::LowerBound)
+    {
+      // NFS semantics: unstored blocks, including the tail, read as zeros.
+      if (size > std::numeric_limits<u64>::max() - offset)
+        return false;
+      const u64 stored = offset < m_data.size() ? std::min(size, m_data.size() - offset) : 0;
+      if (stored != 0)
+        std::memcpy(out, m_data.data() + offset, stored);
+      std::fill_n(out + stored, size - stored, 0);
+      return true;
+    }
     if (offset > m_data.size() || size > m_data.size() - offset)
       return false;
     std::memcpy(out, m_data.data() + offset, size);
@@ -105,7 +122,207 @@ public:
 
 private:
   std::vector<u8> m_data;
+  DiscIO::DataSizeType m_size_type;
 };
+
+std::vector<u8> BlankTailImage(bool hashes)
+{
+  std::vector<u8> image(0x68000);
+  Write32(&image, 0x18, DiscIO::WII_DISC_MAGIC);
+  image[0x60] = hashes ? 0 : 1;
+  image[0x61] = 1;  // NFS exposes unencrypted sectors to VolumeWii.
+  Write32(&image, 0x40000, 1);
+  Write32(&image, 0x40004, 0x40020 / 4);
+  Write32(&image, 0x40020, 0x50000 / 4);
+  Write32(&image, 0x50000 + 0x2b8, 0x10000 / 4);
+  Write32(&image, 0x50000 + 0x2bc, Wii::BLOCK_TOTAL_SIZE / 4);
+  for (size_t i = 0x60000; i < image.size(); ++i)
+    image[i] = static_cast<u8>(i * 7 + 3);
+  return image;
+}
+
+TEST(VolumeWiiBlob, LowerBoundBlankTailMatchesPaddedImage)
+{
+  for (const bool hashes : {false, true})
+  {
+    SCOPED_TRACE(hashes);
+    const auto stored = BlankTailImage(hashes);
+    auto padded = stored;
+    padded.resize(stored.size() + 4 * Wii::BLOCK_TOTAL_SIZE);
+    Wii expected(std::make_unique<FixtureBlob>(padded), false);
+    // Deliberately retain BlobType::PLAIN: the guard must use size semantics, not the type name.
+    Wii actual(std::make_unique<FixtureBlob>(stored, DiscIO::DataSizeType::LowerBound), false);
+    const auto partition = expected.GetGamePartition();
+    ASSERT_EQ(actual.GetGamePartition(), partition);
+    const u64 block_size = hashes ? Wii::BLOCK_DATA_SIZE : Wii::BLOCK_TOTAL_SIZE;
+    for (const u64 offset : {block_size - 16, block_size, 3 * block_size + 3})
+    {
+      std::array<u8, Wii::BLOCK_DATA_SIZE + 32> a{}, b{};
+      b.fill(0xff);
+      ASSERT_TRUE(expected.Read(offset, a.size(), a.data(), partition));
+      ASSERT_TRUE(actual.Read(offset, b.size(), b.data(), partition));
+      EXPECT_EQ(a, b);
+      if (offset >= block_size)
+        EXPECT_TRUE(std::ranges::all_of(b, [](u8 byte) { return byte == 0; }));
+    }
+    std::array<u8, 32> bytes{};
+    EXPECT_FALSE(actual.Read(std::numeric_limits<u64>::max(), 1, bytes.data(), partition));
+    EXPECT_FALSE(actual.Read(16, std::numeric_limits<u64>::max(), bytes.data(), partition));
+  }
+}
+
+TEST(VolumeWiiBlob, FiniteContainerBlankTailsMatchPaddedImage)
+{
+  const std::string directory = File::CreateTempDir();
+  ASSERT_FALSE(directory.empty());
+  struct Cleanup
+  {
+    std::string path;
+    ~Cleanup() { File::DeleteDirRecursively(path); }
+  } cleanup{directory};
+  const auto write = [](const std::string& path, const std::vector<u8>& bytes) {
+    return File::WriteStringToFile(
+        path, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+  };
+  const auto callback = [](const std::string&, float) { return true; };
+  for (const bool hashes : {false, true})
+  {
+    const auto stored = BlankTailImage(hashes);
+    auto padded = stored;
+    padded.resize(0x100000);
+    FixtureBlob source(padded);
+    Wii expected(source.CopyReader(), false);
+    for (const auto type : {DiscIO::BlobType::PLAIN, DiscIO::BlobType::SPLIT_PLAIN,
+                            DiscIO::BlobType::GCZ, DiscIO::BlobType::WIA, DiscIO::BlobType::RVZ,
+                            DiscIO::BlobType::CISO, DiscIO::BlobType::WBFS})
+    {
+      SCOPED_TRACE(static_cast<int>(type));
+      SCOPED_TRACE(hashes);
+      std::string path = directory + "/tail";
+      if (type == DiscIO::BlobType::CISO)
+      {
+        DiscIO::CISOHeader header{};
+        header.magic = DiscIO::CISO_MAGIC;
+        header.block_size = Wii::BLOCK_TOTAL_SIZE;
+        std::fill_n(header.map, stored.size() / header.block_size, 1);
+        std::vector<u8> container(sizeof(header) + stored.size());
+        std::memcpy(container.data(), &header, sizeof(header));
+        std::copy(stored.begin(), stored.end(), container.begin() + sizeof(header));
+        ASSERT_TRUE(write(path, container));
+      }
+      else if (type == DiscIO::BlobType::WBFS)
+      {
+        // One stored cluster, followed by unmapped clusters that resolve into cluster zero.
+        std::vector<u8> container(0x200000);
+        std::memcpy(container.data(), "WBFS", 4);
+        Write32(&container, 4, container.size() / 512);
+        container[8] = 9;
+        container[9] = 20;
+        container[12] = 1;
+        Write16(&container, 512 + 256, 1);
+        std::copy(stored.begin(), stored.end(), container.begin() + 0x100000);
+        ASSERT_TRUE(write(path, container));
+      }
+      else if (type == DiscIO::BlobType::GCZ)
+      {
+        ASSERT_TRUE(DiscIO::ConvertToGCZ(&source, "", path, 0, Wii::BLOCK_TOTAL_SIZE, callback));
+      }
+      else if (type == DiscIO::BlobType::WIA || type == DiscIO::BlobType::RVZ)
+      {
+        ASSERT_TRUE(DiscIO::ConvertToWIAOrRVZ(&source, "", path, type == DiscIO::BlobType::RVZ,
+                                            DiscIO::WIARVZCompressionType::None, 0,
+                                            Wii::GROUP_TOTAL_SIZE, callback));
+      }
+      else if (type == DiscIO::BlobType::SPLIT_PLAIN)
+      {
+        path += ".part0.iso";
+        ASSERT_TRUE(write(path, stored));
+        ASSERT_TRUE(write(directory + "/tail.part1.iso",
+                          std::vector<u8>(padded.size() - stored.size())));
+      }
+      else
+      {
+        ASSERT_TRUE(write(path, padded));
+      }
+      auto actual = DiscIO::CreateDisc(path, false);
+      ASSERT_TRUE(actual);
+      ASSERT_EQ(actual->GetBlobType(), type);
+      const auto partition = actual->GetGamePartition();
+      const u64 block_size = hashes ? Wii::BLOCK_DATA_SIZE : Wii::BLOCK_TOTAL_SIZE;
+      for (const u64 offset : {block_size - 16, block_size, 3 * block_size + 3})
+      {
+        std::array<u8, Wii::BLOCK_DATA_SIZE + 32> a{}, b{};
+        b.fill(0xff);
+        ASSERT_TRUE(expected.Read(offset, a.size(), a.data(), partition));
+        ASSERT_TRUE(actual->Read(offset, b.size(), b.data(), partition));
+        EXPECT_EQ(a, b);
+      }
+      // WBFS also serves unmapped logical clusters beyond the stored cluster.
+      if (type == DiscIO::BlobType::WBFS)
+      {
+        std::array<u8, 32> bytes{};
+        bytes.fill(0xff);
+        const u64 raw_offset = 0x210000;
+        const u64 offset = hashes ? (raw_offset - 0x60000) / Wii::BLOCK_TOTAL_SIZE *
+                                       Wii::BLOCK_DATA_SIZE :
+                                   raw_offset - 0x60000;
+        ASSERT_TRUE(actual->Read(offset, bytes.size(), bytes.data(), partition));
+        EXPECT_TRUE(std::ranges::all_of(bytes, [](u8 byte) { return byte == 0; }));
+      }
+      std::array<u8, 32> bytes{};
+      const u64 raw_size = actual->GetDataSize() - 0x60000;
+      const u64 logical_size = hashes ? raw_size / Wii::BLOCK_TOTAL_SIZE * Wii::BLOCK_DATA_SIZE :
+                                       raw_size;
+      EXPECT_FALSE(actual->Read(logical_size, 1, bytes.data(), partition));
+      EXPECT_FALSE(actual->Read(logical_size - 1, 2, bytes.data(), partition));
+      actual.reset();
+      ASSERT_TRUE(File::Delete(path));
+    }
+  }
+}
+
+TEST(VolumeWiiBlob, DirectoryBlankTailReadsRemainBounded)
+{
+  const std::string directory = File::CreateTempDir();
+  ASSERT_FALSE(directory.empty());
+  struct Cleanup
+  {
+    std::string path;
+    ~Cleanup() { File::DeleteDirRecursively(path); }
+  } cleanup{directory};
+  ASSERT_TRUE(File::CreateDir(directory + "/sys"));
+  ASSERT_TRUE(File::CreateDir(directory + "/files"));
+  ASSERT_TRUE(File::CreateDir(directory + "/disc"));
+  for (const bool hashes : {false, true})
+  {
+    auto boot = BlankTailImage(hashes);
+    boot.resize(0x440);
+    ASSERT_TRUE(File::WriteStringToFile(
+        directory + "/sys/boot.bin",
+        std::string_view(reinterpret_cast<const char*>(boot.data()), boot.size())));
+    ASSERT_TRUE(File::WriteStringToFile(
+        directory + "/disc/header.bin",
+        std::string_view(reinterpret_cast<const char*>(boot.data()), 0x100)));
+    ASSERT_TRUE(File::WriteStringToFile(directory + "/sys/main.dol", std::string(0x100, '\0')));
+    ASSERT_TRUE(
+        File::WriteStringToFile(directory + "/sys/apploader.img", std::string(0x20, '\0')));
+    auto actual = DiscIO::CreateDisc(directory + "/sys/main.dol", false);
+    ASSERT_TRUE(actual);
+    ASSERT_EQ(actual->GetBlobType(), DiscIO::BlobType::DIRECTORY);
+    const auto partition = actual->GetGamePartition();
+    const auto data_offset = actual->ReadSwappedAndShifted(partition.offset + 0x2b8,
+                                                         DiscIO::PARTITION_NONE);
+    ASSERT_TRUE(data_offset);
+    const u64 raw_size = actual->GetDataSize() - partition.offset - *data_offset;
+    const u64 logical_size = hashes ? raw_size / Wii::BLOCK_TOTAL_SIZE * Wii::BLOCK_DATA_SIZE :
+                                     raw_size;
+    std::array<u8, 32> bytes{};
+    bytes.fill(0xff);
+    ASSERT_TRUE(actual->Read(logical_size - bytes.size(), bytes.size(), bytes.data(), partition));
+    EXPECT_TRUE(std::ranges::all_of(bytes, [](u8 byte) { return byte == 0; }));
+    EXPECT_FALSE(actual->Read(logical_size, 1, bytes.data(), partition));
+  }
+}
 
 enum class GapData
 {

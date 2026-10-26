@@ -195,7 +195,7 @@ private:
 
 // Factory function - examines the path to choose the right type of BlobReader, and returns one.
 std::unique_ptr<BlobReader> CreateBlobReader(const std::string& filename,
-                                             bool load_console_keys = true);
+                                           bool load_console_keys = true);
 
 using CompressCB = std::function<bool(const std::string& text, float percent)>;
 

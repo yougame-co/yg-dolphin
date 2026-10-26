@@ -3,7 +3,8 @@
 `dolphin-nogui --disc-report <image> [--against <reference.json>]` opens its own
 DiscIO volume and returns before application initialization. It does not boot,
 initialize configuration, create a user directory, or write disc data. All
-container types supported by DiscIO are read through the existing readers.
+container types supported by DiscIO are read through the existing readers. The report
+is read-only; Wii partition reads decrypt through VolumeWii as they do in the player.
 
 Stdout contains a JSON header, then file objects `{path,size,sha1}` sorted by path,
 then one verdict line. Digests are lowercase SHA-1 hex. Exit codes are 0 for PASS,
