@@ -106,8 +106,9 @@ std::optional<std::string> Detail::HashRange(const DiscIO::Volume& volume,
     if (!volume.Read(offset + position, length, buffer.data(), partition))
       return std::nullopt;
     // Disc tools can rename a title without changing the game. Mask only that field.
-    if (path == "sys/boot.bin" && position == 0 && length >= 0x60)
-      std::fill(buffer.begin() + 0x20, buffer.begin() + 0x60, 0);
+    if (path == "sys/boot.bin" && position == 0)
+      std::fill(buffer.begin() + std::min<size_t>(0x20, length),
+                buffer.begin() + std::min<size_t>(0x60, length), 0);
     context->Update(buffer.data(), length);
     position += length;
   }
