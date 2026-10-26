@@ -35,9 +35,9 @@
 
 namespace DiscIO
 {
-VolumeWii::VolumeWii(std::unique_ptr<BlobReader> reader)
+VolumeWii::VolumeWii(std::unique_ptr<BlobReader> reader, bool load_console_keys)
     : m_reader(std::move(reader)), m_game_partition(PARTITION_NONE),
-      m_last_decrypted_block(UINT64_MAX)
+      m_load_console_keys(load_console_keys), m_last_decrypted_block(UINT64_MAX)
 {
   ASSERT(m_reader);
 
@@ -135,7 +135,7 @@ VolumeWii::VolumeWii(std::unique_ptr<BlobReader> reader)
         const IOS::ES::TicketReader& ticket = *m_partitions[partition].ticket;
         if (!ticket.IsValid())
           return nullptr;
-        return Common::AES::CreateContextDecrypt(ticket.GetTitleKey().data());
+        return Common::AES::CreateContextDecrypt(GetTitleKey(partition).data());
       };
 
       auto get_file_system = [this, partition]() -> std::unique_ptr<FileSystem> {
@@ -321,6 +321,12 @@ const IOS::ES::TMDReader& VolumeWii::GetTMD(const Partition& partition) const
 {
   auto it = m_partitions.find(partition);
   return it != m_partitions.end() ? *it->second.tmd : INVALID_TMD;
+}
+
+std::array<u8, 16> VolumeWii::GetTitleKey(const Partition& partition) const
+{
+  const auto& ticket = GetTicket(partition);
+  return ticket.GetTitleKey(IOS::HLE::IOSC{ticket.GetConsoleType(), m_load_console_keys});
 }
 
 const std::vector<u8>& VolumeWii::GetCertificateChain(const Partition& partition) const

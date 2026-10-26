@@ -57,7 +57,7 @@ public:
   };
   static_assert(sizeof(HashBlock) == BLOCK_HEADER_SIZE);
 
-  VolumeWii(std::unique_ptr<BlobReader> reader);
+  VolumeWii(std::unique_ptr<BlobReader> reader, bool load_console_keys = true);
   ~VolumeWii() override;
   bool Read(u64 offset, u64 length, u8* buffer, const Partition& partition) const override;
   bool SetReadPatches(std::vector<ReadPatch> patches, ReadPatchFailure* failure = nullptr) override;
@@ -71,6 +71,7 @@ public:
   std::optional<u32> GetPartitionType(const Partition& partition) const override;
   std::optional<u64> GetTitleID(const Partition& partition) const override;
   const IOS::ES::TicketReader& GetTicket(const Partition& partition) const override;
+  std::array<u8, 16> GetTitleKey(const Partition& partition) const override;
   const IOS::ES::TMDReader& GetTMD(const Partition& partition) const override;
   const std::vector<u8>& GetCertificateChain(const Partition& partition) const override;
   const FileSystem* GetFileSystem(const Partition& partition) const override;
@@ -137,6 +138,7 @@ private:
   Partition m_game_partition;
   bool m_has_hashes;
   bool m_has_encryption;
+  bool m_load_console_keys;
 
   mutable u64 m_last_decrypted_block;
   mutable u8 m_last_decrypted_block_data[BLOCK_DATA_SIZE]{};

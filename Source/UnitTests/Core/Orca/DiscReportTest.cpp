@@ -266,6 +266,23 @@ TEST_F(DiscReportTest, UnreadableAndTruncatedImagesFail)
   EXPECT_EQ(code, 1);
 }
 
+TEST_F(DiscReportTest, TruncatedBootMaskStaysInsideTheReadRange)
+{
+  for (const size_t size : {0x20, 0x21, 0x30, 0x5f})
+  {
+    auto boot = GameCubeImage().substr(0, size);
+    ASSERT_TRUE(File::WriteStringToFile(m_path, boot));
+    const auto volume = DiscIO::CreateVolume(m_path);
+    ASSERT_TRUE(volume);
+    const auto hash = Report::HashFile(*volume, DiscIO::PARTITION_NONE, "sys/boot.bin", 0, size);
+    ASSERT_TRUE(hash);
+    std::fill(boot.begin() + std::min<size_t>(0x20, size), boot.end(), 0);
+    EXPECT_EQ(*hash, Digest(boot));
+    std::string error;
+    EXPECT_FALSE(Report::Generate(m_path, &error));
+  }
+}
+
 TEST_F(DiscReportTest, InvalidFilesystemAndTruncatedSystemFileFail)
 {
   int code = -1;

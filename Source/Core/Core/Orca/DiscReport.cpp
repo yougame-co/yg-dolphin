@@ -15,6 +15,7 @@
 
 #include "Common/Crypto/SHA1.h"
 #include "Common/IOFile.h"
+#include "Core/Orca/RebuildStandard.h"
 #include "Core/Orca/SafeJson.h"
 #include "DiscIO/DiscUtils.h"
 #include "DiscIO/Enums.h"
@@ -99,6 +100,8 @@ std::optional<std::string> Detail::HashRange(const DiscIO::Volume& volume,
   std::vector<u8> buffer(static_cast<size_t>(std::min<u64>(1024 * 1024, size)));
   for (u64 position = 0; position < size;)
   {
+    if (RebuildStandard::IsCancelled())
+      return std::nullopt;
     const size_t length = static_cast<size_t>(std::min<u64>(buffer.size(), size - position));
     if (!volume.Read(offset + position, length, buffer.data(), partition))
       return std::nullopt;
@@ -161,13 +164,31 @@ std::string LowerSha1(std::string sha1)
 
 std::optional<Report> Generate(const std::string& image, std::string* error)
 {
+  const auto volume = DiscIO::CreateVolume(image, false);
+  if (!volume)
+  {
+    *error = "cannot open a GameCube or Wii disc image";
+    return std::nullopt;
+  }
+  return Generate(*volume, error);
+}
+
+std::optional<std::string> HashFile(const DiscIO::Volume& volume,
+                                    const DiscIO::Partition& partition, std::string_view path,
+                                    u64 offset, u64 size)
+{
+  return HashRange(volume, partition, {std::string(path), offset, size});
+}
+
+std::optional<Report> Generate(const DiscIO::Volume& source, std::string* error)
+{
   error->clear();
   const auto fail = [&](std::string reason) -> std::optional<Report> {
     *error = std::move(reason);
     return std::nullopt;
   };
-  const auto volume = DiscIO::CreateVolume(image);
-  if (!volume || !DiscIO::IsDisc(volume->GetVolumeType()))
+  const auto* volume = &source;
+  if (!DiscIO::IsDisc(volume->GetVolumeType()))
     return fail("cannot open a GameCube or Wii disc image");
 
   const bool wii = volume->GetVolumeType() == DiscIO::Platform::WiiDisc;
