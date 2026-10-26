@@ -8,6 +8,14 @@ DOC = Path(__file__).with_name('result-contract.md')
 
 
 class ResultContract(unittest.TestCase):
+    def test_ranked_admission_and_ticket_contract(self):
+        text = DOC.read_text()
+        for fragment in ('1–4 participants', 'until begin', 'already-seen slot',
+                         'reason `ranked`', 'omit `ls`', 'rebuildMpTicket',
+                         'desktop/src/orca-bridge.ts', 'fixed field list'):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+
     def test_wire_contract_and_source_anchors(self):
         self.assertTrue(DOC.is_file(), 'missing ranked doubles result contract')
         text = DOC.read_text()

@@ -8656,6 +8656,11 @@ TEST_F(OrcaRoomRuntime, TicketRequestsPublishActualLocalSeatCount)
   ASSERT_TRUE(seats.get<picojson::array>()[1].is<double>());
   EXPECT_EQ(seats.get<picojson::array>()[0].get<double>(), 1);
   EXPECT_EQ(seats.get<picojson::array>()[1].get<double>(), 2);
+  const auto present = Request("/state/" + code).get("ticket_has_local_seats");
+  ASSERT_TRUE(present.is<picojson::array>());
+  ASSERT_EQ(present.get<picojson::array>().size(), 2u);
+  EXPECT_TRUE(present.get<picojson::array>()[0].get<bool>());
+  EXPECT_TRUE(present.get<picojson::array>()[1].get<bool>());
 }
 
 TEST(OrcaRoom, CasualDoublesDoesNotSendSinglesResults)
@@ -9123,6 +9128,11 @@ TEST_F(OrcaRoomRuntime, RankedDoublesTicketsOmitLocalSeatsAtMintAndRefresh)
     else
       EXPECT_EQ(seats.get<picojson::array>()[0].get<double>(), 1);
     EXPECT_TRUE(seats.get<picojson::array>()[1].is<picojson::null>());
+    const auto present = Request("/state/" + code).get("ticket_has_local_seats");
+    ASSERT_TRUE(present.is<picojson::array>());
+    ASSERT_EQ(present.get<picojson::array>().size(), 2u);
+    EXPECT_EQ(present.get<picojson::array>()[0].get<bool>(), !explicit_mode);
+    EXPECT_FALSE(present.get<picojson::array>()[1].get<bool>());
   }
 }
 

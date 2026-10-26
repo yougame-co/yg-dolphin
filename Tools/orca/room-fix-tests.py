@@ -97,6 +97,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg["tickets"] += 1
                 cfg["ticket_lobbies"].append(body.get("lobby"))
                 cfg["ticket_local_seats"].append(body.get("ls"))
+                cfg["ticket_has_local_seats"].append("ls" in body)
                 ticket_number = cfg["tickets"]
                 delay = cfg.get("ticket_delay", 0) if cfg["tickets"] > 1 else 0
                 ticket_failed = cfg.get("ticket_fail_count", 0) > 0 and ticket_number > 1
@@ -125,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/configure/"):
             with lock:
                 rooms[code] = dict(body, tickets=0, connects=0, probes=0, closes=0,
-                                   messages=[], sockets=[], close_codes=[], ticket_uses=[], ticket_lobbies=[], ticket_local_seats=[])
+                                   messages=[], sockets=[], close_codes=[], ticket_uses=[], ticket_lobbies=[], ticket_local_seats=[], ticket_has_local_seats=[])
             self.reply({})
         elif self.path.startswith("/action/"):
             with lock:
@@ -159,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 cfg = rooms[code]
                 self.reply({k: cfg[k] for k in ("tickets", "connects", "probes", "closes",
-                                              "messages", "close_codes", "ticket_uses", "ticket_lobbies", "ticket_local_seats")})
+                                              "messages", "close_codes", "ticket_uses", "ticket_lobbies", "ticket_local_seats", "ticket_has_local_seats")})
             return
         with lock:
             cfg = rooms[code]

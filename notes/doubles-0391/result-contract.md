@@ -1,25 +1,44 @@
 # Ranked doubles result contract (rdoubles-0391)
 
 Engine-only handoff for doubles-lead. No version bump. The contract was committed before
-implementation; the live source anchors below are pinned by `test_result_contract.py`. Service citations are from YouGame's local
-`origin/claude/v2` (`7b51c2e868`), read on 2026-10-25; no service changes are part of this branch.
+implementation; the live source anchors below are pinned by `test_result_contract.py`.
+Original result-service citations use YouGame's local `origin/claude/v2` snapshot
+`7b51c2e868`. Admission and desktop bridge shapes below were checked at `2fbe56330`,
+read-only, on 2026-10-25; no service changes are part of this branch.
 
 ## Admission and capabilities
 
 The page obtains a ranked doubles match in mode `orca-<p>-2v2-ranked` (lowercase profile ID),
 then sends the ordinary `host <code>` / `join <code>` command. The initial engine ticket still
-names its profile mode, room code, lobby compatibility and `ls:1`; the page's matched-room
+names its profile mode, room code and lobby compatibility; the page's matched-room
 registration must retain the ranked doubles mode when resolving that code. The engine does
 not derive matchmaking mode from the welcome or append a suffix to a friends ticket.
 
-Welcome must contain `room:{queue:"ranked",doubles:true,size:4}` and four participants:
-distinct nonempty `id` and `connectionId`, distinct slots 0–3, `localIndex:0` (or absent),
-and integer `team:0|1`, exactly two seats on each team. Ranked doubles is four accounts,
-one seat per computer. Invalid/missing assignments or wrong size refuse the room once with
+Welcome must contain `room:{queue:"ranked",doubles:true,size:4}`. The engine accepts
+1–4 participants until begin, as seats arrive: each has distinct nonempty `id` and
+`connectionId` (each at most 128 bytes), a distinct integer slot 0–3, `localIndex:0`
+(or absent), and integer `team:0|1`. Each team has at most two seats, and an already-seen slot
+keeps its team, including after an absence. Rooms' welcome repeats lobby details both at the
+top level and under `room` (`rooms/src/index.ts:3617`, `rooms/src/game-lobby.ts:192`);
+the engine accepts either shape. Notices without a roster retain the existing seats.
+Only invalid rosters refuse the room, once, with
 `Room: ranked doubles requires four single-seat players and two complete teams`,
-code `room_mismatch`. A changed/invalid team assignment before a match also refuses it;
-an active match retains its original seat/team identities for results and departures.
-Casual/friends doubles retains its existing admission and reporting policy.
+code `room_mismatch`. The host's begin path and the `match_participants` snapshot require
+four distinct accounts in a complete 2+2. A partial roster never sends begin; rooms also
+refuses it with `Waiting for four players with complete teams`. An active match retains
+its original seat/team identities for results and departures.
+
+Ranked doubles is one seat per computer. A page local-add is refused locally with
+reason `ranked` and `Room: Ranked doubles is one player per computer (ranked)`, before
+sending anything to rooms. This also applies to `page_add_before_welcome` once the welcome
+identifies ranked doubles. Casual/friends doubles retains its existing local-seat policy.
+
+Ticket requests omit `ls` entirely when the room is known to be ranked doubles or the
+request mode is `orca-<p>-2v2-ranked`, including ticket refreshes. Other requests retain
+their existing seat count (an initial profile-only request cannot yet know the room's queue).
+Desktop `desktop/src/orca-bridge.ts` `rebuildMpTicket` rebuilds the request from a fixed field list
+(type, players, mode, ranked, room, lobby) and already drops `ls`; this branch changes only
+the engine's requests, with no desktop dependency.
 
 `rdoubles` advertises this result contract, appended LAST immediately after `qdoubles`,
 including when co-seats are disabled. The 24-word reader limit counts capability words
@@ -122,10 +141,10 @@ room's teams before play; results must identify the winning team unambiguously.
 ## Pinned engine anchors
 
 - `Source/Core/Core/Orca/Status.cpp:222` — `caps += " qdoubles rdoubles";`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4967` — `bool ValidRankedTeams(`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4997` — `void RefuseRankedTeams()`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:5538` — `refuse_ranked_doubles = queue == "ranked" && wants_doubles &&`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3818` — `void TryBegin()`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4989` — `bool ValidRankedTeams(`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:5022` — `void RefuseRankedTeams()`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:5573` — `refuse_ranked_doubles = queue == "ranked" && wants_doubles &&`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3831` — `void TryBegin()`
 - `Source/Core/Core/Orca/Session/YouGameRoom.h:308` — `std::string PlayQueue() const;`
 - `Source/Core/Core/Orca/Games/Brawl/Results.h:36` — `per port at +0x24 + port * 0x2AC:`
 - `Source/Core/Core/Orca/Games/Brawl/Results.cpp:167` — `for (u32 port = 0; port < 4; ++port)`
@@ -138,12 +157,14 @@ room's teams before play; results must identify the winning team unambiguously.
 - `Source/Core/Core/Rollback/OnlineMatch.cpp:3783` — `const auto report = Orca::Net::FromGameResult(`
 - `Source/Core/Core/Rollback/OnlineMatch.cpp:4638` — `all_seats &= match.session->Plugged(`
 - `Source/Core/Core/Orca/Session/YouGameRoom.cpp:1050` — `GameReport FromGameResult(`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3704` — `std::string TeamOutcome(`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3848` — `void SendReport(`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3944` — `void SendFinish(`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4195` — `void OnGameResult(`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3151` — `// Reports and a void the emulator thread left for this room go out before the goodbye.`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4030` — `SendFinish(current_match, "", "desync");`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4039` — `SendFinish(current_match, "", "fault");`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4933` — `void OpponentGone(`
-- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4143` — `Verdict ReadVerdict(`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3717` — `std::string TeamOutcome(`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3864` — `void SendReport(`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3960` — `void SendFinish(`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4211` — `void OnGameResult(`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3157` — `// Reports and a void the emulator thread left for this room go out before the goodbye.`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4046` — `SendFinish(current_match, "", "desync");`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4055` — `SendFinish(current_match, "", "fault");`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4955` — `void OpponentGone(`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:4159` — `Verdict ReadVerdict(`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:1784` — `std::optional<int> TicketLocalSeats() const`
+- `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3323` — `std::string LocalRefusalLocked(bool removing) const`
