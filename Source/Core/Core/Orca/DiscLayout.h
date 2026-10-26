@@ -21,6 +21,7 @@ class Volume;
 
 namespace Orca::DiscLayout
 {
+inline constexpr u64 FORMAT_VERSION = 3;
 // RVZPack's unit, measured in decrypted partition bytes (not physical Wii sectors).
 constexpr u64 JUNK_UNIT_SIZE = 0x8000;
 using JunkSeed = std::array<u32, DiscIO::LaggedFibonacciGenerator::SEED_SIZE>;

@@ -1269,6 +1269,10 @@ TEST_F(DiscLayoutTest, StandaloneCommandDispatchAndStrictOptions)
   auto [code, text] = run(args);
   ASSERT_EQ(code, 0) << text;
   EXPECT_EQ(text, "PASS: wrote RTEE01 layout\n");
+  std::tie(code, text) = run({"orca-disc-tool", "--disc-report=" + original,
+                             "--against", reference_path});
+  ASSERT_EQ(code, 0) << text;
+  EXPECT_NE(text.find("PASS: files match"), std::string::npos);
   std::tie(code, text) = run({"orca-disc-tool", "--rebuild-standard=" + variant, "--layout",
                               layout_path, "--out", output, "--against", reference_path});
   ASSERT_EQ(code, 0) << text;
@@ -1278,6 +1282,8 @@ TEST_F(DiscLayoutTest, StandaloneCommandDispatchAndStrictOptions)
            {"orca-disc-tool", "--disc-layout", original, "--out", output, "--boot"},
            {"orca-disc-tool", "--rebuild-standard", variant, "--out", output},
            {"orca-disc-tool", "--disc-layout", original, "--out", output, "--out", output},
+           {"orca-disc-tool", "--disc-report", original, "--out", output},
+           {"orca-disc-tool", "--disc-report", original, "--disc-layout", original},
            {"orca-disc-tool", "--out="}})
   {
     std::tie(code, text) = run(bad);

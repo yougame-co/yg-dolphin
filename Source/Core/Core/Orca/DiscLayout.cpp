@@ -380,7 +380,7 @@ std::string Serialize(const Layout& layout)
   // Older readers must reject layouts whose zero gaps require ciphertext semantics.
   const bool physical_zero = std::any_of(layout.gaps.begin(), layout.gaps.end(),
                                          [](const auto& gap) { return gap.physical_zero; });
-  const u64 version = !layout.erased_hashes.empty() ? 3 : physical_zero ? 2 : 1;
+  const u64 version = !layout.erased_hashes.empty() ? FORMAT_VERSION : physical_zero ? 2 : 1;
   picojson::array partitions, files, entries, gaps, erased_hashes;
   for (const auto& partition : layout.partitions)
     partitions.emplace_back(
@@ -448,7 +448,7 @@ std::string Serialize(const Layout& layout)
                           {"systemFiles", picojson::value(files)},
                           {"fst", picojson::value(entries)},
                           {"gaps", picojson::value(gaps)}};
-  if (version == 3)
+  if (version == FORMAT_VERSION)
     object["erasedHashes"] = picojson::value(std::move(erased_hashes));
   return picojson::value(std::move(object)).serialize(true) + '\n';
 }
@@ -471,7 +471,8 @@ std::optional<Layout> Parse(std::string_view json, std::string* error)
     return fail();
   layout.disc_number = static_cast<u8>(disc_number);
   if (!ReadNumber(root.get("version"), &version) ||
-      (version != 1 && version != 2 && version != 3) || !ReadString(root.get("id"), &layout.id) ||
+      (version != 1 && version != 2 && version != FORMAT_VERSION) ||
+      !ReadString(root.get("id"), &layout.id) ||
       !ReadString(root.get("h3Sha1"), &layout.h3_sha1) ||
       !ReadString(root.get("tmdContentSha1"), &layout.tmd_content_sha1) ||
       !ReadNumber(root.get("partitionOffset"), &layout.partition_offset) ||
@@ -479,9 +480,9 @@ std::optional<Layout> Parse(std::string_view json, std::string* error)
       !ReadRange(root.get("tmd"), &layout.tmd) || !ReadRange(root.get("cert"), &layout.cert) ||
       !ReadRange(root.get("h3"), &layout.h3) || !ReadRange(root.get("data"), &layout.data))
     return fail();
-  if (root.contains("erasedHashes") || version == 3)
+  if (root.contains("erasedHashes") || version == FORMAT_VERSION)
   {
-    if (version != 3 || !root.get("erasedHashes").is<picojson::array>() ||
+    if (version != FORMAT_VERSION || !root.get("erasedHashes").is<picojson::array>() ||
         root.get("erasedHashes").get<picojson::array>().empty())
       return fail();
     for (const auto& value : root.get("erasedHashes").get<picojson::array>())

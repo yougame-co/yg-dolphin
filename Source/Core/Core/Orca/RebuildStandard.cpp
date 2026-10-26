@@ -244,7 +244,7 @@ std::optional<int> RunCommandLine(int argc, char* argv[])
       break;
     const auto option = arg.substr(0, arg.find('='));
     requested |= option == "--disc-layout" || option == "--rebuild-standard" ||
-                 option == "--layout" || option == "--out";
+                 option == "--layout" || option == "--out" || option == "--disc-report";
   }
   if (!requested)
     return {};
@@ -261,7 +261,7 @@ std::optional<int> RunCommandLine(int argc, char* argv[])
     const size_t equals = arg.find('=');
     const std::string option(arg.substr(0, equals));
     if (option != "--disc-layout" && option != "--rebuild-standard" && option != "--layout" &&
-        option != "--out" && option != "--against")
+        option != "--out" && option != "--against" && option != "--disc-report")
       return fail("unrecognized standalone disc option");
     if (options.contains(option))
       return fail("duplicate standalone disc option");
@@ -274,6 +274,15 @@ std::optional<int> RunCommandLine(int argc, char* argv[])
       return fail("standalone disc option needs a path");
     options.emplace(option, std::move(value));
   }
+  std::optional<std::string> reference;
+  if (options.contains("--against"))
+    reference = options.at("--against");
+  if (options.contains("--disc-report"))
+  {
+    if (options.size() != (reference ? 2u : 1u))
+      return fail("--disc-report accepts only an image and optional --against reference");
+    return DiscReport::Run(options.at("--disc-report"), reference, stdout);
+  }
   if (!options.contains("--out"))
     return fail("standalone disc command requires --out");
   if (options.contains("--disc-layout"))
@@ -285,9 +294,6 @@ std::optional<int> RunCommandLine(int argc, char* argv[])
   }
   if (!options.contains("--rebuild-standard") || !options.contains("--layout"))
     return fail("--rebuild-standard requires an image, --layout and --out");
-  std::optional<std::string> reference;
-  if (options.contains("--against"))
-    reference = options.at("--against");
   return Run(options.at("--rebuild-standard"), options.at("--layout"), reference,
              options.at("--out"), stdout);
 }
