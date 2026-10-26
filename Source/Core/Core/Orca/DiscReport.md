@@ -87,8 +87,8 @@ build-disc-report/Binaries/orca-disc-tool --rebuild-standard <image> --layout <l
 Build the separate lab tool explicitly (the option defaults to OFF):
 
 ```sh
-flock /Users/luis/Code/brawl-dolphin/build.lock cmake -S . -B build-disc-report -DORCA_BUILD_DISC_TOOLS=ON
-flock /Users/luis/Code/brawl-dolphin/build.lock make -C build-disc-report -j2 orca-disc-tool
+cmake -S . -B build-disc-report -DORCA_BUILD_DISC_TOOLS=ON
+make -C build-disc-report -j2 orca-disc-tool
 ```
 
 Release kits enable `ORCA_BUILD_DISC_TOOLS=ON` and ship the standalone tool beside
