@@ -109,9 +109,26 @@ struct LaunchJoinBoundaryResult
   bool joining;
   bool has_port;
   int frame;
+  int local_seat;
+  bool log_empty;
+  bool queued_local_empty;
 };
 // Runs the actual boundary before a launch joiner's origin, against Online's room.
 LaunchJoinBoundaryResult PumpLaunchJoinBoundaryForTest();
+
+struct ReseatResult
+{
+  int local_seat;
+  int running;
+  int origin_frame;
+  int log_base;
+  std::vector<Orca::Net::Pads> log;
+  bool queued_local_empty;
+  std::vector<int> co_seats;
+};
+// Runs the actual reseat with queued inputs and a supplied history, without clearing the history.
+ReseatResult PumpReseatForTest(int seat, const std::vector<Orca::Net::Pads>& log,
+                             const std::vector<int>& co_seats = {});
 
 // Refused joins whose host or match ended use the app's existing state events.
 void ReportJoinFailure(std::string_view code, std::string_view sentence);
