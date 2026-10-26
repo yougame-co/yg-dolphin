@@ -91,7 +91,8 @@ flock /Users/luis/Code/brawl-dolphin/build.lock cmake -S . -B build-disc-report 
 flock /Users/luis/Code/brawl-dolphin/build.lock make -C build-disc-report -j2 orca-disc-tool
 ```
 
-Release kits leave `ORCA_BUILD_DISC_TOOLS=OFF`. The player never links the layout,
+Release kits enable `ORCA_BUILD_DISC_TOOLS=ON` and ship the standalone tool beside
+the engine. The player never links the layout,
 rebuild or StandardBlob implementations, even when the lab option is ON.
 `--disc-report` remains available in the player as before.
 

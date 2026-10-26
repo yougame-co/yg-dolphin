@@ -134,7 +134,7 @@ fi
 cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_QT=OFF -DENABLE_NOGUI=ON -DORCA_VERSION="$VERSION" \
-  -DORCA_BUILD_DISC_TOOLS=OFF \
+  -DORCA_BUILD_DISC_TOOLS=ON \
   -DUSE_SYSTEM_LIBS=OFF -DENCODE_FRAMEDUMPS=OFF -DENABLE_LLVM=OFF \
   -DENABLE_ANALYTICS=OFF -DENABLE_AUTOUPDATE=OFF -DUSE_DISCORD_PRESENCE=OFF \
   -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF -DENABLE_VULKAN=ON \
@@ -148,7 +148,7 @@ grep -q '^ORCA_BUNDLE_TRUST_TEST_KEY:BOOL=OFF$' "$BUILD_DIR/CMakeCache.txt" ||
   fail "CMake's cache still trusts the bundle-flat TEST key"
 grep -q '^USE_PULSE:INTERNAL=1' "$BUILD_DIR/CMakeCache.txt" ||
   fail "Cubeb found no PulseAudio headers (libpulse-dev): Orca would play no sound"
-cmake --build "$BUILD_DIR" --target dolphin-nogui
+cmake --build "$BUILD_DIR" --target dolphin-nogui orca-disc-tool --parallel 2
 
 if [ "$RELEASE" = 1 ]; then
   # The source must not have moved under the build.
@@ -206,6 +206,7 @@ PROGRAM="$PKG/yg-dolphin"
 rm -rf "$STAGE"
 mkdir -p "$PKG"
 install -m 755 "$BIN" "$PROGRAM"
+install -m 755 "$BUILD_DIR/Binaries/orca-disc-tool" "$PKG/orca-disc-tool"
 # Symbols stay beside the zip (for a crash's addresses), not in it.
 DEBUG="$OUT_DIR/yg-dolphin-$VERSION-linux-x64.debug"
 objcopy --only-keep-debug "$PROGRAM" "$DEBUG"
