@@ -15,7 +15,6 @@
 
 #include "Common/Crypto/SHA1.h"
 #include "Common/IOFile.h"
-#include "Core/Orca/RebuildStandard.h"
 #include "Core/Orca/SafeJson.h"
 #include "DiscIO/DiscUtils.h"
 #include "DiscIO/Enums.h"
@@ -92,7 +91,8 @@ bool CollectFiles(const DiscIO::FileInfo& directory, const std::string& parent,
 
 std::optional<std::string> Detail::HashRange(const DiscIO::Volume& volume,
                                           const DiscIO::Partition& partition, std::string_view path,
-                                          u64 offset, u64 size)
+                                          u64 offset, u64 size,
+                                          const std::function<bool()>& cancelled)
 {
   if (offset > MAX_JSON_INTEGER || size > MAX_JSON_INTEGER - offset)
     return std::nullopt;
@@ -100,7 +100,7 @@ std::optional<std::string> Detail::HashRange(const DiscIO::Volume& volume,
   std::vector<u8> buffer(static_cast<size_t>(std::min<u64>(1024 * 1024, size)));
   for (u64 position = 0; position < size;)
   {
-    if (RebuildStandard::IsCancelled())
+    if (cancelled && cancelled())
       return std::nullopt;
     const size_t length = static_cast<size_t>(std::min<u64>(buffer.size(), size - position));
     if (!volume.Read(offset + position, length, buffer.data(), partition))
@@ -175,12 +175,13 @@ std::optional<Report> Generate(const std::string& image, std::string* error)
 
 std::optional<std::string> HashFile(const DiscIO::Volume& volume,
                                     const DiscIO::Partition& partition, std::string_view path,
-                                    u64 offset, u64 size)
+                                    u64 offset, u64 size, const std::function<bool()>& cancelled)
 {
-  return HashRange(volume, partition, {std::string(path), offset, size});
+  return Detail::HashRange(volume, partition, path, offset, size, cancelled);
 }
 
-std::optional<Report> Generate(const DiscIO::Volume& source, std::string* error)
+std::optional<Report> Generate(const DiscIO::Volume& source, std::string* error,
+                               const std::function<bool()>& cancelled)
 {
   error->clear();
   const auto fail = [&](std::string reason) -> std::optional<Report> {
@@ -218,7 +219,7 @@ std::optional<Report> Generate(const DiscIO::Volume& source, std::string* error)
       return fail("cannot read game partition H3 offset");
     report.header.h3_sha1 =
         Detail::HashRange(*volume, DiscIO::PARTITION_NONE, "h3", partition.offset + *h3_offset,
-                          DiscIO::WII_PARTITION_H3_SIZE);
+                          DiscIO::WII_PARTITION_H3_SIZE, cancelled);
     if (!report.header.h3_sha1)
       return fail("cannot read game partition H3 table");
   }
@@ -253,7 +254,7 @@ std::optional<Report> Generate(const DiscIO::Volume& source, std::string* error)
             [](const FileRange& a, const FileRange& b) { return a.offset < b.offset; });
   for (const auto& file : files)
   {
-    const auto sha1 = Detail::HashRange(*volume, partition, file.path, file.offset, file.size);
+    const auto sha1 = Detail::HashRange(*volume, partition, file.path, file.offset, file.size, cancelled);
     if (!sha1)
       return fail("cannot read " + file.path);
     report.files.push_back({file.path, file.size, *sha1});

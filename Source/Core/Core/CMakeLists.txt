@@ -531,12 +531,6 @@ add_library(core
   Orca/Disc.h
   Orca/DiscReport.cpp
   Orca/DiscReport.h
-  Orca/DiscLayout.cpp
-  Orca/DiscLayout.h
-  Orca/RebuildStandard.cpp
-  Orca/RebuildStandard.h
-  Orca/StandardBlob.cpp
-  Orca/StandardBlob.h
   Orca/DiscVerify.cpp
   Orca/DiscVerify.h
   Orca/Engine/Display.h

@@ -79,9 +79,20 @@ invented ticket fields, signatures, certificate bytes and files.
 ## Standalone layout export and rebuild
 
 ```
-dolphin-nogui --disc-layout <image> --out <layout.json>
-dolphin-nogui --rebuild-standard <image> --layout <layout.json> --out <out.rvz> [--against <reference.json>]
+build-disc-report/Binaries/orca-disc-tool --disc-layout <image> --out <layout.json>
+build-disc-report/Binaries/orca-disc-tool --rebuild-standard <image> --layout <layout.json> --out <out.rvz> [--against <reference.json>]
 ```
+
+Build the separate lab tool explicitly (the option defaults to OFF):
+
+```sh
+flock /Users/luis/Code/brawl-dolphin/build.lock cmake -S . -B build-disc-report -DORCA_BUILD_DISC_TOOLS=ON
+flock /Users/luis/Code/brawl-dolphin/build.lock make -C build-disc-report -j2 orca-disc-tool
+```
+
+Release kits leave `ORCA_BUILD_DISC_TOOLS=OFF`. The player never links the layout,
+rebuild or StandardBlob implementations, even when the lab option is ON.
+`--disc-report` remains available in the player as before.
 
 Both commands dispatch before application initialization, without configuration,
 a user directory or a running session. They accept only the flags shown above
@@ -89,15 +100,18 @@ a user directory or a running session. They accept only the flags shown above
 as for `--disc-report`. The lead runs the reference-disc export and real-disc proof;
 unit tests use invented data only.
 
-Orca tools explicitly disable console-key loading on their volumes; ordinary emulator callers retain the default IOSC behavior.
+Orca tools skip loading a user's console dump on their volumes; ordinary emulator
+callers retain the default IOSC behavior. This policy still uses IOSC's built-in
+cryptographic defaults and does not disable decryption.
 
 `--disc-layout` reads a hashed, encrypted Wii disc and writes version 1 layout JSON
 (version 3 when physical-zero gaps require retained subtree digests; older readers
 reject layouts with semantics they cannot reproduce)
-through `<layout.json>.partial`, then renames it. Success prints
+through a uniquely reserved sibling temporary directory, then publishes it atomically
+without replacing an existing destination. Success prints
 `PASS: wrote <id> layout` and exits 0. Failure prints `FAIL: <reason>` and exits 1.
-Existing output and partial paths are refused. The schema records byte offsets
-and sizes, never the on-disc units of four bytes:
+Existing output paths are refused; concurrent runs own separate temporary paths.
+The schema records byte offsets and sizes, never the on-disc units of four bytes:
 
 - `id`, `discNumber`, `partitionOffset`, and `partitions` in original table order (`offset`, `type`).
 - `tmd`, `cert`, `h3`, `data`: partition-relative header ranges (`offset`, `size`).
@@ -160,14 +174,18 @@ the existing Wii hashing/encryption path and the disc's title key, derived witho
 consulting a user console dump. There is no signing or fake-signing. Decrypted
 buffers remain in memory; no extracted-disc temporary files are created.
 
-RVZ output uses zstd level 5 and 128 KiB blocks. Conversion writes `<out.rvz>.partial`,
-then reopens it with DiscIO and verifies the partition offset, H3 SHA-1, TMD content
-hash and every reference file before rename. It also compares the reopened RVZ's
-entire raw game partition with the generated view, including the header and H3.
+RVZ output uses zstd level 5 and 128 KiB blocks. Conversion writes a file in a
+uniquely reserved sibling temporary directory, then reopens it with DiscIO and verifies the partition offset, H3 SHA-1, TMD content
+hash and every reference file before publication. It also compares the reopened
+logical disc length and every byte with the generated view, including the outer
+header, exact partition table, region, prefix padding, partition header and H3.
 A mismatch deletes the partial and names the failed check: H3 SHA-1, TMD content
-hash, partitionOffset, a file path, or a raw-cluster offset. SIGTERM cancels
-reads/conversion and removes this run's partial. Existing outputs/partials are
-refused. Progress goes to stderr as `PROGRESS <done> 1000`. Success prints exactly
+hash, partitionOffset, a file path, logical length, or a byte offset. SIGTERM cancels
+reads/conversion and removes this run's partial. Publication atomically creates a
+hard link at the final name and then removes the temporary name. It fails if any
+destination appears during conversion, preserving the concurrent writer's file.
+Temporary files stay on the destination filesystem; filesystems without hard-link
+support are refused. Progress goes to stderr as `PROGRESS <done> 1000`. Success prints exactly
 `PASS: rebuilt <id> to the standard layout` and exits 0. A file difference prints
 `DIFF: ...`, exits 2 and writes no output. Other failures print `FAIL: <reason>` and
 exit 1.
@@ -189,3 +207,14 @@ other LFG output. Invented Wii fixtures verify both paths; the lead runs retail
 proof. Unrecoverable fragments remain `other` and rebuilding refuses them.
 Byte-exact FST regeneration still requires metadata-representable FSTs; opaque
 nonzero FST padding is deliberately refused.
+
+Source preflight bounds the partition counts/table extents before partition parsing,
+and checks partition/header/data/FST ranges before filesystem traversal. The shared
+Wii parser uses widened table indices and subtraction bounds before raw offset
+arithmetic. Valid discs keep the same readers, decryption, metadata and read patches;
+only invalid extents/counts are refused. The 256-partition resource bound exceeds
+retail tables. Tool preflight additionally bounds FST nesting to 128 directories.
+Synthetic compatibility tests cover default factories, both cached factory routes,
+directory-backed reads, WAD content integrity, revision alias checks and rebuilt RVZ
+reads. Real-disc identity, moved-partition and frame-hash release proofs remain the
+engine lead's gates and are not claimed by the synthetic tests.

@@ -90,15 +90,19 @@ StandardBlob::Create(const std::string& image, const DiscLayout::Layout& layout,
   for (const auto& gap : layout.gaps)
   {
     if (gap.kind == "other")
-      return fail("layout contains an other gap");
+      return fail(fmt::format("padding bytes at offset {} cannot be reconstructed; export a "
+                              "layout with reproducible padding",
+                              gap.offset));
   }
   auto source = DiscIO::CreateDisc(image, false);
   if (!source || source->GetVolumeType() != DiscIO::Platform::WiiDisc)
     return fail("cannot open Wii disc image");
+  if (!DiscLayout::ValidateSource(*source, error))
+    return nullptr;
   const auto partition = source->GetGamePartition();
   if (partition == DiscIO::PARTITION_NONE || source->GetGameID(partition) != layout.id)
     return fail("input game ID does not match layout");
-  const auto report = DiscReport::Generate(*source, error);
+  const auto report = DiscReport::Generate(*source, error, RebuildStandard::IsCancelled);
   if (!report)
     return nullptr;
   const auto* fs = source->GetFileSystem(partition);

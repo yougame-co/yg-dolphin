@@ -120,8 +120,12 @@ static std::unique_ptr<VolumeDisc> TryCreateDisc(std::unique_ptr<BlobReader>& re
   // This prevents `CachedBlobReader` from showing warnings when failing to scrub a .dol file.
 
   if (reader->ReadSwapped<u32>(0x18) == WII_DISC_MAGIC)
+  {
+    if (!VolumeWii::CheckPartitionTable(*reader))
+      return nullptr;
     return std::make_unique<VolumeWii>(reader_adapter_factory(std::move(reader)),
                                        load_console_keys);
+  }
 
   if (reader->ReadSwapped<u32>(0x1C) == GAMECUBE_DISC_MAGIC)
     return std::make_unique<VolumeGC>(reader_adapter_factory(std::move(reader)));

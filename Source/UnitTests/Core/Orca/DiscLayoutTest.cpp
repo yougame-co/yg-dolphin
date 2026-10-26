@@ -5,7 +5,11 @@
 #include <array>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <future>
+#include <limits>
 #include <memory>
 #include <random>
 #include <set>
@@ -13,23 +17,37 @@
 #include <tuple>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 #include <gtest/gtest.h>
 #include <picojson.h>
 
+#include "Common/Config/Config.h"
+#include "Common/Crypto/AES.h"
 #include "Common/Crypto/SHA1.h"
 #include "Common/FileUtil.h"
 #include "Common/MsgHandler.h"
 #include "Common/Swap.h"
+#include "Core/Config/MainSettings.h"
 #include "Core/IOS/ES/Formats.h"
+#include "Core/Orca/Disc.h"
 #include "Core/Orca/DiscLayout.h"
 #include "Core/Orca/DiscReport.h"
 #include "Core/Orca/RebuildStandard.h"
 #include "Core/Orca/StandardBlob.h"
 #include "DiscIO/Blob.h"
+#include "DiscIO/DiscExtractor.h"
 #include "DiscIO/DiscUtils.h"
+#include "DiscIO/Filesystem.h"
 #include "DiscIO/Volume.h"
 #include "DiscIO/VolumeDisc.h"
+#include "DiscIO/VolumeWad.h"
 #include "DiscIO/VolumeWii.h"
+#include "DiscIO/WIABlob.h"
+#include "OrcaDiscTool/OutputFile.h"
 
 namespace
 {
@@ -101,10 +119,21 @@ enum class GapData
   PhysicalZeroTree,
 };
 
+enum class SourceMetadata
+{
+  Normal,
+  DeepFST,
+  BadName,
+  HugeFile,
+  HugeFST,
+};
+
 std::vector<u8> WiiImage(bool moved, bool changed = false, bool other_gap = false,
                          bool wrong_id = false, bool odd_strings = false, bool opaque_fst = false,
                          GapData gap_data = GapData::Zero, u8 disc_number = 0,
-                         size_t block_count = Wii::BLOCKS_PER_GROUP)
+                         size_t block_count = Wii::BLOCKS_PER_GROUP,
+                         SourceMetadata metadata = SourceMetadata::Normal,
+                         bool alias_fixture = false)
 {
   const u64 partition = moved ? 0x80000 : 0x50000;
   const u64 data_offset = 0x20000;
@@ -191,6 +220,32 @@ std::vector<u8> WiiImage(bool moved, bool changed = false, bool other_gap = fals
   }
   if (other_gap)
     data[0x2900] = 0x81;
+  if (metadata == SourceMetadata::DeepFST)
+  {
+    constexpr u32 count = 201;
+    std::fill_n(data.begin() + fst, 0x1000, 0);
+    Write32(&data, 0x428, 0x1000 / 4);
+    Write32(&data, 0x42c, 0x1000 / 4);
+    for (u32 i = 0; i < count; ++i)
+    {
+      Write32(&data, fst + i * 12, 0x01000000);
+      Write32(&data, fst + i * 12 + 4, i == 0 ? 0 : i - 1);
+      Write32(&data, fst + i * 12 + 8, count);
+    }
+    Text(&data, fst + count * 12, "d");
+  }
+  if (metadata == SourceMetadata::BadName)
+    Write32(&data, fst + 12, 0x00ffffff);
+  if (metadata == SourceMetadata::HugeFile)
+    Write32(&data, fst + 16, 0xffffffff);
+  if (metadata == SourceMetadata::HugeFST)
+    Write32(&data, 0x424, 0xffffffff);
+  if (alias_fixture)
+  {
+    Text(&data, 0, "RSBE01");
+    data[7] = 1;
+    data[0x3dd00 + 0x11a1f] = 1;
+  }
 
   std::vector<u8> ticket(DiscIO::WII_PARTITION_TICKET_SIZE);
   Write32(&ticket, 0, 0x10001);
@@ -231,7 +286,10 @@ std::vector<u8> WiiImage(bool moved, bool changed = false, bool other_gap = fals
   std::fill(tmd.begin() + 4, tmd.begin() + 0x104, moved ? 0x71 : 0x72);
   Text(&tmd, 0x140, "Invented-CP");
   Write16(&tmd, offsetof(IOS::ES::TMDHeader, num_contents), 1);
-  const auto h3_hash = Common::SHA1::CalculateDigest(h3);
+  auto h3_hash = Common::SHA1::CalculateDigest(h3);
+  if (alias_fixture)
+    h3_hash = {0xab, 0x93, 0xef, 0x28, 0x0b, 0x83, 0x45, 0x72, 0x52, 0x3f,
+               0x64, 0xc5, 0x5c, 0x6a, 0x32, 0x05, 0xea, 0xd6, 0x6d, 0x04};
   std::copy(h3_hash.begin(), h3_hash.end(),
             tmd.begin() + sizeof(IOS::ES::TMDHeader) + offsetof(IOS::ES::Content, sha1));
   std::vector<u8> image(partition + data_offset + physical_size);
@@ -294,6 +352,8 @@ protected:
         [](const char*, const char*, bool, Common::MsgType) { return false; });
     directory = File::CreateTempDir();
     ASSERT_FALSE(directory.empty());
+    old_wii_root = File::GetUserPath(D_WIIROOT_IDX);
+    File::SetUserPath(D_WIIROOT_IDX, directory + "/empty-wii/");
     original = directory + "/original.iso";
     variant = directory + "/variant.iso";
     layout_path = directory + "/layout.json";
@@ -330,7 +390,11 @@ protected:
             .serialize()));
     ASSERT_TRUE(File::WriteStringToFile(layout_path, Layout::Serialize(layout)));
   }
-  void TearDown() override { File::DeleteDirRecursively(directory); }
+  void TearDown() override
+  {
+    File::SetUserPath(D_WIIROOT_IDX, old_wii_root);
+    File::DeleteDirRecursively(directory);
+  }
   std::pair<int, std::string> Run(bool against = true)
   {
     std::FILE* out = std::tmpfile();
@@ -352,7 +416,10 @@ protected:
   {
     EXPECT_FALSE(File::Exists(output));
     EXPECT_FALSE(File::Exists(output + ".partial"));
+    for (const auto& entry : std::filesystem::directory_iterator(directory))
+      EXPECT_EQ(entry.path().filename().string().find(".partial."), std::string::npos);
   }
+  std::string old_wii_root;
   std::string directory, original, variant, layout_path, reference_path, output;
   Layout::Layout layout;
   Report::Report report;
@@ -507,7 +574,9 @@ TEST_P(DiscLayoutJunkTest, ClassifiesMetadataAndRebuildsMovedFiles)
   if (mode == GapData::Random)
   {
     EXPECT_EQ(result, 1) << text;
-    EXPECT_EQ(text, "FAIL: layout contains an other gap\n");
+    EXPECT_NE(text.find("padding bytes at offset " + std::to_string(layout.gaps[0].offset)),
+              std::string::npos);
+    EXPECT_NE(text.find("cannot be reconstructed"), std::string::npos);
     NoOutput();
     return;
   }
@@ -871,7 +940,9 @@ TEST_F(DiscLayoutTest, RebuildOtherGapIsRefused)
   ASSERT_TRUE(File::WriteStringToFile(layout_path, Layout::Serialize(layout)));
   const auto [code, text] = Run();
   EXPECT_EQ(code, 1);
-  EXPECT_EQ(text, "FAIL: layout contains an other gap\n");
+  EXPECT_NE(text.find("padding bytes at offset " + std::to_string(layout.gaps[0].offset)),
+            std::string::npos);
+  EXPECT_NE(text.find("cannot be reconstructed"), std::string::npos);
   NoOutput();
 }
 
@@ -953,7 +1024,7 @@ TEST_F(DiscLayoutTest, RebuildSigtermDuringConversionDeletesPartial)
   ASSERT_NE(out, nullptr);
   bool signalled = false;
   const int code = Rebuild::Run(variant, layout_path, reference_path, output, out, [&](u64, u64) {
-    if (!signalled && File::Exists(output + ".partial"))
+    if (!signalled)
     {
       signalled = true;
       std::raise(SIGTERM);
@@ -967,7 +1038,7 @@ TEST_F(DiscLayoutTest, RebuildSigtermDuringConversionDeletesPartial)
 
 TEST_F(DiscLayoutTest, StandaloneCommandDispatchAndStrictOptions)
 {
-  std::vector<std::string> args{"dolphin-nogui", "--disc-layout", original,
+  std::vector<std::string> args{"orca-disc-tool", "--disc-layout", original,
                                 "--out=" + directory + "/cli-layout.json"};
   const auto run = [&](std::vector<std::string> values) {
     std::vector<char*> argv;
@@ -981,22 +1052,22 @@ TEST_F(DiscLayoutTest, StandaloneCommandDispatchAndStrictOptions)
   auto [code, text] = run(args);
   ASSERT_EQ(code, 0) << text;
   EXPECT_EQ(text, "PASS: wrote RTEE01 layout\n");
-  std::tie(code, text) = run({"dolphin-nogui", "--rebuild-standard=" + variant, "--layout",
+  std::tie(code, text) = run({"orca-disc-tool", "--rebuild-standard=" + variant, "--layout",
                               layout_path, "--out", output, "--against", reference_path});
   ASSERT_EQ(code, 0) << text;
   EXPECT_EQ(text, "PASS: rebuilt RTEE01 to the standard layout\n");
   for (const auto& bad : std::vector<std::vector<std::string>>{
-           {"dolphin-nogui", "--disc-layout", original},
-           {"dolphin-nogui", "--disc-layout", original, "--out", output, "--boot"},
-           {"dolphin-nogui", "--rebuild-standard", variant, "--out", output},
-           {"dolphin-nogui", "--disc-layout", original, "--out", output, "--out", output},
-           {"dolphin-nogui", "--out="}})
+           {"orca-disc-tool", "--disc-layout", original},
+           {"orca-disc-tool", "--disc-layout", original, "--out", output, "--boot"},
+           {"orca-disc-tool", "--rebuild-standard", variant, "--out", output},
+           {"orca-disc-tool", "--disc-layout", original, "--out", output, "--out", output},
+           {"orca-disc-tool", "--out="}})
   {
     std::tie(code, text) = run(bad);
     EXPECT_EQ(code, 1);
     EXPECT_TRUE(text.starts_with("FAIL:"));
   }
-  std::tie(code, text) = run({"dolphin-nogui", "--batch"});
+  std::tie(code, text) = run({"orca-disc-tool", "--batch"});
   EXPECT_FALSE(code);
   EXPECT_TRUE(text.empty());
 }
@@ -1030,9 +1101,433 @@ TEST_F(DiscLayoutTest, RebuildExistingOutputIsUntouched)
   ASSERT_TRUE(File::WriteStringToFile(output, "existing"));
   const auto [code, text] = Run();
   EXPECT_EQ(code, 1);
-  EXPECT_EQ(text, "FAIL: output or partial already exists\n");
+  EXPECT_EQ(text, "FAIL: output already exists\n");
   std::string bytes;
   ASSERT_TRUE(File::ReadFileToString(output, bytes));
   EXPECT_EQ(bytes, "existing");
 }
+TEST_F(DiscLayoutTest, HostilePartitionTablesAreRejectedBeforeTraversal)
+{
+  const auto baseline = WiiImage(true);
+  const std::vector<std::pair<u32, u32>> tables = {
+      {0xffffffff, 0x40020 / 4},
+      {0x20000001, 0x40020 / 4},
+      {257, 0x40020 / 4},
+      {2, 0xffffffff},
+      {2, static_cast<u32>((baseline.size() - 4) / 4)}};
+  for (const auto& [count, table] : tables)
+  {
+    auto bytes = baseline;
+    Write32(&bytes, 0x40000, count);
+    Write32(&bytes, 0x40004, table);
+    ASSERT_TRUE(WriteBytes(variant, bytes));
+#ifndef _WIN32
+    // A regression must fail in bounded time, rather than stall the test runner.
+    EXPECT_EXIT(
+        {
+          alarm(3);
+          const auto disc = DiscIO::CreateDisc(variant, false);
+          std::_Exit(disc ? 1 : 0);
+        },
+        testing::ExitedWithCode(0), "");
+#else
+    EXPECT_FALSE(DiscIO::CreateDisc(variant, false));
+#endif
+    Wii direct(std::make_unique<FixtureBlob>(bytes), false);
+    EXPECT_EQ(direct.GetGamePartition(), DiscIO::PARTITION_NONE);
+    const auto [code, text] = Run();
+    EXPECT_EQ(code, 1) << text;
+    NoOutput();
+  }
+}
+
+TEST_F(DiscLayoutTest, HugeSourceOffsetsAndLengthsAreRejected)
+{
+  const auto baseline = WiiImage(true);
+  for (const u64 field : {u64{0x40020}, u64{0x80000 + 0x2a8}, u64{0x80000 + 0x2b0},
+                          u64{0x80000 + 0x2b4}, u64{0x80000 + 0x2b8}, u64{0x80000 + 0x2bc}})
+  {
+    auto bytes = baseline;
+    Write32(&bytes, field, 0xffffffff);
+    ASSERT_TRUE(WriteBytes(variant, bytes));
+    const auto [code, text] = Run();
+    EXPECT_EQ(code, 1) << text;
+    NoOutput();
+  }
+  const auto disc = DiscIO::CreateDisc(original, false);
+  ASSERT_TRUE(disc);
+  std::array<u8, 32> bytes{};
+  const auto partition = disc->GetGamePartition();
+  EXPECT_FALSE(disc->Read(std::numeric_limits<u64>::max(), 1, bytes.data(), partition));
+  EXPECT_FALSE(disc->Read(16, std::numeric_limits<u64>::max(), bytes.data(), partition));
+  EXPECT_FALSE(disc->Read(0xffffffffULL * Wii::BLOCK_DATA_SIZE, 1, bytes.data(), partition));
+}
+
+TEST_F(DiscLayoutTest, SourceMetadataIsCheckedBeforeRecursiveFilesystemReads)
+{
+  for (const auto metadata : {SourceMetadata::DeepFST, SourceMetadata::BadName,
+                              SourceMetadata::HugeFile, SourceMetadata::HugeFST})
+  {
+    ASSERT_TRUE(WriteBytes(variant, WiiImage(true, false, false, false, false, false, GapData::Zero,
+                                             0, Wii::BLOCKS_PER_GROUP, metadata)));
+    const auto [code, text] = Run();
+    EXPECT_EQ(code, 1) << text;
+    EXPECT_NE(text.find("source FST"), std::string::npos) << text;
+    NoOutput();
+    std::FILE* out = std::tmpfile();
+    ASSERT_NE(out, nullptr);
+    EXPECT_EQ(Layout::Run(variant, output, out), 1);
+    std::fclose(out);
+    NoOutput();
+  }
+}
+
+TEST_F(DiscLayoutTest, WholeDiscVerificationRejectsWrittenRVZCorruption)
+{
+  std::string error;
+  auto expected = Orca::StandardBlob::Create(variant, layout, &error);
+  ASSERT_TRUE(expected) << error;
+  ASSERT_TRUE(expected->ComputeH3(&error)) << error;
+  std::vector<u8> intended(expected->GetDataSize());
+  ASSERT_TRUE(expected->Read(0, intended.size(), intended.data()));
+  // These are actual written RVZs with altered logical bytes, not changes to the reference.
+  for (const u64 offset : {u64{0x20}, u64{0x40024}, u64{0x4e000}, u64{0x49000},
+                           layout.partition_offset + layout.h3.offset})
+  {
+    auto corrupt = intended;
+    corrupt[offset] ^= 1;
+    FixtureBlob reader(std::move(corrupt));
+    const std::string path = directory + "/corrupt.rvz";
+    auto volume = DiscIO::CreateDisc(reader.CopyReader(), false);
+    ASSERT_TRUE(volume);
+    ASSERT_TRUE(DiscIO::ConvertToWIAOrRVZ(
+        &reader, variant, path, true, DiscIO::WIARVZCompressionType::Zstd, 5, 128 * 1024,
+        [](const std::string&, float) { return true; }, volume.get()));
+    auto actual = DiscIO::CreateDisc(path, false);
+    ASSERT_TRUE(actual);
+    EXPECT_EQ(actual->GetBlobType(), DiscIO::BlobType::RVZ);
+    EXPECT_FALSE(Rebuild::VerifyRaw(*expected, *actual, &error));
+    EXPECT_EQ(error, "rebuilt disc byte mismatch at offset " + std::to_string(offset));
+    actual.reset();
+    ASSERT_TRUE(File::Delete(path));
+  }
+  for (const int delta :
+       {-static_cast<int>(Wii::BLOCK_TOTAL_SIZE), static_cast<int>(Wii::BLOCK_TOTAL_SIZE)})
+  {
+    auto corrupt = intended;
+    corrupt.resize(corrupt.size() + delta);
+    Write32(&corrupt, layout.partition_offset + 0x2bc, (layout.data.size + delta) / 4);
+    FixtureBlob reader(std::move(corrupt));
+    const std::string path = directory + "/length.rvz";
+    auto volume = DiscIO::CreateDisc(reader.CopyReader(), false);
+    ASSERT_TRUE(volume);
+    ASSERT_TRUE(DiscIO::ConvertToWIAOrRVZ(
+        &reader, variant, path, true, DiscIO::WIARVZCompressionType::Zstd, 5, 128 * 1024,
+        [](const std::string&, float) { return true; }, volume.get()));
+    const auto actual = DiscIO::CreateDisc(path, false);
+    ASSERT_TRUE(actual);
+    EXPECT_FALSE(Rebuild::VerifyRaw(*expected, *actual, &error));
+    EXPECT_EQ(error, "rebuilt disc logical size mismatch");
+  }
+}
+
+TEST_F(DiscLayoutTest, TruncatedContainerHeadersAreRefused)
+{
+  for (const std::array<u8, 4> magic :
+       {std::array<u8, 4>{'R', 'V', 'Z', 1}, std::array<u8, 4>{'W', 'I', 'A', 1}})
+  {
+    for (const size_t length : {size_t{4}, size_t{16}, size_t{64}})
+    {
+      std::vector<u8> bytes(length);
+      std::copy(magic.begin(), magic.end(), bytes.begin());
+      ASSERT_TRUE(WriteBytes(variant, bytes));
+      const auto [code, text] = Run();
+      EXPECT_EQ(code, 1) << text;
+      NoOutput();
+    }
+  }
+}
+
+TEST_F(DiscLayoutTest, DestinationCreatedDuringConversionIsPreserved)
+{
+  std::FILE* out = std::tmpfile();
+  ASSERT_NE(out, nullptr);
+  bool created = false;
+  const int code = Rebuild::Run(variant, layout_path, reference_path, output, out, [&](u64, u64) {
+    if (!created)
+    {
+      created = true;
+      EXPECT_TRUE(File::WriteStringToFile(output, "concurrent output"));
+    }
+  });
+  std::fclose(out);
+  EXPECT_TRUE(created);
+  EXPECT_EQ(code, 1);
+  std::string bytes;
+  ASSERT_TRUE(File::ReadFileToString(output, bytes));
+  EXPECT_EQ(bytes, "concurrent output");
+  ASSERT_TRUE(File::Delete(output));
+  NoOutput();
+}
+
+TEST_F(DiscLayoutTest, OutputReservationsAreUniqueAndPublicationIsExclusive)
+{
+  auto first = Orca::DiscTool::OutputFile::Create(output);
+  auto second = Orca::DiscTool::OutputFile::Create(output);
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(second);
+  EXPECT_NE(first->Path(), second->Path());
+  ASSERT_TRUE(File::WriteStringToFile(first->Path(), "first"));
+  ASSERT_TRUE(File::WriteStringToFile(second->Path(), "second"));
+  auto publisher = std::async(std::launch::async, [&] { return first->Publish(output); });
+  const bool published_second = second->Publish(output);
+  const bool published_first = publisher.get();
+  EXPECT_NE(published_first, published_second);
+  first.reset();
+  second.reset();
+  std::string bytes;
+  ASSERT_TRUE(File::ReadFileToString(output, bytes));
+  EXPECT_EQ(bytes, published_first ? "first" : "second");
+  EXPECT_EQ(Layout::Run(original, output, stdout), 1);
+  ASSERT_TRUE(File::Delete(output));
+  NoOutput();
+}
+
+#ifndef _WIN32
+TEST_F(DiscLayoutTest, SimultaneousRebuildsDoNotReplaceOrDeleteEachOthersFiles)
+{
+  int ready[2], go[2];
+  ASSERT_EQ(pipe(ready), 0);
+  ASSERT_EQ(pipe(go), 0);
+  std::array<pid_t, 2> children{};
+  for (auto& pid : children)
+  {
+    pid = fork();
+    ASSERT_NE(pid, -1);
+    if (pid == 0)
+    {
+      alarm(20);
+      close(ready[0]);
+      close(go[1]);
+      std::FILE* out = std::tmpfile();
+      if (!out)
+        std::_Exit(3);
+      bool waiting = false;
+      const int code =
+          Rebuild::Run(variant, layout_path, reference_path, output, out, [&](u64, u64) {
+            if (!waiting)
+            {
+              waiting = true;
+              char token = 'x';
+              if (write(ready[1], &token, 1) != 1 || read(go[0], &token, 1) != 1)
+                std::_Exit(3);
+            }
+          });
+      std::fclose(out);
+      std::_Exit(code);
+    }
+  }
+  close(ready[1]);
+  close(go[0]);
+  std::array<char, 2> tokens{};
+  size_t received = 0;
+  while (received < tokens.size())
+  {
+    const auto n = read(ready[0], tokens.data() + received, tokens.size() - received);
+    if (n <= 0)
+      break;
+    received += n;
+  }
+  EXPECT_EQ(received, 2);
+  EXPECT_EQ(write(go[1], "xx", 2), 2);
+  close(ready[0]);
+  close(go[1]);
+  std::array<int, 2> codes{};
+  for (size_t i = 0; i < children.size(); ++i)
+  {
+    int status;
+    ASSERT_EQ(waitpid(children[i], &status, 0), children[i]);
+    ASSERT_TRUE(WIFEXITED(status));
+    codes[i] = WEXITSTATUS(status);
+  }
+  std::sort(codes.begin(), codes.end());
+  EXPECT_EQ(codes, (std::array<int, 2>{0, 1}));
+  std::string error;
+  const auto verified = Report::Generate(output, &error);
+  ASSERT_TRUE(verified) << error;
+  EXPECT_TRUE(
+      Report::Compare(*verified, {"original", report.files, layout.partition_offset}).empty());
+  ASSERT_TRUE(File::Delete(output));
+  NoOutput();
+}
+#endif
+
+TEST_F(DiscLayoutTest, DefaultAndCachedFactoriesPreserveSourceAndRebuiltReads)
+{
+  std::string error;
+  const auto [code, text] = Run();
+  ASSERT_EQ(code, 0) << text;
+  Config::Init();
+  struct ConfigScope
+  {
+    ~ConfigScope() { Config::Shutdown(); }
+  } config_scope;
+  for (const auto& path : {original, output})
+  {
+    const auto baseline = DiscIO::CreateDisc(path, false);
+    ASSERT_TRUE(baseline);
+    for (const bool cached : {false, true})
+    {
+      Config::SetCurrent(Config::MAIN_LOAD_GAME_INTO_MEMORY, cached);
+      auto core = DiscIO::CreateDiscForCore(path);
+      auto ordinary = DiscIO::CreateDisc(path);
+      auto volume = DiscIO::CreateVolume(path);
+      ASSERT_TRUE(core);
+      EXPECT_EQ(core->GetBlobReader().IsCached(), cached);
+      ASSERT_TRUE(ordinary);
+      ASSERT_TRUE(volume);
+      const auto partition = baseline->GetGamePartition();
+      for (const auto& candidate : {core.get(), ordinary.get()})
+      {
+        EXPECT_FALSE(Orca::AliasRevision(*candidate));
+        EXPECT_TRUE(Orca::SessionDiscReady(*candidate));
+      }
+      for (const DiscIO::Volume* candidate :
+           {static_cast<DiscIO::Volume*>(core.get()), static_cast<DiscIO::Volume*>(ordinary.get()),
+            volume.get()})
+      {
+        const auto expected = Report::Generate(*baseline, &error);
+        const auto actual = Report::Generate(*candidate, &error);
+        ASSERT_TRUE(expected) << error;
+        ASSERT_TRUE(actual) << error;
+        EXPECT_TRUE(
+            Report::Compare(*actual, {"baseline", expected->files, partition.offset}).empty());
+        std::array<u8, 0x100> a{}, b{};
+        ASSERT_TRUE(baseline->Read(0, a.size(), a.data(), DiscIO::PARTITION_NONE));
+        ASSERT_TRUE(candidate->Read(0, b.size(), b.data(), DiscIO::PARTITION_NONE));
+        EXPECT_EQ(a, b);
+      }
+    }
+  }
+}
+
+TEST_F(DiscLayoutTest, DefaultAndCachedFactoriesKeepRevisionAliasChecks)
+{
+  ASSERT_TRUE(
+      WriteBytes(variant, WiiImage(true, false, false, false, false, false, GapData::Zero, 0,
+                                   Wii::BLOCKS_PER_GROUP, SourceMetadata::Normal, true)));
+  Config::Init();
+  struct ConfigScope
+  {
+    ~ConfigScope() { Config::Shutdown(); }
+  } config_scope;
+  for (const bool cached : {false, true})
+  {
+    Config::SetCurrent(Config::MAIN_LOAD_GAME_INTO_MEMORY, cached);
+    auto disc = DiscIO::CreateDiscForCore(variant);
+    ASSERT_TRUE(disc);
+    EXPECT_EQ(disc->GetBlobReader().IsCached(), cached);
+    EXPECT_FALSE(Orca::SessionDiscReady(*disc));
+    ASSERT_TRUE(Orca::AliasRevision(*disc));
+    EXPECT_TRUE(Orca::SessionDiscReady(*disc));
+    EXPECT_EQ(disc->GetRevision(), 2);
+    EXPECT_EQ(disc->GetRevision(disc->GetGamePartition()), 2);
+    EXPECT_EQ(disc->ReadSwapped<u8>(0x3dd00 + 0x11a1f, disc->GetGamePartition()), 2);
+    EXPECT_FALSE(Orca::AliasRevision(*disc));
+  }
+  auto bytes = WiiImage(true, false, false, false, false, false, GapData::Zero, 0,
+                        Wii::BLOCKS_PER_GROUP, SourceMetadata::Normal, true);
+  bytes[0x80000 + 0x2c0 + sizeof(IOS::ES::TMDHeader) + offsetof(IOS::ES::Content, sha1)] ^= 1;
+  ASSERT_TRUE(WriteBytes(variant, bytes));
+  const auto refused = DiscIO::CreateDisc(variant);
+  ASSERT_TRUE(refused);
+  EXPECT_FALSE(Orca::AliasRevision(*refused));
+  EXPECT_EQ(refused->GetRevision(refused->GetGamePartition()), 1);
+}
+
+TEST_F(DiscLayoutTest, DirectoryFactoryKeepsDefaultReads)
+{
+  const auto source = DiscIO::CreateDisc(original, false);
+  ASSERT_TRUE(source);
+  const auto partition = source->GetGamePartition();
+  const std::string extracted = directory + "/extracted";
+  ASSERT_TRUE(DiscIO::ExportSystemData(*source, partition, extracted));
+  File::CreateFullPath(extracted + "/files/folder/");
+  ASSERT_TRUE(DiscIO::ExportFile(*source, partition, "hello.txt", extracted + "/files/hello.txt"));
+  ASSERT_TRUE(DiscIO::ExportFile(*source, partition, "folder/nested.bin",
+                                 extracted + "/files/folder/nested.bin"));
+  ASSERT_TRUE(File::WriteStringToFile(extracted + "/files/folder/empty", ""));
+  const auto baseline = DiscIO::CreateDisc(extracted + "/sys/main.dol", false);
+  const auto ordinary = DiscIO::CreateDisc(extracted + "/sys/main.dol");
+  ASSERT_TRUE(baseline);
+  ASSERT_TRUE(ordinary);
+  EXPECT_EQ(baseline->GetBlobType(), DiscIO::BlobType::DIRECTORY);
+  for (const auto& path : {"hello.txt", "folder/nested.bin"})
+  {
+    std::array<u8, 5> expected{}, actual{};
+    const auto a = DiscIO::ReadFile(*baseline, baseline->GetGamePartition(), path, expected.data(),
+                                    expected.size());
+    const auto b = DiscIO::ReadFile(*ordinary, ordinary->GetGamePartition(), path, actual.data(),
+                                    actual.size());
+    EXPECT_EQ(a, b);
+    EXPECT_GT(a, 0);
+    EXPECT_EQ(expected, actual);
+  }
+  std::array<u8, 0x8000> a{}, b{};
+  const u64 raw = baseline->GetGamePartition().offset + 0x20000;
+  ASSERT_TRUE(baseline->Read(raw, a.size(), a.data(), DiscIO::PARTITION_NONE));
+  ASSERT_TRUE(ordinary->Read(raw, b.size(), b.data(), DiscIO::PARTITION_NONE));
+  EXPECT_EQ(a, b);
+}
+
+TEST_F(DiscLayoutTest, WADFactoriesKeepContentIntegrity)
+{
+  const auto source = DiscIO::CreateDisc(original, false);
+  ASSERT_TRUE(source);
+  const auto& ticket = source->GetTicket(source->GetGamePartition());
+  std::vector<u8> plain(0x40, 0x5a), encrypted(plain.size());
+  const auto key = source->GetTitleKey(source->GetGamePartition());
+  const auto aes = Common::AES::CreateContextEncrypt(key.data());
+  const std::array<u8, 16> iv{};
+  ASSERT_TRUE(aes->Crypt(iv.data(), plain.data(), encrypted.data(), plain.size()));
+  auto tmd = source->GetTMD(source->GetGamePartition()).GetBytes();
+  Write32(&tmd, sizeof(IOS::ES::TMDHeader) + offsetof(IOS::ES::Content, size) + 4, plain.size());
+  const auto hash = Common::SHA1::CalculateDigest(plain);
+  std::copy(hash.begin(), hash.end(),
+            tmd.begin() + sizeof(IOS::ES::TMDHeader) + offsetof(IOS::ES::Content, sha1));
+  std::vector<u8> wad(0x40 + 0x2c0 + 0x240 + encrypted.size());
+  Write32(&wad, 0, 0x20);
+  wad[4] = 'I';
+  wad[5] = 's';
+  Write32(&wad, 0x10, ticket.GetBytes().size());
+  Write32(&wad, 0x14, tmd.size());
+  Write32(&wad, 0x18, encrypted.size());
+  std::copy(ticket.GetBytes().begin(), ticket.GetBytes().end(), wad.begin() + 0x40);
+  std::copy(tmd.begin(), tmd.end(), wad.begin() + 0x300);
+  std::copy(encrypted.begin(), encrypted.end(), wad.begin() + 0x540);
+  const std::string path = directory + "/fixture.wad";
+  ASSERT_TRUE(WriteBytes(path, wad));
+  const auto direct = DiscIO::CreateWAD(path);
+  const auto volume = DiscIO::CreateVolume(path);
+  const auto baseline = DiscIO::CreateVolume(path, false);
+  ASSERT_TRUE(direct);
+  ASSERT_TRUE(volume);
+  ASSERT_TRUE(baseline);
+  ASSERT_EQ(volume->GetVolumeType(), DiscIO::Platform::WiiWAD);
+  ASSERT_EQ(baseline->GetVolumeType(), DiscIO::Platform::WiiWAD);
+  const auto* normal = static_cast<const DiscIO::VolumeWAD*>(volume.get());
+  const auto* opted_out = static_cast<const DiscIO::VolumeWAD*>(baseline.get());
+  ASSERT_NE(normal, nullptr);
+  ASSERT_NE(opted_out, nullptr);
+  const auto content = normal->GetTMD().GetContents().at(0);
+  for (const auto* candidate :
+       std::array<const DiscIO::VolumeWAD*, 3>{direct.get(), normal, opted_out})
+  {
+    EXPECT_TRUE(candidate->CheckContentIntegrity(content, candidate->GetContent(0), ticket));
+    auto changed = candidate->GetContent(0);
+    changed[0] ^= 1;
+    EXPECT_FALSE(candidate->CheckContentIntegrity(content, changed, ticket));
+  }
+}
+
 }  // namespace

@@ -25,6 +25,7 @@
 #include "DiscIO/Enums.h"
 #include "DiscIO/Volume.h"
 #include "DiscIO/VolumeWii.h"
+#include "OrcaDiscTool/OutputFile.h"
 
 namespace Orca::DiscLayout
 {
@@ -645,12 +646,98 @@ std::optional<std::vector<ErasedHash>> ReadErasedHashes(const DiscIO::Volume& vo
   return result;
 }
 
+bool ValidateSource(const DiscIO::Volume& volume, std::string* error)
+{
+  const auto fail = [&](const char* reason) {
+    *error = reason;
+    return false;
+  };
+  if (volume.GetVolumeType() != DiscIO::Platform::WiiDisc || !volume.HasWiiHashes() ||
+      !volume.HasWiiEncryption())
+    return fail("layout requires a hashed, encrypted Wii disc");
+  const u64 size = volume.GetDataSize();
+  const auto partition = volume.GetGamePartition();
+  if (partition == DiscIO::PARTITION_NONE || partition.offset > size ||
+      !Fits({partition.offset, 0x2c0}, size))
+    return fail("game partition header is missing or out of range");
+  u64 total = 0;
+  for (u64 group = 0; group < 4; ++group)
+  {
+    const auto count = volume.ReadSwapped<u32>(0x40000 + group * 8, DiscIO::PARTITION_NONE);
+    const auto table = volume.ReadSwappedAndShifted(0x40004 + group * 8, DiscIO::PARTITION_NONE);
+    if (!count || !table || *count > 256 - total ||
+        (*count != 0 && !Fits({*table, u64{*count} * 8}, size)))
+      return fail("invalid source partition table");
+    total += *count;
+  }
+  const auto field = [&](u64 address) {
+    return volume.ReadSwappedAndShifted(partition.offset + address, DiscIO::PARTITION_NONE);
+  };
+  const auto data_offset = field(0x2b8);
+  const auto data_size = field(0x2bc);
+  const auto tmd = field(0x2a8);
+  const auto tmd_size = volume.ReadSwapped<u32>(partition.offset + 0x2a4, DiscIO::PARTITION_NONE);
+  const auto cert = field(0x2b0);
+  const auto cert_size = volume.ReadSwapped<u32>(partition.offset + 0x2ac, DiscIO::PARTITION_NONE);
+  const auto h3 = field(0x2b4);
+  // All sums below are bounded by this subtraction check; shifted words are widened u32s.
+  if (!data_offset || !data_size || *data_offset < 0x2c0 || *data_offset > 16 * 1024 * 1024 ||
+      *data_size == 0 || *data_size % Wii::BLOCK_TOTAL_SIZE != 0 ||
+      !Fits({*data_offset, *data_size}, size - partition.offset) || !tmd || !tmd_size ||
+      !IOS::ES::IsValidTMDSize(*tmd_size) || !Fits({*tmd, *tmd_size}, *data_offset) || !cert ||
+      !cert_size || !Fits({*cert, *cert_size}, *data_offset) || !h3 ||
+      !Fits({*h3, DiscIO::WII_PARTITION_H3_SIZE}, *data_offset))
+    return fail("invalid source partition ranges");
+  const u64 decrypted_size = *data_size / Wii::BLOCK_TOTAL_SIZE * Wii::BLOCK_DATA_SIZE;
+  const auto fst = DiscIO::GetFSTOffset(volume, partition);
+  const auto fst_size = DiscIO::GetFSTSize(volume, partition);
+  if (!fst || !fst_size || *fst_size < 12 || *fst_size > MAX_FST_SIZE ||
+      !Fits({*fst, *fst_size}, decrypted_size))
+    return fail("invalid source FST range");
+  std::vector<u8> bytes(static_cast<size_t>(*fst_size));
+  if (!volume.Read(*fst, bytes.size(), bytes.data(), partition))
+    return fail("cannot read source FST");
+  const u64 count = Common::swap32(bytes.data() + 8);
+  if (count == 0 || count > bytes.size() / 12 || Common::swap32(bytes.data()) >> 24 != 1 ||
+      Common::swap32(bytes.data() + 4) != 0)
+    return fail("invalid source FST root");
+  const u64 strings = count * 12;
+  // Validate iteratively before the existing recursive filesystem reader sees the tree.
+  std::vector<std::pair<u64, u64>> parents{{0, count}};
+  for (u64 i = 1; i < count; ++i)
+  {
+    while (!parents.empty() && i == parents.back().second)
+      parents.pop_back();
+    if (parents.empty() || parents.size() > 128)
+      return fail("source FST nesting exceeds 128 directories");
+    const u8* entry = bytes.data() + i * 12;
+    const u32 word = Common::swap32(entry);
+    const u64 name = word & 0xffffff;
+    if (word >> 24 > 1 || name >= bytes.size() - strings ||
+        !std::memchr(bytes.data() + strings + name, 0, bytes.size() - strings - name))
+      return fail("invalid source FST name or type");
+    const u64 a = Common::swap32(entry + 4);
+    const u64 b = Common::swap32(entry + 8);
+    if (word >> 24)
+    {
+      if (a != parents.back().first || b <= i || b > parents.back().second)
+        return fail("invalid source FST directory");
+      parents.emplace_back(i, b);
+    }
+    else if (!Fits({a * 4, b}, decrypted_size))
+      return fail("source FST file exceeds partition data");
+  }
+  return true;
+}
+
 std::optional<Layout> Generate(const DiscIO::Volume& volume, std::string* error)
 {
   const auto fail = [&](const char* reason) -> std::optional<Layout> {
     *error = reason;
     return {};
   };
+  if (!ValidateSource(volume, error))
+    return {};
   if (volume.GetVolumeType() != DiscIO::Platform::WiiDisc || !volume.HasWiiHashes() ||
       !volume.HasWiiEncryption())
     return fail("layout requires a hashed, encrypted Wii disc");
@@ -693,7 +780,7 @@ std::optional<Layout> Generate(const DiscIO::Volume& volume, std::string* error)
       !field(0x2bc, true, &layout.data.size))
     return fail("cannot read partition header fields");
   layout.h3.size = DiscIO::WII_PARTITION_H3_SIZE;
-  const auto report = DiscReport::Generate(volume, error);
+  const auto report = DiscReport::Generate(volume, error, RebuildStandard::IsCancelled);
   if (!report)
     return {};
   layout.h3_sha1 = *report->header.h3_sha1;
@@ -942,9 +1029,8 @@ int Run(const std::string& image, const std::string& output, std::FILE* out)
     fmt::print(out, "{}\n", DiscReport::FailureLine(reason));
     return 1;
   };
-  const std::string partial = output + ".partial";
-  if (File::Exists(output) || File::Exists(partial))
-    return fail("output or partial already exists");
+  if (File::Exists(output))
+    return fail("output already exists");
   auto volume = DiscIO::CreateVolume(image, false);
   if (!volume)
     return fail("cannot open Wii disc image");
@@ -952,13 +1038,13 @@ int Run(const std::string& image, const std::string& output, std::FILE* out)
   const auto layout = Generate(*volume, &error);
   if (!layout)
     return fail(error);
-  if (RebuildStandard::IsCancelled() || !File::WriteStringToFile(partial, Serialize(*layout)) ||
-      RebuildStandard::IsCancelled() || !File::Rename(partial, output))
-  {
-    if (File::Exists(partial))
-      File::Delete(partial);
+  const auto partial = DiscTool::OutputFile::Create(output);
+  if (!partial)
+    return fail("cannot reserve layout output");
+  if (RebuildStandard::IsCancelled() ||
+      !File::WriteStringToFile(partial->Path(), Serialize(*layout)) ||
+      RebuildStandard::IsCancelled() || !partial->Publish(output))
     return fail("cannot write layout JSON");
-  }
   fmt::print(out, "PASS: wrote {} layout\n", layout->id);
   return 0;
 }

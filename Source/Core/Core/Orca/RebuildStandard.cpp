@@ -21,6 +21,7 @@
 #include "DiscIO/Volume.h"
 #include "DiscIO/VolumeDisc.h"
 #include "DiscIO/WIABlob.h"
+#include "OrcaDiscTool/OutputFile.h"
 
 namespace Orca::RebuildStandard
 {
@@ -48,20 +49,6 @@ private:
   Handler m_previous;
 };
 
-class PartialFile
-{
-public:
-  explicit PartialFile(std::string path) : m_path(std::move(path)) {}
-  ~PartialFile()
-  {
-    if (File::Exists(m_path))
-      File::Delete(m_path);
-  }
-
-private:
-  std::string m_path;
-};
-
 std::optional<std::string> ReadJson(const std::string& path)
 {
   File::IOFile file(path, "rb");
@@ -79,6 +66,42 @@ bool IsCancelled()
   return s_cancelled != 0;
 }
 
+bool VerifyRaw(DiscIO::BlobReader& expected, const DiscIO::Volume& actual, std::string* error)
+{
+  if (expected.GetDataSize() != actual.GetDataSize())
+  {
+    *error = "rebuilt disc logical size mismatch";
+    return false;
+  }
+  std::vector<u8> expected_bytes(DiscIO::VolumeWii::GROUP_TOTAL_SIZE),
+      actual_bytes(expected_bytes.size());
+  for (u64 offset = 0; offset < expected.GetDataSize();)
+  {
+    if (IsCancelled())
+    {
+      *error = "cancelled";
+      return false;
+    }
+    const u64 size = std::min<u64>(expected_bytes.size(), expected.GetDataSize() - offset);
+    if (!expected.Read(offset, size, expected_bytes.data()) ||
+        !actual.Read(offset, size, actual_bytes.data(), DiscIO::PARTITION_NONE))
+    {
+      *error = fmt::format("cannot verify rebuilt disc at offset {}", offset);
+      return false;
+    }
+    const auto mismatch =
+        std::mismatch(expected_bytes.begin(), expected_bytes.begin() + size, actual_bytes.begin());
+    if (mismatch.first != expected_bytes.begin() + size)
+    {
+      *error = fmt::format("rebuilt disc byte mismatch at offset {}",
+                           offset + std::distance(expected_bytes.begin(), mismatch.first));
+      return false;
+    }
+    offset += size;
+  }
+  return true;
+}
+
 int Run(const std::string& image, const std::string& layout_path,
         const std::optional<std::string>& reference_path, const std::string& output, std::FILE* out,
         const std::function<void(u64 done, u64 total)>& progress)
@@ -88,9 +111,8 @@ int Run(const std::string& image, const std::string& layout_path,
     fmt::print(out, "{}\n", DiscReport::FailureLine(reason));
     return 1;
   };
-  const std::string partial = output + ".partial";
-  if (File::Exists(output) || File::Exists(partial))
-    return fail("output or partial already exists");
+  if (File::Exists(output))
+    return fail("output already exists");
   const auto json = ReadJson(layout_path);
   if (!json)
     return fail("cannot read layout (maximum 32 MiB)");
@@ -126,7 +148,7 @@ int Run(const std::string& image, const std::string& layout_path,
   auto view = DiscIO::CreateDisc(blob->CopyReader(), false);
   if (!view)
     return fail("cannot open rebuilt view");
-  const auto normalized = DiscReport::Generate(*view, &error);
+  const auto normalized = DiscReport::Generate(*view, &error, RebuildStandard::IsCancelled);
   if (!normalized)
     return fail(error);
   if (reference)
@@ -149,7 +171,7 @@ int Run(const std::string& image, const std::string& layout_path,
   view = DiscIO::CreateDisc(blob->CopyReader(), false);
   if (!view || IsCancelled())
     return fail("cancelled or cannot open rebuilt view");
-  const auto computed = DiscReport::Generate(*view, &error);
+  const auto computed = DiscReport::Generate(*view, &error, RebuildStandard::IsCancelled);
   if (!computed)
     return fail(error);
   if (computed->header.h3_sha1 != layout->h3_sha1 ||
@@ -168,9 +190,11 @@ int Run(const std::string& image, const std::string& layout_path,
   if (!reference)
     reference = DiscReport::Reference{layout->id, computed->files, std::nullopt};
   fmt::print(stderr, "PROGRESS 300 1000\n");
-  PartialFile cleanup(partial);
+  const auto partial = DiscTool::OutputFile::Create(output);
+  if (!partial)
+    return fail("cannot reserve rebuilt output");
   const bool converted = DiscIO::ConvertToWIAOrRVZ(
-      blob.get(), image, partial, true, DiscIO::WIARVZCompressionType::Zstd, 5, 128 * 1024,
+      blob.get(), image, partial->Path(), true, DiscIO::WIARVZCompressionType::Zstd, 5, 128 * 1024,
       [&](const std::string&, float fraction) {
         const u64 done = 300 + static_cast<u64>(std::clamp(fraction, 0.0f, 1.0f) * 600);
         fmt::print(stderr, "PROGRESS {} 1000\n", done);
@@ -182,10 +206,12 @@ int Run(const std::string& image, const std::string& layout_path,
   if (!converted || IsCancelled())
     return fail(IsCancelled() ? "cancelled" : "cannot write rebuilt RVZ");
   fmt::print(stderr, "PROGRESS 900 1000\n");
-  auto reopened = DiscIO::CreateDisc(partial, false);
+  auto reopened = DiscIO::CreateDisc(partial->Path(), false);
   if (!reopened)
     return fail("cannot reopen rebuilt RVZ");
-  const auto verified = DiscReport::Generate(*reopened, &error);
+  if (!VerifyRaw(*blob, *reopened, &error))
+    return fail(error);
+  const auto verified = DiscReport::Generate(*reopened, &error, RebuildStandard::IsCancelled);
   if (IsCancelled())
     return fail("cancelled");
   if (!verified)
@@ -199,33 +225,10 @@ int Run(const std::string& image, const std::string& layout_path,
   const auto differences = DiscReport::Compare(*verified, *reference);
   if (!differences.empty())
     return fail(fmt::format("rebuilt disc file hash/size/set mismatch: {}", differences.front()));
-  // File digests cannot detect changes in gaps, retained hash subtrees, or encryption IVs.
-  // Read the RVZ through DiscIO and compare its entire raw game partition to the built view.
-  std::vector<u8> expected(DiscIO::VolumeWii::GROUP_TOTAL_SIZE), actual(expected.size());
-  for (u64 offset = layout->partition_offset; offset < blob->GetDataSize();)
-  {
-    if (IsCancelled())
-      return fail("cancelled");
-    const u64 size = std::min<u64>(expected.size(), blob->GetDataSize() - offset);
-    if (!blob->Read(offset, size, expected.data()) ||
-        !reopened->Read(offset, size, actual.data(), DiscIO::PARTITION_NONE))
-      return fail(fmt::format("cannot verify rebuilt raw cluster at offset {}", offset));
-    const auto mismatch = std::mismatch(expected.begin(), expected.begin() + size, actual.begin());
-    if (mismatch.first != expected.begin() + size)
-    {
-      const u64 position = offset + std::distance(expected.begin(), mismatch.first);
-      const u64 cluster = layout->partition_offset + (position - layout->partition_offset) /
-                                                         DiscIO::VolumeWii::BLOCK_TOTAL_SIZE *
-                                                         DiscIO::VolumeWii::BLOCK_TOTAL_SIZE;
-      return fail(fmt::format("rebuilt disc raw-cluster mismatch at offset {} ({})", cluster,
-                              position < layout->partition_offset + layout->data.offset ?
-                                  "partition header/H3" :
-                                  "encrypted data"));
-    }
-    offset += size;
-  }
-  if (!File::Rename(partial, output))
-    return fail("cannot rename rebuilt RVZ");
+  // Close readers before publishing/cleanup (required on Windows).
+  reopened.reset();
+  if (!partial->Publish(output))
+    return fail("cannot publish rebuilt RVZ; destination may already exist");
   fmt::print(stderr, "PROGRESS 1000 1000\n");
   fmt::print(out, "PASS: rebuilt {} to the standard layout\n", layout->id);
   return 0;

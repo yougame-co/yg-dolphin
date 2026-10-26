@@ -49,7 +49,6 @@
 #include "Core/Orca/CrashNote.h"
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/DiscReport.h"
-#include "Core/Orca/RebuildStandard.h"
 #include "Core/Orca/DiscVerify.h"
 #include "Core/Orca/Launch.h"
 #include "Core/Orca/Mod.h"
@@ -912,8 +911,6 @@ static std::optional<int> RunDiscReport(const int argc, char* argv[])
 
 int main(const int raw_argc, char* raw_argv[])
 {
-  if (const auto rebuild = Orca::RebuildStandard::RunCommandLine(raw_argc, raw_argv))
-    return *rebuild;
   if (const auto report = RunDiscReport(raw_argc, raw_argv))
     return *report;
 

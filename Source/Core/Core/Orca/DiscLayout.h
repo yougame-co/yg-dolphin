@@ -96,6 +96,8 @@ struct Layout
 };
 
 std::optional<Layout> Generate(const DiscIO::Volume& volume, std::string* error);
+// Preflight source metadata before lazy filesystem traversal or allocations from disc fields.
+bool ValidateSource(const DiscIO::Volume& volume, std::string* error);
 std::optional<std::vector<ErasedHash>> ReadErasedHashes(const DiscIO::Volume& volume,
                                                         const Layout& layout, std::string* error);
 std::optional<Layout> Parse(std::string_view json, std::string* error);

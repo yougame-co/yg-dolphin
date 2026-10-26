@@ -34,6 +34,8 @@ enum class Platform;
 class VolumeWii final : public VolumeDisc
 {
 public:
+  // Check before constructing any partition details, including for direct constructor callers.
+  static bool CheckPartitionTable(BlobReader& reader);
   static constexpr size_t AES_KEY_SIZE = Common::AES::Context::KEY_SIZE;
 
   static constexpr u32 BLOCKS_PER_GROUP = 0x40;

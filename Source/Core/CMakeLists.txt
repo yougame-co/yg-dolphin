@@ -23,6 +23,10 @@ if(ENABLE_CLI_TOOL)
   add_subdirectory(DolphinTool)
 endif()
 
+if(ORCA_BUILD_DISC_TOOLS)
+  add_subdirectory(OrcaDiscTool)
+endif()
+
 if(ENABLE_QT)
   add_subdirectory(DolphinQt)
 endif()
