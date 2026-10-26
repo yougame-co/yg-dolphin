@@ -141,8 +141,8 @@ TEST_F(DiscReportTest, BootTitleMaskRespectsRangeLength)
   {
     SCOPED_TRACE(length);
     std::string expected = image.substr(0, length);
-    if (length >= 0x60)
-      std::fill(expected.begin() + 0x20, expected.begin() + 0x60, 0);
+    std::fill(expected.begin() + std::min<u64>(0x20, length),
+              expected.begin() + std::min<u64>(0x60, length), 0);
     EXPECT_EQ(Report::Detail::HashRange(*volume, DiscIO::PARTITION_NONE, "sys/boot.bin", 0,
                                       length),
               Digest(expected));
