@@ -281,11 +281,11 @@ IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" |
   awk '/Developer ID Application/ {print $2; exit}')"
 [ -n "$IDENTITY" ] || fail "no valid Developer ID Application identity in CSC_LINK (is Apple's \
 Developer ID Certification Authority G2 certificate in a keychain on this Mac?)"
-# Sign each Mach-O helper before sealing the containing bundle. The helper receives the
-# same hardened runtime and entitlements as the engine.
+# Sign each helper beside the engine (orca-disc-tool) before sealing the bundle: hardened runtime,
+# but none of the engine's entitlements (it needs no JIT). The bundle's own signature covers Orca.
 for executable in "$APP"/Contents/MacOS/*; do
-  [ -f "$executable" ] && [ -x "$executable" ] || continue
-  codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
+  [ -f "$executable" ] && [ -x "$executable" ] && [ "$executable" != "$EXE" ] || continue
+  codesign --force --options runtime --timestamp \
     --keychain "$KEYCHAIN" --sign "$IDENTITY" "$executable"
 done
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
