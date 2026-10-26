@@ -81,13 +81,13 @@ constexpr auto HOST_WAIT = std::chrono::seconds(8);
 constexpr auto TICKET_TIMEOUT = std::chrono::seconds(30);
 constexpr int TICKET_TRIES = 2;
 // Matchmade rooms: a game's report waits this long for the room's match to start; the host's begin
-// gets this many tries (one per roster change after a refusal) and is resent if unanswered this
-// long.
+// gets this many tries, retrying after a refusal when the roster changes or a timer expires.
 constexpr auto REPORT_HOLD = std::chrono::seconds(60);
 // How often a void `finish` the room refused (its games still being decided) goes again.
 constexpr int FINISH_RETRIES = 30;
 constexpr int BEGIN_TRIES = 5;
 constexpr auto BEGIN_ANSWER = std::chrono::seconds(5);
+constexpr auto BEGIN_RETRY_AFTER = std::chrono::seconds(10);
 // The server closed a matchmade room after its result (rooms/src/index.ts: 4004 "match-over").
 constexpr int CLOSE_MATCH_OVER = 4004;
 // How long a teardown waits for the app to take the emptied room (loopback, normally milliseconds).
@@ -1479,7 +1479,7 @@ struct YouGameRoom::Impl
   bool someone_away = false;
   std::optional<Clock::time_point> begin_sent;
   int begin_tries = 0;
-  bool begin_wait_roster = false;
+  std::optional<Clock::time_point> begin_retry_at;
   int ranked_sent = 0;
   int casual_sent = 0;
   int casual_results = 0;
@@ -3660,8 +3660,8 @@ struct YouGameRoom::Impl
         }
       }
     }
-    // A refused begin waits for the roster to change.
-    begin_wait_roster = false;
+    // A roster update can retry a refused begin before its timer expires.
+    begin_retry_at.reset();
   }
 
   // The participants results name: the room match's once it started, else the room's.
@@ -3843,9 +3843,11 @@ struct YouGameRoom::Impl
     }
     if (room_queue == "private" || !current_match.empty() || (room_queue == "ranked" && done))
       return;
-    if (begin_sent && Clock::now() - *begin_sent < BEGIN_ANSWER)
+    const auto now = Now();
+    if (begin_sent && now - *begin_sent < BEGIN_ANSWER)
       return;
-    if (begin_wait_roster || begin_tries >= BEGIN_TRIES || joining || host != me || my_seat != 0 ||
+    if ((begin_retry_at && now < *begin_retry_at) || begin_tries >= BEGIN_TRIES ||
+        joining || host != me || my_seat != 0 ||
         lobby_participants.size() != (doubles ? 4u : 2u) || someone_away || !plugged)
     {
       return;
@@ -3853,7 +3855,8 @@ struct YouGameRoom::Impl
     if (doubles && room_queue == "ranked" &&
         !ValidRankedTeams({{"participants", picojson::value(room_participants)}}, true))
       return;
-    begin_sent = Clock::now();
+    begin_retry_at.reset();
+    begin_sent = now;
     ++begin_tries;
     NOTICE_LOG_FMT(NETPLAY, "Orca room: beginning the room's {} match (revision {}, try {})",
                    room_queue, revision, begin_tries);
@@ -4443,6 +4446,7 @@ struct YouGameRoom::Impl
     finish_retry_at.reset();
     finish_retries = 0;
     begin_sent.reset();
+    begin_retry_at.reset();
     begin_tries = 0;
     ranked_sent = 0;
     tally.Reset();
@@ -5843,11 +5847,11 @@ struct YouGameRoom::Impl
         ++finish_retries;
         finish_retry_at = Clock::now() + KEEP_ALIVE_EVERY;
       }
-      // The host's begin goes again once the roster changes (BEGIN_TRIES at most).
+      // Retry on a roster update or after a delay, still capped at BEGIN_TRIES.
       if (Str(m, "action") == "begin")
       {
         begin_sent.reset();
-        begin_wait_roster = true;
+        begin_retry_at = Now() + BEGIN_RETRY_AFTER;
       }
     }
     else if (t == "error")

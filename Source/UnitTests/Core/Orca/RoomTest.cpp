@@ -6768,6 +6768,34 @@ TEST_F(OrcaRoomRuntime, HostCommandKeepsCasualAndRankedFreshStarts)
   }
 }
 
+TEST_F(OrcaRoomRuntime, FullRankedDoublesRoomRetriesRefusedBeginWithoutRosterChange)
+{
+  const std::string code = "begretry394";
+  Request("/configure/" + code,
+      R"({"joining":false,"queue":"ranked","doubles":true,"peers":3,"teams":true})");
+  auto options = TraceOptions(false);
+  options.room_code = code;
+  options.mode = "orca-rsbe01-2v2-ranked";
+  options.friends_room = false;
+  auto room = std::make_unique<YouGameRoom>(options);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }))
+      << room->Status() << " seat=" << room->Seat() << " rtt=" << room->RoundTripMs();
+  room->SetOpponentPlugged(true);
+  const auto begins = [&] {
+    const auto messages = Request("/state/" + code).get("messages");
+    return std::ranges::count_if(messages.get<picojson::array>(), [](const auto& message) {
+      return message.get("t").to_str() == "begin";
+    });
+  };
+  ASSERT_TRUE(Wait([&] { return begins() == 1; }));
+  const auto refused_at = RoomClock::now();
+  Action(code, R"({"message":{"t":"command-error","action":"begin","error":"try again"}})");
+  EXPECT_FALSE(Wait([&] { return begins() > 1; }, 9s));
+  ASSERT_TRUE(Wait([&] { return begins() == 2; }, 4s));
+  EXPECT_GE(RoomClock::now() - refused_at, 10s);
+  EXPECT_EQ(Connections(code), 1);
+}
+
 TEST_F(OrcaRoomRuntime, PrivateTournamentTicketBeginsAndReportsTheMatch)
 {
   const std::string code = "tourney1";
@@ -8892,6 +8920,33 @@ TEST(OrcaRoomRankedDoubles, HostBeginsOnlyAfterTheFourSeatGameIsPlugged)
   for (const auto& wire : trace[2].sent)
     began |= wire.find("\"t\":\"begin\"") != std::string::npos;
   EXPECT_TRUE(began);
+}
+
+TEST(OrcaRoomRankedDoubles, RefusedBeginRetriesOnDeadlineOrRosterAndStopsAtFive)
+{
+  picojson::value welcome;
+  ASSERT_TRUE(picojson::parse(welcome, RankedDoublesRoster("welcome")).empty());
+  welcome.get<picojson::object>().erase("matchId");
+  auto roster = welcome;
+  roster.get<picojson::object>()["t"] = picojson::value("lobby");
+  const std::string refusal = R"({"t":"command-error","action":"begin","error":"try again"})";
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, welcome.serialize()}, {RK::Tick, 1},
+      {RK::Message, 2, refusal}, {RK::Tick, 10001}, {RK::Tick, 10002},
+      {RK::Message, 10003, refusal}, {RK::Message, 10004, roster.serialize()},
+      {RK::Tick, 10005}, {RK::Message, 10006, refusal}, {RK::Tick, 20006},
+      {RK::Message, 20007, refusal}, {RK::Tick, 30007},
+      {RK::Message, 30008, refusal}, {RK::Tick, 40008},
+      {RK::Message, 40009, roster.serialize()}, {RK::Tick, 40010}},
+      [](YouGameRoom& room) { room.SetOpponentPlugged(true); });
+  for (size_t i = 0; i < trace.size(); ++i)
+  {
+    SCOPED_TRACE(i);
+    const auto begins = std::ranges::count_if(trace[i].sent, [](const auto& wire) {
+      return wire.find("\"t\":\"begin\"") != std::string::npos;
+    });
+    EXPECT_EQ(begins, i == 1 || i == 4 || i == 7 || i == 9 || i == 11 ? 1 : 0);
+  }
 }
 
 TEST(OrcaRoomRankedDoubles, ALeaverLosesItsWholeTeamIncludingWhenItIsOurPartner)
