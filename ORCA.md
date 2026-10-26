@@ -2835,6 +2835,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.94
+
+- Online: fixes the game closing when a friend joined after YG Dolphin's first connection to its own room had been refused (the fix production got in 0.3.93).
+- Ranked doubles: if the room refuses to start a full room, the host asks again every few seconds instead of waiting for someone to join or leave.
+
 ### 0.3.91
 
 - Online: ranked doubles. Four players on four computers, two teams, rated per player and per pair; a team that leaves mid-set loses it. The room's host picks Team battle and the colours.
