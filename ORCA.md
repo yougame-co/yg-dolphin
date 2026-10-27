@@ -2863,6 +2863,10 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.96
+
+- Smoothness reports: YG Dolphin now reports how evenly frames reach the screen, the hitches over 25, 33 and 50 ms, how deep rollbacks go and how long each screen transition takes (`orca perf` `pace` and `scene` lines), so the team can find and fix stutter. Play is exactly as before.
+
 ### 0.3.95
 
 - Discs: YG Dolphin can now tell how a Brawl copy made with disc tools differs from the standard disc, and rebuild it into the standard layout, so the app can offer to fix a copy it refuses. The engine plays every disc exactly as before.
