@@ -1093,7 +1093,7 @@ void Presenter::Present(PresentInfo* present_info, bool window_requested)
 
   if ((g_gfx->IsHeadless() && !m_test_framebuffer) || (!m_onscreen_ui && !m_xfb_entry))
   {
-    if (g_gfx->IsHeadless() && m_xfb_entry)
+    if (g_gfx->IsHeadless() && m_xfb_entry && present_info)
       Orca::Perf::Presented(true);
     return;
   }
@@ -1106,7 +1106,8 @@ void Presenter::Present(PresentInfo* present_info, bool window_requested)
     {
       const MathUtil::Rectangle<int> rect = AdjustForCustomCrop(m_xfb_rect);
       g_gfx->ShowImage(m_xfb_entry->texture.get(), rect);
-      Orca::Perf::Presented();
+      if (present_info)
+        Orca::Perf::Presented();
 
       // Update the window size based on the frame that was just rendered.
       // Due to depending on guest state, we need to call this every frame.
@@ -1177,7 +1178,7 @@ void Presenter::Present(PresentInfo* present_info, bool window_requested)
       g_gfx->PresentBackbuffer();
       if (time_gpu)
         Orca::Perf::AddPresent(Clock::now() - gpu_start);
-      if (backbuffer_bound && m_xfb_entry)
+      if (backbuffer_bound && m_xfb_entry && present_info)
         Orca::Perf::Presented();
     }
     else
