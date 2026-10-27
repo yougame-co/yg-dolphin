@@ -141,6 +141,24 @@ TEST(OrcaPace, SceneCodesAreBoundedAndSafeJsonText)
   EXPECT_EQ(Orca::Perf::SceneCodeName(Orca::Perf::SceneCode("\"\\\n")), "unknown");
 }
 
+TEST(OrcaPace, VersionOneWireContract)
+{
+  Orca::Perf::PaceWindow w;
+  w.scene = Orca::Perf::SceneCode("scMelee");
+  w.n = 899;
+  w.p = {16.7, 17.1, 33.4, 68.2};
+  w.h = {12, 10, 1};
+  w.rb = {3, 2, 1, 4};
+  w.rm = 7;
+  w.sc = 2;
+  w.sm = 14.3;
+  EXPECT_EQ(Orca::Perf::PaceJson(w),
+            R"({"v":1,"k":"pace","s":"scMelee","n":899,"p50":16.7,"p95":17.1,"p99":33.4,"max":68.2,"h25":12,"h33":10,"h50":1,"rb":[3,2,1,4],"rm":7,"sc":2,"sm":14.3,"d":0,"h":0})");
+  EXPECT_EQ(Orca::Perf::SceneJson({Orca::Perf::SceneCode("muMenuMain"),
+                                 Orca::Perf::SceneCode("scSelctCharacter"), 83.4, false}),
+            R"({"v":1,"k":"scene","from":"muMenuMa","to":"scSelctC","ms":83.4,"h":0})");
+}
+
 std::chrono::nanoseconds Ms(double ms)
 {
   return std::chrono::nanoseconds(static_cast<s64>(ms * 1'000'000));
