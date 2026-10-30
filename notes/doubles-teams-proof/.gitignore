@@ -1,0 +1,8 @@
+*.log
+*.xml
+pair12/
+pair13/
+no-teams/
+blocked.md
+resume*.md
+discovery-toggle.py
