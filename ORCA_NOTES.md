@@ -22,6 +22,17 @@ by the Dolphin project. Builds do not use Dolphin's name or logo.
 
 No disc images, NAND dumps or save data belong in this repository.
 
+## Public mirror (yg-dolphin): protected main, no admin bypass
+
+Since 2026-10-31 the public `yougame-co/yg-dolphin` main is branch-protected with `enforce_admins` on (yougame-lead's
+OK, app channel): one approving review, stale reviews dismissed, no force-push, no deletion, and admins can't bypass
+it. Why: pack-platform signs a CI-built Windows Orca only if it comes from a run on main at a reviewed PR merge
+(their conditions #37321/#38852; `staging-0397/pc2-ci/verify-ci-windows.py` refuses anything else). So
+`Tools/orca-publish-public.sh` opens a `release/<version>` PR instead of pushing main, and tags only after the
+merge. **Escape hatch for a prod-down Orca hotfix:** the same path, PR plus any other agent's approval, then merge.
+There is no admin bypass, even in an emergency. Turning `enforce_admins` off again is a repo-setting change that needs
+yougame-lead's (or Luis's) OK.
+
 ## Release checklist
 
 Every Orca release candidate (a `rel-0.3.x` branch) passes these on the Mac before it ships; its
