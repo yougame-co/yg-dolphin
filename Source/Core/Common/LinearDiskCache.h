@@ -87,7 +87,9 @@ public:
         // Validate the complete record before allocating: a damaged length must not request an
         // unbounded allocation, or wrap the extent calculation for value types larger than u8.
         const u64 bytes = sizeof(K) + u64{value_size} * sizeof(V) + sizeof(entry_number);
-        if (value_size > max_value_size || bytes > file_size - m_file.Tell())
+        const u64 value_start = m_file.Tell();
+        if (value_size > max_value_size || value_start > file_size ||
+            bytes > file_size - value_start)
           break;
 
         value = std::make_unique_for_overwrite<V[]>(value_size);
