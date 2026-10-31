@@ -391,6 +391,7 @@ void ShaderCache::LoadShaderCache(T& cache, APIType api_type, const char* type, 
   {
   public:
     CacheReader(T& cache_) : cache(cache_) {}
+    u32 GetLoadedCount() const { return m_loaded; }
     void Read(const K& key, const u8* value, u32 value_size) override
     {
       std::span<const u8> binary(value, value_size);
@@ -405,6 +406,7 @@ void ShaderCache::LoadShaderCache(T& cache, APIType api_type, const char* type, 
       auto shader = g_gfx->CreateShaderFromBinary(stage, binary.data(), binary.size());
       if (shader)
       {
+        ++m_loaded;
         auto& entry = cache.shader_map[key];
         entry.shader = std::move(shader);
         entry.pending = false;
@@ -434,6 +436,7 @@ void ShaderCache::LoadShaderCache(T& cache, APIType api_type, const char* type, 
 
   private:
     T& cache;
+    u32 m_loaded = 0;
   };
 
   std::string filename = GetDiskShaderCacheFileName(api_type, type, include_gameid, true);
@@ -444,7 +447,12 @@ void ShaderCache::LoadShaderCache(T& cache, APIType api_type, const char* type, 
       metal ? ShaderCacheData::MAX_PAYLOAD_SIZE + 2 * ShaderCacheData::Digest{}.size() :
               std::numeric_limits<u32>::max(),
       metal ? 256 * 1024 * 1024 : std::numeric_limits<u64>::max());
-  INFO_LOG_FMT(VIDEO, "Loaded {} cached shaders from {}", count, filename);
+  INFO_LOG_FMT(VIDEO, "Loaded {} cached shaders from {}", reader.GetLoadedCount(), filename);
+  if (metal)
+  {
+    NOTICE_LOG_FMT(VIDEO, "Metal shader cache: accepted={} rejected={} records={} path={}",
+                   reader.GetLoadedCount(), count - reader.GetLoadedCount(), count, filename);
+  }
 }
 
 template <typename T>
