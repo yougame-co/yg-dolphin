@@ -353,6 +353,7 @@ bool PlatformMacOS::Init()
   if (IsEmbedded())
   {
     const bool initialized = InitEmbedded();
+    InputCommon::Shortcuts::Get().SetPolling(IsEmbedded());
     Orca::Status::SetShortcutsAvailable(initialized);
     return initialized;
   }
@@ -407,6 +408,7 @@ bool PlatformMacOS::Init()
   ObserveOcclusion();
 
   SetupMenu();
+  InputCommon::Shortcuts::Get().SetPolling(IsEmbedded());
   Orca::Status::SetShortcutsAvailable(true);
 
   return true;

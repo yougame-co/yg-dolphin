@@ -12,12 +12,20 @@ namespace
 class HeldKey final : public ciface::Core::Device::Input
 {
 public:
-  explicit HeldKey(std::string name) : m_name(std::move(name)) {}
+  explicit HeldKey(std::string name, bool keyboard = true)
+      : m_name(std::move(name)), m_keyboard(keyboard)
+  {
+  }
+  std::string GetShortcutKey() const override
+  {
+    return m_keyboard ? InputCommon::Shortcuts::NormalizeKey(m_name) : "";
+  }
   std::string GetName() const override { return m_name; }
   ControlState GetState() const override { return 1.0; }
 
 private:
   std::string m_name;
+  bool m_keyboard;
 };
 class Keyboard final : public ciface::Core::Device
 {
@@ -28,7 +36,7 @@ public:
                              "Ctrl",     "Alt",       "X",         "Left Shift", "Right Control",
                              "LCONTROL", "Shift_L",   "Control_R", "Up Arrow",   "Button S",
                              "ENTER",    "LEFTSHIFT", "LEFTCTRL",  "RIGHTSHIFT", "RIGHTCTRL"})
-      AddInput(new HeldKey(name));
+      AddInput(new HeldKey(name, m_source != "SDL"));
   }
   std::string GetSource() const override { return m_source; }
   std::string GetName() const override { return "Keyboard Mouse"; }
@@ -49,6 +57,8 @@ protected:
   {
     auto& shortcuts = InputCommon::Shortcuts::Get();
     shortcuts.SetOutput({});
+    shortcuts.SetPolling(false);
+    shortcuts.SynchronizeHeldKeys({});
     shortcuts.FocusLost();
     shortcuts.SetFocus(true);
     ASSERT_TRUE(shortcuts.Configure("embed shortcuts menu=Shift+Tab chat=Ctrl+Enter"));
@@ -88,14 +98,14 @@ TEST_P(ShortcutMappingTest, ControllerMappingsUseClassifiedWindowEvents)
   EXPECT_EQ(state("X"), 1.0);
   EXPECT_EQ(state("Up Arrow"), 1.0);
   Get().KeyEvent("Enter", Ctrl, false);
-  EXPECT_EQ(state("Ctrl"), 0.0);  // remains swallowed until released
+  EXPECT_EQ(state("Ctrl"), 1.0);  // modifier resumes when the chord ends
   Get().KeyEvent("Ctrl", 0, false);
   Get().KeyEvent("Shift", Shift, true);
   Get().KeyEvent("Tab", Shift, true);
   for (const auto* name : {"Tab", "TAB", "Shift", "Left Shift", "Shift_L"})
     EXPECT_EQ(state(name), 0.0) << name;
   Get().FocusLost();
-  EXPECT_EQ(state("X"), 0.0);
+  EXPECT_EQ(state("X"), 1.0);
   EXPECT_EQ(state("Return"), 0.0);
 }
 INSTANTIATE_TEST_SUITE_P(KeyboardBackends, ShortcutMappingTest,
@@ -117,6 +127,41 @@ TEST(ShortcutMapping, GamepadsKeepTheirInputsDuringKeyboardShortcut)
   result.expr->UpdateReferences(environment);
   EXPECT_EQ(result.expr->GetValue(), 1.0);
   Get().Configure("embed shortcuts");
+  Get().FocusLost();
+}
+
+TEST(ShortcutMapping, SparseKeyboardMetadataNeedsNeitherEnterNorShift)
+{
+  class SparseKeyboard final : public ciface::Core::Device
+  {
+  public:
+    SparseKeyboard() { AddInput(new HeldKey("F1")); }
+    std::string GetSource() const override { return "evdev"; }
+    std::string GetName() const override { return "Programmable keypad"; }
+  };
+  class SparseDevices final : public ciface::Core::DeviceContainer
+  {
+  public:
+    SparseDevices() { m_devices.push_back(std::make_shared<SparseKeyboard>()); }
+    const auto& Device() const { return m_devices.front(); }
+  } devices;
+  using namespace InputCommon::Shortcuts;
+  Get().SetPolling(false);
+  Get().SynchronizeHeldKeys({});
+  Get().SetFocus(true);
+  Get().Configure("embed shortcuts chat=F1");
+  Get().KeyEvent("F1", 0, true);
+  ASSERT_EQ(devices.Device()->FindInput("ENTER"), nullptr);
+  ASSERT_EQ(devices.Device()->FindInput("LEFTSHIFT"), nullptr);
+  ciface::Core::DeviceQualifier qualifier;
+  qualifier.FromDevice(devices.Device().get());
+  ciface::ExpressionParser::ControlEnvironment::VariableContainer variables;
+  ciface::ExpressionParser::ControlEnvironment environment(devices, qualifier, variables);
+  auto result = ciface::ExpressionParser::ParseExpression("`F1`");
+  result.expr->UpdateReferences(environment);
+  EXPECT_EQ(result.expr->GetValue(), 0.0);
+  Get().Configure("embed shortcuts");
+  EXPECT_EQ(result.expr->GetValue(), 1.0);
   Get().FocusLost();
 }
 }  // namespace

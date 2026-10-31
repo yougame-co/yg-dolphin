@@ -18,6 +18,7 @@ static constexpr auto X_None = None;
 #include "Core/Orca/Status.h"
 #include "Core/State.h"
 #include "Core/System.h"
+#include "InputCommon/ControllerInterface/Xlib/XInput2.h"
 #include "InputCommon/Shortcuts.h"
 
 #include <atomic>
@@ -46,57 +47,6 @@ static constexpr auto X_None = None;
 
 namespace
 {
-std::string ShortcutKey(KeySym key)
-{
-  if (key >= XK_a && key <= XK_z)
-    return std::string(1, static_cast<char>('A' + key - XK_a));
-  if (key >= XK_A && key <= XK_Z)
-    return std::string(1, static_cast<char>(key));
-  if (key >= XK_F1 && key <= XK_F12)
-    return "F" + std::to_string(key - XK_F1 + 1);
-  switch (key)
-  {
-  case XK_Tab:
-  case XK_ISO_Left_Tab:
-    return "Tab";
-  case XK_Return:
-    return "Enter";
-  case XK_grave:
-    return "Backquote";
-  case XK_Shift_L:
-  case XK_Shift_R:
-    return "Shift";
-  case XK_Control_L:
-  case XK_Control_R:
-    return "Ctrl";
-  case XK_Alt_L:
-  case XK_Alt_R:
-    return "Alt";
-  default:
-    return {};
-  }
-}
-
-// Embed mode: X errors seen so far (LogXError).
-std::atomic<int> s_x_errors{0};
-
-// Embed mode: an X error is logged instead of ending Orca. The app's window can go away between two
-// requests that name it, and Xlib's default handler would exit at once, without the protocol's
-// last line. A lost connection to the X server still ends the process (Xlib's I/O error handler).
-int LogXError(Display* display, XErrorEvent* event)
-{
-  // Once the app's window is gone, every frame and every mouse move can answer one: the log keeps
-  // the first 20, then one in a thousand.
-  const int count = s_x_errors.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (count > 20 && count % 1000 != 0)
-    return 0;
-  char text[160] = "";
-  XGetErrorText(display, event->error_code, text, sizeof(text));
-  std::fprintf(stderr, "Orca: X error %d (%s) on request %d.%d, resource 0x%lx (%d so far)\n",
-               event->error_code, text, event->request_code, event->minor_code,
-               static_cast<unsigned long>(event->resourceid), count);
-  return 0;
-}
 
 class PlatformX11 : public Platform
 {
@@ -193,6 +143,7 @@ bool PlatformX11::Init()
   {
     if (InitEmbedded())
     {
+      InputCommon::Shortcuts::Get().SetPolling(IsEmbedded());
       Orca::Status::SetShortcutsAvailable(true);
       return true;
     }
@@ -251,6 +202,7 @@ bool PlatformX11::Init()
   }
 
   UpdateWindowPosition();
+  InputCommon::Shortcuts::Get().SetPolling(IsEmbedded());
   Orca::Status::SetShortcutsAvailable(true);
   return true;
 }
@@ -549,9 +501,19 @@ void PlatformX11::ProcessEvents()
         XPeekEvent(m_display, &next);
         if (next.type == KeyPress && next.xkey.keycode == event.xkey.keycode &&
             next.xkey.time == event.xkey.time)
+        {
+          XNextEvent(m_display, &event);  // consume paired repeat press as one repeat event
+          InputCommon::Shortcuts::Get().KeyEvent(
+              ciface::XInput2::GetShortcutKey(m_display, event.xkey.keycode),
+              ((event.xkey.state & ShiftMask) ? InputCommon::Shortcuts::Shift : 0u) |
+                  ((event.xkey.state & ControlMask) ? InputCommon::Shortcuts::Ctrl : 0u) |
+                  ((event.xkey.state & Mod1Mask) ? InputCommon::Shortcuts::Alt : 0u) |
+                  ((event.xkey.state & Mod4Mask) ? 8u : 0u),
+              true, true);
           continue;
+        }
       }
-      const auto name = ShortcutKey(XLookupKeysym(&event.xkey, 0));
+      const auto name = ciface::XInput2::GetShortcutKey(m_display, event.xkey.keycode);
       unsigned mods = ((event.xkey.state & ShiftMask) ? InputCommon::Shortcuts::Shift : 0u) |
                       ((event.xkey.state & ControlMask) ? InputCommon::Shortcuts::Ctrl : 0u) |
                       ((event.xkey.state & Mod1Mask) ? InputCommon::Shortcuts::Alt : 0u) |
@@ -607,7 +569,16 @@ void PlatformX11::ProcessEvents()
       InputCommon::Shortcuts::Get().FocusLost();
     }
     else if (event.xany.window == m_window && event.type == FocusIn)
+    {
+      char keys[32];
+      XQueryKeymap(m_display, keys);
+      std::set<std::string, std::less<>> held;
+      for (unsigned code = 8; code < 256; ++code)
+        if (keys[code / 8] & (1 << (code % 8)))
+          held.insert(ciface::XInput2::GetShortcutKey(m_display, static_cast<KeyCode>(code)));
+      InputCommon::Shortcuts::Get().SynchronizeHeldKeys(held);
       InputCommon::Shortcuts::Get().SetFocus(IsEmbedded() ? IsWindowFocused() : true);
+    }
     if (IsEmbedded())
     {
       ProcessEmbeddedEvent(event);

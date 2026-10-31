@@ -38,6 +38,7 @@
 #include "Core/Rollback/ReplayStream.h"
 #include "Core/System.h"
 #include "InputCommon/Shortcuts.h"
+#include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "VideoCommon/FrameDumper.h"
 #include "VideoCommon/Present.h"
 
@@ -63,6 +64,10 @@ void Platform::UpdateRunningFlag()
     Embed::Out(std::string(Orca::Bridge::HEARTBEAT_LINE));
   }
   ProcessEmbedCommands();
+  // Keep shortcut edges live while paused or when the app supplies pad snapshots.
+  // Uses only already-enabled controller backends; never creates a keyboard source.
+  if (InputCommon::Shortcuts::Get().UsesPolling() && g_controller_interface.IsInit())
+    g_controller_interface.UpdateInput();
   EndSoloPauseForDropIn();
   WatchRoomWhilePaused();
   UpdateTitle();

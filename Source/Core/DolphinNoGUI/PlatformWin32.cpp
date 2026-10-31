@@ -46,37 +46,6 @@ void OutKey(std::string_view line)
     Embed::Out(std::string(line));
 }
 
-std::string ShortcutKey(WPARAM key)
-{
-  if (key >= 'A' && key <= 'Z')
-    return std::string(1, static_cast<char>(key));
-  if (key >= VK_F1 && key <= VK_F12)
-    return "F" + std::to_string(key - VK_F1 + 1);
-  switch (key)
-  {
-  case VK_TAB:
-    return "Tab";
-  case VK_RETURN:
-    return "Enter";
-  case VK_OEM_3:
-    return "Backquote";
-  case VK_SHIFT:
-  case VK_LSHIFT:
-  case VK_RSHIFT:
-    return "Shift";
-  case VK_CONTROL:
-  case VK_LCONTROL:
-  case VK_RCONTROL:
-    return "Ctrl";
-  case VK_MENU:
-  case VK_LMENU:
-  case VK_RMENU:
-    return "Alt";
-  default:
-    return {};
-  }
-}
-
 class PlatformWin32 final : public Platform
 {
 public:
@@ -290,6 +259,7 @@ bool PlatformWin32::Init()
 
   if (!RegisterRenderWindowClass(IsEmbedded()) || !CreateRenderWindow())
     return false;
+  InputCommon::Shortcuts::Get().SetPolling(IsEmbedded());
   Orca::Status::SetShortcutsAvailable(true);
   if (IsEmbedded())
     return true;
@@ -503,7 +473,8 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
                           (platform->m_control_down ? InputCommon::Shortcuts::Ctrl : 0u) |
                           (platform->m_alt_down ? InputCommon::Shortcuts::Alt : 0u) |
                           (held(VK_LWIN, VK_RWIN) ? 8u : 0u);
-    const auto key = ShortcutKey(wParam);
+    const auto key = InputCommon::Shortcuts::ScanCodeKey(
+        static_cast<unsigned>((lParam >> 16) & 0xff) | ((lParam & (1 << 24)) ? 0x80u : 0u));
     const bool aggregate_down = key == "Shift" ? platform->m_shift_down :
                                 key == "Ctrl"  ? platform->m_control_down :
                                 key == "Alt"   ? platform->m_alt_down :
@@ -589,8 +560,29 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
   case WM_SETFOCUS:
     if (platform)
     {
+      for (const WPARAM side :
+           {VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LWIN, VK_RWIN})
+      {
+        if (GetKeyState(static_cast<int>(side)) & 0x8000)
+          platform->m_modifier_keys.insert(side);
+        else
+          platform->m_modifier_keys.erase(side);
+      }
+      std::set<std::string, std::less<>> held_keys;
+      for (unsigned scan = 1; scan < 256; ++scan)
+      {
+        const auto key = InputCommon::Shortcuts::ScanCodeKey(scan);
+        const UINT vk =
+            MapVirtualKeyW((scan & 0x80) ? (0xe000u | (scan & 0x7f)) : scan, MAPVK_VSC_TO_VK_EX);
+        if (!key.empty() && vk && (GetKeyState(static_cast<int>(vk)) & 0x8000))
+          held_keys.insert(key);
+      }
+      InputCommon::Shortcuts::Get().SynchronizeHeldKeys(held_keys);
       platform->m_window_focus = true;
       InputCommon::Shortcuts::Get().SetFocus(true);
+      if (platform->IsEmbedded())
+        if (const HWND root = GetAncestor(hwnd, GA_ROOT); root && root != hwnd)
+          SetFocus(root);
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
@@ -652,15 +644,6 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
       Embed::Out(orb ? "orca orb" : "orca click");
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
-
-  // When embedded, the keyboard stays with the app: hand any focus straight back to its window.
-  case WM_SETFOCUS:
-    if (platform && platform->IsEmbedded())
-    {
-      if (const HWND root = GetAncestor(hwnd, GA_ROOT); root && root != hwnd)
-        SetFocus(root);
-    }
-    break;
 
   case WM_CLOSE:
     // When embedded, only the app ends the game ("quit" or a closed stdin).

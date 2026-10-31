@@ -89,9 +89,9 @@ TEST_F(ShortcutState, MenuDownUpRepeatIgnoredAndUnrelatedKeysPass)
   EXPECT_TRUE(manager.IsSuppressed("Tab"));
   EXPECT_TRUE(manager.IsSuppressed("Shift"));
   EXPECT_FALSE(manager.KeyEvent("A", Shift, true));
-  EXPECT_EQ(manager.GetWindowKeyState("A"), true);
+  EXPECT_EQ(manager.GetWindowKeyState("A"), std::nullopt);
   EXPECT_TRUE(manager.KeyEvent("Tab", Shift, false));
-  EXPECT_TRUE(manager.IsSuppressed("Shift"));
+  EXPECT_FALSE(manager.IsSuppressed("Shift"));
   manager.KeyEvent("Shift", 0, false);
   EXPECT_FALSE(manager.IsSuppressed("Shift"));
   EXPECT_EQ(lines,
@@ -102,7 +102,7 @@ TEST_F(ShortcutState, StartAndMainStickModifierAreSuppressedAtomically)
   // A hardware poll before the window dispatch sees no Start.
   EXPECT_EQ(manager.GetWindowKeyState("Enter"), false);
   manager.KeyEvent("Shift", Shift, true);
-  EXPECT_EQ(manager.GetWindowKeyState("Shift"), true);
+  EXPECT_EQ(manager.GetWindowKeyState("Shift"), std::nullopt);
   manager.KeyEvent("Enter", Shift, true);
   EXPECT_EQ(manager.GetWindowKeyState("Enter"), false);
   EXPECT_EQ(manager.GetWindowKeyState("Shift"), false);
@@ -132,6 +132,7 @@ TEST_F(ShortcutState, FocusLossCancelsOnceAndDisarmsUntilFocusReturns)
   EXPECT_EQ(manager.GetWindowKeyState("Enter"), false);
   EXPECT_FALSE(manager.KeyEvent("Enter", Shift, true));
   manager.SetFocus(true);
+  manager.KeyEvent("Enter", Shift, false);
   manager.KeyEvent("Enter", Shift, true);
   manager.KeyEvent("Enter", Shift, false);
   EXPECT_EQ(lines, (std::vector<std::string>{"yg {\"chat\":\"down\"}", "yg {\"chat\":\"cancel\"}",
@@ -144,10 +145,10 @@ TEST_F(ShortcutState, InvalidRebindPreservesAndBareClearsWithCancel)
   EXPECT_TRUE(manager.IsSuppressed("Enter"));
   EXPECT_EQ(lines.size(), 1u);
   ASSERT_TRUE(manager.Configure("embed shortcuts"));
-  EXPECT_TRUE(manager.IsSuppressed("Enter"));  // do not leak the remainder of an old press
+  EXPECT_FALSE(manager.IsSuppressed("Enter"));  // bare command restores raw input immediately
   manager.KeyEvent("Enter", Shift, false);
   EXPECT_FALSE(manager.KeyEvent("Enter", Shift, true));
-  EXPECT_EQ(manager.GetWindowKeyState("Enter"), true);
+  EXPECT_EQ(manager.GetWindowKeyState("Enter"), std::nullopt);
   EXPECT_EQ(lines,
             (std::vector<std::string>{"yg {\"chat\":\"down\"}", "yg {\"chat\":\"cancel\"}"}));
 }
@@ -205,7 +206,7 @@ TEST_F(ShortcutState, RepeatsAfterFocusLossAndRebindNeverStartAHold)
 TEST_F(ShortcutState, RebindSwallowsAlreadyHeldNewChordWithoutSyntheticPress)
 {
   manager.KeyEvent("A", Ctrl, true);
-  EXPECT_EQ(manager.GetWindowKeyState("A"), true);
+  EXPECT_EQ(manager.GetWindowKeyState("A"), std::nullopt);
   ASSERT_TRUE(manager.Configure("embed shortcuts chat=Ctrl+A"));
   EXPECT_EQ(manager.GetWindowKeyState("A"), false);
   EXPECT_EQ(manager.GetWindowKeyState("Ctrl"), false);
@@ -270,5 +271,85 @@ TEST(ShortcutsState, LegacyStateHasNoAuthoritativeOverrideBeforeConfiguration)
   EXPECT_TRUE(manager.Configure("embed shortcuts"));
   EXPECT_TRUE(manager.Configured());
   EXPECT_EQ(manager.GetWindowKeyState("Mouse 0"), std::nullopt);
+}
+
+TEST_F(ShortcutState, OnlyConfiguredBaseKeysAndHeldChordModifiersOverrideRawInput)
+{
+  for (const auto* key : {"X", "Z", "A", "F1", "Shift", "Ctrl", "Alt"})
+    EXPECT_EQ(manager.GetWindowKeyState(key), std::nullopt) << key;
+  manager.KeyEvent("Enter", Shift, true);
+  EXPECT_EQ(manager.GetWindowKeyState("Shift"), false);
+  EXPECT_EQ(manager.GetWindowKeyState("Ctrl"), std::nullopt);
+  manager.KeyEvent("Enter", Shift, false);
+  EXPECT_EQ(manager.GetWindowKeyState("Shift"), std::nullopt);
+  manager.Configure("embed shortcuts");
+  EXPECT_EQ(manager.GetWindowKeyState("Enter"), std::nullopt);
+}
+TEST_F(ShortcutState, ModifierSnapshotBeforeFocusThenEnterSwallowsStart)
+{
+  manager.Configure("embed shortcuts chat=Ctrl+Enter");
+  manager.FocusLost();
+  manager.SynchronizeHeldKeys({"Ctrl"});  // Win32 real GetKeyState snapshot on WM_SETFOCUS
+  manager.SetFocus(true);
+  manager.KeyEvent("Enter", Ctrl, true);
+  EXPECT_EQ(manager.GetWindowKeyState("Enter"), false);
+  EXPECT_EQ(manager.GetWindowKeyState("Ctrl"), false);
+  EXPECT_EQ(lines, (std::vector<std::string>{"yg {\"chat\":\"down\"}"}));
+}
+TEST_F(ShortcutState, FocusRecoveryRepeatWithoutRepeatFlagRequiresPhysicalRelease)
+{
+  manager.KeyEvent("Enter", Shift, true);
+  manager.FocusLost();
+  manager.SynchronizeHeldKeys({"Enter", "Shift"});  // XQueryKeymap on FocusIn
+  manager.SetFocus(true);
+  manager.KeyEvent("Enter", Shift, true);        // detectable repeat press
+  manager.KeyEvent("Enter", Shift, true, true);  // legacy release/press pair
+  ASSERT_EQ(lines.size(), 2u);
+  manager.KeyEvent("Enter", Shift, false);
+  manager.KeyEvent("Enter", Shift, true);
+  ASSERT_EQ(lines.size(), 3u);
+}
+TEST_F(ShortcutState, EmbeddedBackendSnapshotsRelayAndSuppressWithoutWindowEvents)
+{
+  manager.SetPolling(true);
+  manager.PollKeys({"X", "Z", "Shift", "Enter"});
+  EXPECT_EQ(manager.GetWindowKeyState("X"), std::nullopt);
+  EXPECT_EQ(manager.GetWindowKeyState("Enter"), false);
+  EXPECT_EQ(manager.GetWindowKeyState("Shift"), false);
+  manager.PollKeys({"X", "Z", "Shift", "Enter"});
+  manager.KeyEvent("Enter", Shift, true);  // same key seen by window must not double-relay
+  ASSERT_EQ(lines.size(), 1u);
+  manager.PollKeys({"X", "Shift"});
+  EXPECT_EQ(manager.GetWindowKeyState("Shift"), std::nullopt);
+  ASSERT_EQ(lines.size(), 2u);
+  EXPECT_EQ(lines.back(), "yg {\"chat\":\"up\"}");
+}
+TEST_F(ShortcutState, NonUSPhysicalPositionsMatchBackendKeys)
+{
+  manager.Configure("embed shortcuts chat=Ctrl+Q");
+  // AZERTY logical A / Dvorak apostrophe at physical Q: no logical letter is used.
+  EXPECT_EQ(ScanCodeKey(16), "Q");
+  EXPECT_EQ(XkbPositionKey("AD01"), "Q");
+  EXPECT_EQ(XkbPositionKey("AC01"), "A");
+  manager.KeyEvent(ScanCodeKey(16), Ctrl, true);
+  EXPECT_EQ(manager.GetWindowKeyState(XkbPositionKey("AD01")), false);
+  EXPECT_EQ(manager.GetWindowKeyState("A"), std::nullopt);
+  ASSERT_EQ(lines.size(), 1u);
+}
+TEST(ShortcutsDeviceClassification, SparseEvdevKeyboardUsesKeyMetadata)
+{
+  EXPECT_EQ(EvdevKey(59, "F1"), "F1");  // KEY_F1, no ENTER/SHIFT required
+  EXPECT_EQ(EvdevKey(30, "A"), "A");
+  EXPECT_EQ(EvdevKey(28, "ENTER"), "Enter");
+  EXPECT_EQ(EvdevKey(0x130, "A"), "");   // BTN_SOUTH, even with a letter label
+  EXPECT_EQ(EvdevKey(0x100, "F1"), "");  // BTN_MISC is not a keyboard key
+}
+TEST_F(ShortcutState, EmbeddedSnapshotReleasingBaseAndModifierTogetherEmitsUp)
+{
+  manager.Configure("embed shortcuts chat=Ctrl+Enter");
+  manager.SetPolling(true);
+  manager.PollKeys({"Ctrl", "Enter"});
+  manager.PollKeys({});
+  EXPECT_EQ(lines, (std::vector<std::string>{"yg {\"chat\":\"down\"}", "yg {\"chat\":\"up\"}"}));
 }
 }  // namespace

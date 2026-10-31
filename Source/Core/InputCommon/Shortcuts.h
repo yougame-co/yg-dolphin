@@ -29,10 +29,16 @@ struct Bindings
   std::optional<Combo> chat;
   bool operator==(const Bindings&) const = default;
 };
+// Canonical physical key identities (US positions), independent of the active layout.
+std::string NormalizeKey(std::string_view key);
+std::string ScanCodeKey(unsigned scan);
+std::string EvdevKey(unsigned code, std::string_view name);
+std::string XkbPositionKey(std::string_view position);
 // Strict, whole-line parse. An empty binding set is a successful bare command.
 std::optional<Bindings> ParseLine(std::string_view line);
 
-// Driven only by the engine window's events. Controller mappings consult GetWindowKeyState.
+// Driven by own-window events, or existing controller snapshots in embedded mode.
+// Controller mappings consult GetWindowKeyState.
 // Suppression latches until each chord key is released, even if a modifier drops first.
 class Manager
 {
@@ -43,13 +49,20 @@ public:
   bool Configured() const;
   bool KeyEvent(std::string_view key, unsigned modifiers, bool down, bool repeat = false);
   void SetFocus(bool focused);
+  // Embedded windows retain parent focus. Use the existing controller backend snapshots,
+  // aggregated across all devices before any mapping is evaluated.
+  void SetPolling(bool enabled);
+  bool UsesPolling() const;
+  void SynchronizeHeldKeys(const std::set<std::string, std::less<>>& held);
+  void PollKeys(const std::set<std::string, std::less<>>& held);
   void FocusLost();
   bool IsSuppressed(std::string_view key) const;
-  // Once configured, own-window events are authoritative for protocol keys, avoiding a
+  // Configured base keys use own-window events in standalone mode, avoiding a
   // hardware poll seeing Enter before the window has classified its chord.
   std::optional<bool> GetWindowKeyState(std::string_view key) const;
 
 private:
+  bool ProcessKey(std::string_view key, unsigned modifiers, bool down, bool repeat);
   void End(bool chat, bool cancel);
   void SwallowHeldBindings();
   void Emit(bool chat, std::string_view edge);
@@ -59,6 +72,7 @@ private:
   std::set<std::string, std::less<>> m_suppressed;
   std::set<std::string, std::less<>> m_pressed;
   unsigned m_modifiers = 0;
+  bool m_polling = false;
   bool m_configured = false;
   bool m_focused = true;
   bool m_menu_down = false;
