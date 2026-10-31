@@ -45,8 +45,31 @@ static constexpr auto X_None = None;
 #define HOST_NAME_MAX _POSIX_HOST_NAME_MAX
 #endif
 
+// Xlib defines Status as a macro; Orca uses it as a namespace.
+#undef Status
+
 namespace
 {
+// Embed mode: X errors seen so far (LogXError).
+std::atomic<int> s_x_errors{0};
+
+// Embed mode: an X error is logged instead of ending Orca. The app's window can go away between two
+// requests that name it, and Xlib's default handler would exit at once, without the protocol's
+// last line. A lost connection to the X server still ends the process (Xlib's I/O error handler).
+int LogXError(Display* display, XErrorEvent* event)
+{
+  // Once the app's window is gone, every frame and every mouse move can answer one: the log keeps
+  // the first 20, then one in a thousand.
+  const int count = s_x_errors.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (count > 20 && count % 1000 != 0)
+    return 0;
+  char text[160] = "";
+  XGetErrorText(display, event->error_code, text, sizeof(text));
+  std::fprintf(stderr, "Orca: X error %d (%s) on request %d.%d, resource 0x%lx (%d so far)\n",
+               event->error_code, text, event->request_code, event->minor_code,
+               static_cast<unsigned long>(event->resourceid), count);
+  return 0;
+}
 
 class PlatformX11 : public Platform
 {
