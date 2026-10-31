@@ -100,6 +100,18 @@ jobs:
           $testCmake = 'Source/UnitTests/CMakeLists.txt'
           $testSource = Get-Content -LiteralPath $testCmake -Raw
           Set-Content -LiteralPath $testCmake -Value ("add_compile_options(/bigobj)`n" + $testSource) -NoNewline -Encoding utf8
+          # Relocate test-only __FILE__ fixture lookups without changing test logic or line numbers.
+          # The signing supervisor runs from the extracted test root and creates the relative source-path directories.
+          $repo = (Get-Location).Path
+          foreach ($file in Get-ChildItem 'Source/UnitTests' -Recurse -Filter '*.cpp') {
+            $text = [IO.File]::ReadAllText($file.FullName)
+            if ($text.Contains('__FILE__')) {
+              if ($text -match '(?m)^\s*#line\b') { throw 'test already controls logical source paths; review relocation' }
+              $relative = [IO.Path]::GetRelativePath($repo,$file.FullName).Replace('\','/')
+              $directive = '#line 1 "' + $relative + '"' + "`n"
+              [IO.File]::WriteAllText($file.FullName, $directive + $text, (New-Object Text.UTF8Encoding($false)))
+            }
+          }
           # the Windows release helper's CMake switches, one for one.
           $switches = [ordered]@{
             ENABLE_QT = 'OFF'; ENABLE_NOGUI = 'ON'; USE_SYSTEM_LIBS = 'OFF'; ENCODE_FRAMEDUMPS = 'OFF'
@@ -204,6 +216,27 @@ jobs:
           Copy-Item 'build\release\x64\Binaries\Tests\tests.exe' "$tests\tests.exe"
           # Fixtures come directly from the checked-out source, never from the release program folder.
           Copy-Item -Recurse 'Data\Sys' "$tests\Sys"
+          # Source-relative fixtures are separate from the runtime Sys copy. The explicit files are read by
+          # Mod/Bundle/Ruleset(s)/EmbedMacTiming tests. External room fixtures stay disabled.
+          New-Item -ItemType Directory "$tests\Data" | Out-Null
+          Copy-Item -Recurse 'Data\Sys' "$tests\Data\Sys"
+          $fixtures = @(
+            'Tools/orca/mods/flat-sig-vector.json',
+            'Tools/orca/mods/sd-hash-vector.json',
+            'Tools/orca/mods/mod.schema.json',
+            'Tools/orca/mods/tree-hash-vector.json',
+            'Tools/orca/mods/ruleset-vectors.json',
+            'Tools/orca/mods/ruleset.schema.json',
+            'Source/Core/DolphinNoGUI/Orca-Info.plist.in',
+            'Source/Core/Core/Orca/Games/Brawl/Rulesets/brawl-supernova-2025.json',
+            'Source/Core/Core/Orca/Games/Brawl/Rulesets/brawl-supernova-2026.json',
+            'Source/Core/Core/Orca/Games/Brawl/Rulesets/pplus-2024.json'
+          )
+          foreach ($relative in $fixtures) {
+            $destination = Join-Path $tests $relative
+            New-Item -ItemType Directory -Force (Split-Path $destination -Parent) | Out-Null
+            Copy-Item -LiteralPath $relative -Destination $destination
+          }
           Copy-Item 'Tools\orca\ci-windows-test-filter.txt' "$tests\ci-windows-test-filter.txt"
           $filter = (Get-Content "$tests\ci-windows-test-filter.txt" -Raw).Trim()
           if (-not $filter -or $filter -match '[\r\n]' -or -not $filter.StartsWith('-')) { throw 'invalid pc2 gtest filter' }
