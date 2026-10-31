@@ -22,16 +22,23 @@ by the Dolphin project. Builds do not use Dolphin's name or logo.
 
 No disc images, NAND dumps or save data belong in this repository.
 
-## Public mirror (yg-dolphin): protected main, no admin bypass
+## Public mirror (yg-dolphin): protected main and recorded approval
 
-Since 2026-10-31 the public `yougame-co/yg-dolphin` main is branch-protected with `enforce_admins` on (yougame-lead's
-OK, app channel): one approving review, stale reviews dismissed, no force-push, no deletion, and admins can't bypass
-it. Why: pack-platform signs a CI-built Windows Orca only if it comes from a run on main at a reviewed PR merge
-(their conditions #37321/#38852; `staging-0397/pc2-ci/verify-ci-windows.py` refuses anything else). So
+Since 2026-10-31 the public `yougame-co/yg-dolphin` main is branch-protected: one approving review, stale reviews
+dismissed, no force-push, and no deletion. `enforce_admins` is **OFF** until a second reviewer identity exists
+(a GitHub App is Luis's item). Every agent currently shares one GitHub identity, so GitHub cannot record another
+agent's approval of a PR authored by that identity. Yougame-lead chose this interim arrangement (#40073).
+
+Until then, pack-platform records its approval outside GitHub in a SHA-bound file under
+`notes/lead-records/pack-platform/orca-approvals/<repo>-pr<N>-<head8>.approval.json`, together with the hashed review
+file. The approval must bind the PR's final head SHA, name a reviewer different from the author, and record an
+APPROVE verdict. The reviewer merges, including the review mail number in the PR's merge body (#40076/#40080).
+Pack-platform signs a CI-built Windows Orca only from a run on main at a reviewed PR merge (conditions
+#37321/#38852; `staging-0397/pc2-ci/verify-ci-windows.py` verifies the approval evidence).
 `Tools/orca-publish-public.sh` opens a `release/<version>` PR instead of pushing main, and tags only after the
-merge. **Escape hatch for a prod-down Orca hotfix:** the same path, PR plus any other agent's approval, then merge.
-There is no admin bypass, even in an emergency. Turning `enforce_admins` off again is a repo-setting change that needs
-yougame-lead's (or Luis's) OK.
+merge. **Prod-down Orca hotfix:** the same PR path plus another agent's recorded approval; the reviewer merges.
+The technical admin bypass remains available while `enforce_admins` is off, but it does not replace the required
+recorded approval.
 
 ## Release checklist
 
