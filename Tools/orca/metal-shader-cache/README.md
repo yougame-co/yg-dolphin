@@ -1,17 +1,17 @@
 # Metal shader-cache comparison on macOS
 
-Run an uninstrumented BASE and candidate Orca.app with Brawl USA Rev 2, isolated users and Apple compiler-cache namespaces. No installation, signing, screen capture, online room or credential is needed. Requires existing Python 3, Node, macOS tools and the project's resource scheduler.
+Run an uninstrumented BASE and candidate Orca.app with Brawl USA Rev 2, isolated users and Apple compiler-cache namespaces. No installation, signing, screen capture, online room or credential is needed. Requires existing Python 3, Node, macOS tools and the run queue.
 
 ```sh
 python3 Tools/orca/metal-shader-cache/run.py \
   --root /Volumes/YGWorktrees/repro/shader-cache-unique \
   --base-app /path/to/base/Orca.app --new-app /path/to/new/Orca.app \
   --disc /path/to/Brawl-rev2.wbfs \
-  --heavy-slot /path/to/heavy-slot.sh \
-  --gate /path/to/benchmark-gate.sh --yield-script /path/to/luis-yield.sh
+  --heavy-slot /path/to/run-queue.sh \
+  --gate /path/to/benchmark-gate.sh --yield-script /path/to/owner-status.sh
 ```
 
-The root must be new. The runner copies apps, clones the source disc read-only, disables Discord/analytics/audio, and prepares empty caches. It keeps each arm's caches through one cold and three warm launches, ordered BASE, NEW, NEW, BASE, BASE, NEW, NEW, BASE. Every launch queues `--pool gpu --game --prio 3 --mac-idle 600 --label orca:metal-shaderbin` and then runs the supplied gate immediately before spawning. The gate must fail closed unless idle >=600 seconds, unlocked, Luis not playing, load <20 and free memory >20%. The runner stops after three hours, preserving all evidence. `luis-yield.sh status` must say `Luis is not playing`; it is rechecked during play.
+The root must be new. The runner copies apps, clones the source disc read-only, disables Discord/analytics/audio, and prepares empty caches. It keeps each arm's caches through one cold and three warm launches, ordered BASE, NEW, NEW, BASE, BASE, NEW, NEW, BASE. Every launch queues `--pool gpu --game --prio 3 --mac-idle 600 --label orca:metal-shaderbin` and then runs the supplied gate immediately before spawning. The gate must fail closed unless idle >=600 seconds, unlocked, the machine's owner inactive, load <20 and free memory >20%. The runner stops after three hours, preserving all evidence. The supplied owner-status script must report that the machine's owner is inactive using the run queue's existing status protocol; it is rechecked during play.
 
 The existing `inputs/bf-cpu-loop.txt` scene script, its recorded SHA256, canonical session NAND and `ORCA_TEST_RNG_SEED=0x03981031` fix the game sequence. `ORCA_TEST_DEV_GAME=1` permits that existing test knob. Read-only guest probes capture the stage, all four character/type slots and RNG at match offsets 30 and 600. Every later launch must match BASE cold's roster/stage and both RNG snapshots or the run fails. Probe files and hashes remain available to inspect the full initialization structure too.
 
