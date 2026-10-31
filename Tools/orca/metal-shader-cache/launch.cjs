@@ -1,4 +1,4 @@
-// Run by heavy-slot, one process per launch. Environment is an explicit nonsecret allowlist.
+// Run by the run queue, one process per launch. Environment is an explicit nonsecret allowlist.
 const fs=require('fs'), path=require('path'), cp=require('child_process');
 const root=process.env.ORCA_BENCH_ROOT;
 if(!root||!process.env.ORCA_BENCH_GATE||!process.env.ORCA_BENCH_YIELD)throw Error('runner environment missing');
