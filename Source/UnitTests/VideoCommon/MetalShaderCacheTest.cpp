@@ -89,7 +89,9 @@ TEST(MetalShaderCache, DiskLimitsAndMalformedRecordFallBack)
   EXPECT_EQ(reader.reads, 0u);
   disk.Close();
   EXPECT_EQ(disk.OpenAndRead(path, reader, 16, 1), 0u);  // excessive file size recreates header
-  disk.Append(7, data.data(), data.size());
+  disk.Close();
+  EXPECT_EQ(disk.OpenAndRead(path, reader, 16, 1024), 0u);
+  ASSERT_TRUE(disk.Append(7, data.data(), data.size()));
   disk.Close();
   EXPECT_EQ(disk.OpenAndRead(path, reader, 16, 1024), 1u);
   EXPECT_EQ(reader.reads, 1u);
@@ -107,6 +109,122 @@ TEST(MetalShaderCache, DiskLimitsAndMalformedRecordFallBack)
   disk.Close();
   File::DeleteDirRecursively(dir);
 }
+// Use real file I/O except for a deterministic one-shot append/flush failure.
+struct FailingCacheFile : File::IOFile
+{
+  static inline int writes_until_failure = -1;
+  static inline bool fail_flush = false;
+  static inline u32 write_calls = 0;
+  static inline u32 flush_calls = 0;
+
+  template <typename T>
+  bool WriteArray(const T* values, size_t count)
+  {
+    ++write_calls;
+    if (writes_until_failure == 0)
+    {
+      writes_until_failure = -1;
+      // Leave a partial record, just as a short write would.
+      File::IOFile::WriteArray(values, count / 2);
+      return false;
+    }
+    if (writes_until_failure > 0)
+      --writes_until_failure;
+    return File::IOFile::WriteArray(values, count);
+  }
+
+  bool Flush()
+  {
+    ++flush_calls;
+    if (fail_flush)
+    {
+      fail_flush = false;
+      return false;
+    }
+    return File::IOFile::Flush();
+  }
+};
+
+TEST(MetalShaderCache, CapReachedMidSessionDisablesEvenSmallerAppends)
+{
+  const auto dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  const auto path = dir + "/shader.cache";
+  Common::LinearDiskCache<u32, u8> disk;
+  Reader reader;
+  disk.OpenAndRead(path, reader);
+  ASSERT_TRUE(disk.Sync());
+  const auto header_size = File::GetSize(path);
+  disk.Close();
+  const std::array<u8, 4> data = {1, 2, 3, 4};
+  const u64 record_size = 3 * sizeof(u32) + data.size();
+  const u64 cap = header_size + 2 * record_size + 3 * sizeof(u32);
+  disk.OpenAndRead(path, reader, 16, cap);
+  ASSERT_TRUE(disk.Append(1, data.data(), data.size()));
+  ASSERT_TRUE(disk.Append(2, data.data(), data.size()));
+  EXPECT_FALSE(disk.Append(3, data.data(), data.size()));
+  EXPECT_FALSE(disk.Append(4, data.data(), 0));  // would fit, but persistence stays disabled
+  disk.Close();
+  EXPECT_EQ(File::GetSize(path), header_size + 2 * record_size);
+  EXPECT_EQ(disk.OpenAndRead(path, reader, 16, cap), 2u);
+  EXPECT_EQ(reader.reads, 2u);
+  disk.Close();
+  File::DeleteDirRecursively(dir);
+}
+
+TEST(MetalShaderCache, WriteFailureStopsWithoutRetryAndKeepsLoadedEntries)
+{
+  const auto dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  const auto path = dir + "/shader.cache";
+  Common::LinearDiskCache<u32, u8, FailingCacheFile> disk;
+  Reader reader;
+  const std::array<u8, 4> data = {1, 2, 3, 4};
+  disk.OpenAndRead(path, reader);
+  ASSERT_TRUE(disk.Append(1, data.data(), data.size()));
+  disk.Close();
+  ASSERT_EQ(disk.OpenAndRead(path, reader), 1u);
+  ASSERT_EQ(reader.reads, 1u);
+  FailingCacheFile::writes_until_failure = 2;  // length and key succeed, payload is short
+  EXPECT_FALSE(disk.Append(2, data.data(), data.size()));
+  const u32 calls = FailingCacheFile::write_calls;
+  const u32 flushes = FailingCacheFile::flush_calls;
+  EXPECT_FALSE(disk.Append(3, data.data(), data.size()));
+  EXPECT_FALSE(disk.Sync());
+  EXPECT_EQ(FailingCacheFile::write_calls, calls);
+  EXPECT_EQ(FailingCacheFile::flush_calls, flushes);
+  EXPECT_EQ(reader.reads, 1u);
+  disk.Close();
+  EXPECT_EQ(disk.OpenAndRead(path, reader), 1u);  // partial tail was never extended
+  disk.Close();
+  File::DeleteDirRecursively(dir);
+}
+
+TEST(MetalShaderCache, FlushFailureStopsWithoutRetry)
+{
+  const auto dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  const auto path = dir + "/shader.cache";
+  Common::LinearDiskCache<u32, u8, FailingCacheFile> disk;
+  Reader reader;
+  disk.OpenAndRead(path, reader);
+  const std::array<u8, 1> data = {1};
+  ASSERT_TRUE(disk.Append(1, data.data(), data.size()));
+  FailingCacheFile::fail_flush = true;
+  EXPECT_FALSE(disk.Sync());
+  const u32 calls = FailingCacheFile::write_calls;
+  const u32 flushes = FailingCacheFile::flush_calls;
+  EXPECT_FALSE(disk.Append(2, data.data(), data.size()));
+  EXPECT_FALSE(disk.Sync());
+  EXPECT_EQ(FailingCacheFile::write_calls, calls);
+  EXPECT_EQ(FailingCacheFile::flush_calls, flushes);
+  disk.Close();
+  EXPECT_EQ(disk.OpenAndRead(path, reader), 1u);
+  EXPECT_EQ(reader.reads, 1u);
+  disk.Close();
+  File::DeleteDirRecursively(dir);
+}
+
 TEST(MetalShaderCache, DiskHeaderMismatchAndTruncatedWideValueAreMisses)
 {
   const auto dir = File::CreateTempDir();
