@@ -15,16 +15,20 @@ static constexpr auto X_None = None;
 #include "Common/MsgHandler.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
+#include "Core/Orca/Status.h"
 #include "Core/State.h"
 #include "Core/System.h"
+#include "InputCommon/Shortcuts.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <thread>
 
+#include <X11/XKBlib.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -42,6 +46,37 @@ static constexpr auto X_None = None;
 
 namespace
 {
+std::string ShortcutKey(KeySym key)
+{
+  if (key >= XK_a && key <= XK_z)
+    return std::string(1, static_cast<char>('A' + key - XK_a));
+  if (key >= XK_A && key <= XK_Z)
+    return std::string(1, static_cast<char>(key));
+  if (key >= XK_F1 && key <= XK_F12)
+    return "F" + std::to_string(key - XK_F1 + 1);
+  switch (key)
+  {
+  case XK_Tab:
+  case XK_ISO_Left_Tab:
+    return "Tab";
+  case XK_Return:
+    return "Enter";
+  case XK_grave:
+    return "Backquote";
+  case XK_Shift_L:
+  case XK_Shift_R:
+    return "Shift";
+  case XK_Control_L:
+  case XK_Control_R:
+    return "Ctrl";
+  case XK_Alt_L:
+  case XK_Alt_R:
+    return "Alt";
+  default:
+    return {};
+  }
+}
+
 // Embed mode: X errors seen so far (LogXError).
 std::atomic<int> s_x_errors{0};
 
@@ -86,6 +121,7 @@ private:
   void UpdateWindowPosition();
   void ProcessEvents();
   void ProcessEmbeddedEvent(const XEvent& event);
+  std::set<KeySym> m_modifier_keys;
   bool AppHasFocus();
   void UpdateAppState();
   void UpdateEmbedFocus();
@@ -151,16 +187,22 @@ bool PlatformX11::Init()
     return false;
   }
 
+  Bool detectable = False;
+  XkbSetDetectableAutoRepeat(m_display, True, &detectable);
   if (IsEmbedded())
   {
     if (InitEmbedded())
+    {
+      Orca::Status::SetShortcutsAvailable(true);
       return true;
+    }
     // The embed attempt failed: retain this display and open our own window below.
   }
 
   m_window = XCreateSimpleWindow(m_display, DefaultRootWindow(m_display), m_window_x, m_window_y,
                                  m_window_width, m_window_height, 0, 0, BlackPixel(m_display, 0));
-  XSelectInput(m_display, m_window, StructureNotifyMask | KeyPressMask | FocusChangeMask);
+  XSelectInput(m_display, m_window,
+               StructureNotifyMask | KeyPressMask | KeyReleaseMask | FocusChangeMask);
   Atom wmProtocols[1];
   wmProtocols[0] = XInternAtom(m_display, "WM_DELETE_WINDOW", True);
   XSetWMProtocols(m_display, m_window, wmProtocols, 1);
@@ -209,6 +251,7 @@ bool PlatformX11::Init()
   }
 
   UpdateWindowPosition();
+  Orca::Status::SetShortcutsAvailable(true);
   return true;
 }
 
@@ -267,9 +310,10 @@ bool PlatformX11::InitEmbedded()
   if (XShapeQueryExtension(m_display, &shape_event, &shape_error))
     XShapeCombineRectangles(m_display, m_window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, Unsorted);
 #endif
-  // Only the structure of Orca's window: no keys and no mouse, so every press goes up the tree to
-  // the app's window. Dolphin's GL context selects the same on it.
-  XSelectInput(m_display, m_window, StructureNotifyMask);
+  // Keyboard events belong only to Orca's own window. The app normally retains focus;
+  // if it gives the child focus, classify its shortcut events here as on Windows/macOS.
+  XSelectInput(m_display, m_window,
+               StructureNotifyMask | KeyPressMask | KeyReleaseMask | FocusChangeMask);
   // The app's window: whether it has the keyboard, whether it is mapped, and its end. Any number of
   // clients may watch a window's structure and focus.
   XSelectInput(m_display, m_parent, StructureNotifyMask | FocusChangeMask);
@@ -411,13 +455,13 @@ void PlatformX11::EmbedSetFocus(bool focus)
 void PlatformX11::UpdateEmbedFocus()
 {
   XWindowAttributes own{};
-  if (!EmbedResultDecided() && m_embed_visible &&
-      XGetWindowAttributes(m_display, m_window, &own) &&
+  if (!EmbedResultDecided() && m_embed_visible && XGetWindowAttributes(m_display, m_window, &own) &&
       own.map_state == IsViewable)
   {
     EmbedSucceeded();
   }
   m_window_focus = m_embed_visible && m_embed_focus && m_app_focused && m_app_viewable;
+  InputCommon::Shortcuts::Get().SetFocus(m_window_focus);
 }
 
 // What the server says about the app's window now: whether it is viewable and has the keyboard.
@@ -495,6 +539,75 @@ void PlatformX11::ProcessEvents()
   while (XPending(m_display) > 0)
   {
     XNextEvent(m_display, &event);
+    if (event.xany.window == m_window && (event.type == KeyPress || event.type == KeyRelease))
+    {
+      // Traditional X repeat synthesizes release/press with identical timestamp. Keep the
+      // original hold alive even when detectable repeat is unavailable on this server.
+      if (event.type == KeyRelease && XPending(m_display))
+      {
+        XEvent next;
+        XPeekEvent(m_display, &next);
+        if (next.type == KeyPress && next.xkey.keycode == event.xkey.keycode &&
+            next.xkey.time == event.xkey.time)
+          continue;
+      }
+      const auto name = ShortcutKey(XLookupKeysym(&event.xkey, 0));
+      unsigned mods = ((event.xkey.state & ShiftMask) ? InputCommon::Shortcuts::Shift : 0u) |
+                      ((event.xkey.state & ControlMask) ? InputCommon::Shortcuts::Ctrl : 0u) |
+                      ((event.xkey.state & Mod1Mask) ? InputCommon::Shortcuts::Alt : 0u) |
+                      ((event.xkey.state & Mod4Mask) ? 8u : 0u);
+      const auto symbol = XLookupKeysym(&event.xkey, 0);
+      const bool meta = symbol == XK_Super_L || symbol == XK_Super_R || symbol == XK_Meta_L ||
+                        symbol == XK_Meta_R;
+      if (meta)
+      {
+        if (event.type == KeyPress)
+          m_modifier_keys.insert(symbol);
+        else
+          m_modifier_keys.erase(symbol);
+        const bool held =
+            m_modifier_keys.contains(XK_Super_L) || m_modifier_keys.contains(XK_Super_R) ||
+            m_modifier_keys.contains(XK_Meta_L) || m_modifier_keys.contains(XK_Meta_R);
+        if (held)
+          mods |= 8u;
+        else
+          mods &= ~8u;
+      }
+      const bool modifier = name == "Shift" || name == "Ctrl" || name == "Alt";
+      if (modifier)
+      {
+        if (event.type == KeyPress)
+          m_modifier_keys.insert(symbol);
+        else
+          m_modifier_keys.erase(symbol);
+        const bool held =
+            name == "Shift" ?
+                (m_modifier_keys.contains(XK_Shift_L) || m_modifier_keys.contains(XK_Shift_R)) :
+            name == "Ctrl" ?
+                (m_modifier_keys.contains(XK_Control_L) || m_modifier_keys.contains(XK_Control_R)) :
+                (m_modifier_keys.contains(XK_Alt_L) || m_modifier_keys.contains(XK_Alt_R));
+        const unsigned bit = name == "Shift" ? InputCommon::Shortcuts::Shift :
+                             name == "Ctrl"  ? InputCommon::Shortcuts::Ctrl :
+                                               InputCommon::Shortcuts::Alt;
+        if (held)
+          mods |= bit;
+        else
+          mods &= ~bit;
+      }
+      const bool aggregate_down = name == "Shift" ? bool(mods & InputCommon::Shortcuts::Shift) :
+                                  name == "Ctrl"  ? bool(mods & InputCommon::Shortcuts::Ctrl) :
+                                  name == "Alt"   ? bool(mods & InputCommon::Shortcuts::Alt) :
+                                                    event.type == KeyPress;
+      if (InputCommon::Shortcuts::Get().KeyEvent(name, mods, aggregate_down))
+        continue;
+    }
+    if (event.xany.window == m_window && event.type == FocusOut)
+    {
+      m_modifier_keys.clear();
+      InputCommon::Shortcuts::Get().FocusLost();
+    }
+    else if (event.xany.window == m_window && event.type == FocusIn)
+      InputCommon::Shortcuts::Get().SetFocus(IsEmbedded() ? IsWindowFocused() : true);
     if (IsEmbedded())
     {
       ProcessEmbeddedEvent(event);

@@ -19,10 +19,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <dwmapi.h>
+#include <set>
 #include <string>
 #include <string_view>
 #include <windowsx.h>
 
+#include "InputCommon/Shortcuts.h"
 #include "VideoCommon/Present.h"
 #include "resource.h"
 
@@ -42,6 +44,37 @@ void OutKey(std::string_view line)
 {
   if (!line.empty())
     Embed::Out(std::string(line));
+}
+
+std::string ShortcutKey(WPARAM key)
+{
+  if (key >= 'A' && key <= 'Z')
+    return std::string(1, static_cast<char>(key));
+  if (key >= VK_F1 && key <= VK_F12)
+    return "F" + std::to_string(key - VK_F1 + 1);
+  switch (key)
+  {
+  case VK_TAB:
+    return "Tab";
+  case VK_RETURN:
+    return "Enter";
+  case VK_OEM_3:
+    return "Backquote";
+  case VK_SHIFT:
+  case VK_LSHIFT:
+  case VK_RSHIFT:
+    return "Shift";
+  case VK_CONTROL:
+  case VK_LCONTROL:
+  case VK_RCONTROL:
+    return "Ctrl";
+  case VK_MENU:
+  case VK_LMENU:
+  case VK_RMENU:
+    return "Alt";
+  default:
+    return {};
+  }
 }
 
 class PlatformWin32 final : public Platform
@@ -86,6 +119,7 @@ private:
   bool m_shift_down = false;
   bool m_control_down = false;
   bool m_alt_down = false;
+  std::set<WPARAM> m_modifier_keys;
 
   int m_window_x = Config::Get(Config::MAIN_RENDER_WINDOW_XPOS);
   int m_window_y = Config::Get(Config::MAIN_RENDER_WINDOW_YPOS);
@@ -142,8 +176,8 @@ bool PlatformWin32::CreateAdoptedWindow()
   // launcher's SetParent keeps a window's coordinates as they are and reads them in the parent's
   // client area, so the window lands at its rect even when SetParent's own move comes after ours.
   m_hwnd = CreateWindowEx(WS_EX_NOPARENTNOTIFY | WS_EX_TOOLWINDOW, WINDOW_CLASS_NAME, _T("Orca"),
-                          WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, r.x, r.y, r.w, r.h,
-                          nullptr, nullptr, GetModuleHandle(nullptr), this);
+                          WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, r.x, r.y, r.w, r.h, nullptr,
+                          nullptr, GetModuleHandle(nullptr), this);
   if (!m_hwnd)
   {
     fprintf(stderr, "Orca: CreateWindowEx for adoption failed (%lu)\n", GetLastError());
@@ -232,8 +266,8 @@ bool PlatformWin32::CreateRenderWindow()
   }
 
   // Standalone: the caption is the name players see (the embedded windows above keep "Orca").
-  m_hwnd = CreateWindowEx(WS_EX_CLIENTEDGE, WINDOW_CLASS_NAME, _T("YG Dolphin"), WS_OVERLAPPEDWINDOW,
-                          m_window_x < 0 ? CW_USEDEFAULT : m_window_x,
+  m_hwnd = CreateWindowEx(WS_EX_CLIENTEDGE, WINDOW_CLASS_NAME, _T("YG Dolphin"),
+                          WS_OVERLAPPEDWINDOW, m_window_x < 0 ? CW_USEDEFAULT : m_window_x,
                           m_window_y < 0 ? CW_USEDEFAULT : m_window_y, m_window_width,
                           m_window_height, nullptr, nullptr, GetModuleHandle(nullptr), this);
   if (!m_hwnd)
@@ -256,6 +290,7 @@ bool PlatformWin32::Init()
 
   if (!RegisterRenderWindowClass(IsEmbedded()) || !CreateRenderWindow())
     return false;
+  Orca::Status::SetShortcutsAvailable(true);
   if (IsEmbedded())
     return true;
 
@@ -400,6 +435,9 @@ void PlatformWin32::UpdateEmbedFocus()
     EmbedSucceeded();
   const HWND root = GetAncestor(m_hwnd, GA_ROOT);
   m_window_focus = m_embed_visible && m_embed_focus && root && GetForegroundWindow() == root;
+  InputCommon::Shortcuts::Get().SetFocus(m_window_focus);
+  if (!m_window_focus)
+    m_modifier_keys.clear();
 }
 
 void PlatformWin32::ProcessEvents()
@@ -425,22 +463,53 @@ void PlatformWin32::ProcessEvents()
                        GetClientRect(m_hwnd, &client) && client.right > client.left &&
                        client.bottom > client.top;
   VideoCommon::Presenter::SetSurfaceVisible(visible);
+  InputCommon::Shortcuts::Get().SetFocus(IsWindowFocused() && visible);
 }
 
 LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wParam,
                                const LPARAM lParam)
 {
   PlatformWin32* platform = reinterpret_cast<PlatformWin32*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-  if (platform && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP ||
-                   msg == WM_SYSKEYUP))
+  if (platform &&
+      (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP))
   {
     const bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-    switch (wParam)
+    WPARAM side = wParam;
+    if (side == VK_SHIFT)
+      side = ((lParam >> 16) & 0xff) == 0x36 ? VK_RSHIFT : VK_LSHIFT;
+    else if (side == VK_CONTROL)
+      side = (lParam & (1 << 24)) ? VK_RCONTROL : VK_LCONTROL;
+    else if (side == VK_MENU)
+      side = (lParam & (1 << 24)) ? VK_RMENU : VK_LMENU;
+    const bool modifier = side == VK_LSHIFT || side == VK_RSHIFT || side == VK_LCONTROL ||
+                          side == VK_RCONTROL || side == VK_LMENU || side == VK_RMENU ||
+                          side == VK_LWIN || side == VK_RWIN;
+    if (modifier)
     {
-    case VK_SHIFT: platform->m_shift_down = down; break;
-    case VK_CONTROL: platform->m_control_down = down; break;
-    case VK_MENU: platform->m_alt_down = down; break;
+      if (down)
+        platform->m_modifier_keys.insert(side);
+      else
+        platform->m_modifier_keys.erase(side);
     }
+    const auto held = [&](WPARAM left, WPARAM right) {
+      return platform->m_modifier_keys.contains(left) || platform->m_modifier_keys.contains(right);
+    };
+    platform->m_shift_down = held(VK_LSHIFT, VK_RSHIFT);
+    platform->m_control_down = held(VK_LCONTROL, VK_RCONTROL);
+    platform->m_alt_down = held(VK_LMENU, VK_RMENU);
+    auto& shortcuts = InputCommon::Shortcuts::Get();
+    shortcuts.SetFocus(platform->IsWindowFocused());
+    const unsigned mods = (platform->m_shift_down ? InputCommon::Shortcuts::Shift : 0u) |
+                          (platform->m_control_down ? InputCommon::Shortcuts::Ctrl : 0u) |
+                          (platform->m_alt_down ? InputCommon::Shortcuts::Alt : 0u) |
+                          (held(VK_LWIN, VK_RWIN) ? 8u : 0u);
+    const auto key = ShortcutKey(wParam);
+    const bool aggregate_down = key == "Shift" ? platform->m_shift_down :
+                                key == "Ctrl"  ? platform->m_control_down :
+                                key == "Alt"   ? platform->m_alt_down :
+                                                 down;
+    if (shortcuts.KeyEvent(key, mods, aggregate_down, down && (lParam & (1 << 30))))
+      return 0;
   }
   switch (msg)
   {
@@ -479,9 +548,10 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
         return 0;
     }
     // Keep the same press/release semantics for the page, with or without a native window.
-    if ((platform->IsEmbedded() || Orca::UX::YgOrb::HostEnabled()) &&
-        !(lParam & (1 << 30)) && wParam == VK_TAB && platform->m_shift_down &&
-        !platform->m_control_down && !platform->m_alt_down)
+    if (!InputCommon::Shortcuts::Get().Configured() &&
+        (platform->IsEmbedded() || Orca::UX::YgOrb::HostEnabled()) && !(lParam & (1 << 30)) &&
+        wParam == VK_TAB && platform->m_shift_down && !platform->m_control_down &&
+        !platform->m_alt_down)
     {
       Orca::UX::OverlayKey::Emit(
           Orca::UX::OverlayKey::Keys().Down(Orca::Status::Cap(Orca::Status::TALK_CAP)),
@@ -512,20 +582,31 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
   case WM_KEYUP:
     if (platform && (wParam == VK_TAB || wParam == VK_SHIFT))
       Orca::UX::OverlayKey::Emit(Orca::UX::OverlayKey::Keys().Up(),
-                               platform->IsEmbedded() ? OutKey : nullptr);
+                                 platform->IsEmbedded() ? OutKey : nullptr);
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
   // The keyboard went elsewhere, so a Shift+Tab press still down never sees its key-up here.
-  case WM_KILLFOCUS:
+  case WM_SETFOCUS:
     if (platform)
     {
+      platform->m_window_focus = true;
+      InputCommon::Shortcuts::Get().SetFocus(true);
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+
+  case WM_KILLFOCUS:
+    InputCommon::Shortcuts::Get().FocusLost();
+    if (platform)
+    {
+      platform->m_window_focus = false;
+      platform->m_modifier_keys.clear();
       platform->m_shift_down = false;
       platform->m_control_down = false;
       platform->m_alt_down = false;
     }
     if (platform)
       Orca::UX::OverlayKey::Emit(Orca::UX::OverlayKey::Keys().Cancel(),
-                               platform->IsEmbedded() ? OutKey : nullptr);
+                                 platform->IsEmbedded() ? OutKey : nullptr);
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
   // When embedded, Alt and F10 are game keys, so don't let them open the app's window menu.
@@ -560,8 +641,8 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
                                              static_cast<float>(GET_Y_LPARAM(lParam)), true);
     if (msg == WM_LBUTTONDOWN &&
         Orca::UX::YgOrb::ClickControls(static_cast<float>(GET_X_LPARAM(lParam)),
-                                      static_cast<float>(GET_Y_LPARAM(lParam)),
-                                      platform && platform->IsEmbedded() ? OutKey : nullptr))
+                                       static_cast<float>(GET_Y_LPARAM(lParam)),
+                                       platform && platform->IsEmbedded() ? OutKey : nullptr))
       return 0;
     if (platform && platform->IsEmbedded())
     {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "InputCommon/ControlReference/ExpressionParser.h"
+#include "InputCommon/Shortcuts.h"
 
 #include <algorithm>
 #include <cassert>
@@ -296,6 +297,42 @@ public:
   {
     if (!m_input)
       return 0.0;
+
+    // For negotiated shortcuts, window events are the keyboard authority. Reading raw HID
+    // first could expose Enter/Start to the CPU before its shortcut event reaches the UI thread.
+    if (m_device)
+    {
+      const auto source = m_device->GetSource();
+      const bool keyboard =
+          source == "Quartz" || source == "XInput2" ||
+          (source == "DInput" && m_device->GetName() == "Keyboard Mouse") ||
+          (source == "evdev" && m_device->FindInput("ENTER") && m_device->FindInput("LEFTSHIFT"));
+      if (keyboard)
+      {
+        std::string key = m_input->GetName();
+        if (key == "Return" || key == "RETURN" || key == "ENTER")
+          key = "Enter";
+        else if (key == "TAB")
+          key = "Tab";
+        else if (key == "Tilde" || key == "GRAVE" || key == "grave")
+          key = "Backquote";
+        else if (key == "LSHIFT" || key == "RSHIFT" || key == "Shift_L" || key == "Shift_R" ||
+                 key == "Right Shift" || key == "Left Shift" || key == "LEFTSHIFT" ||
+                 key == "RIGHTSHIFT")
+          key = "Shift";
+        else if (key == "LCONTROL" || key == "RCONTROL" || key == "Control_L" ||
+                 key == "Control_R" || key == "Right Ctrl" || key == "Left Control" ||
+                 key == "Right Control" || key == "LEFTCTRL" || key == "RIGHTCTRL")
+          key = "Ctrl";
+        else if (key == "LMENU" || key == "RMENU" || key == "Alt_L" || key == "Alt_R" ||
+                 key == "Right Alt" || key == "Left Alt" || key == "LEFTALT" || key == "RIGHTALT")
+          key = "Alt";
+        else if (key.size() == 1 && key[0] >= 'a' && key[0] <= 'z')
+          key[0] -= 'a' - 'A';
+        if (const auto state = InputCommon::Shortcuts::Get().GetWindowKeyState(key))
+          return *state ? std::max(0.0, m_input->GetState()) : 0.0;
+      }
+    }
 
     // Note: Inputs may return negative values in situations where opposing directions are
     // activated. We clamp off the negative values here.
