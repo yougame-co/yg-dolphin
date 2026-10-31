@@ -2,8 +2,8 @@
 # pull_request, never a required check, so it cannot block a merge (YouGame's "no CI" rule is about the YouGame repo).
 #
 # What it makes: YG Dolphin.app, UNSIGNED, through Tools/orca-package-macos.sh with no signing credentials (the script
-# then leaves the linker's ad-hoc signature and names the zip *-unsigned.zip), plus the unit tests' results from a
-# second job. Developer ID signing, notarization and stapling stay on the Mac (the certificate never comes here).
+# then leaves the linker's ad-hoc signature and names the zip *-unsigned.zip). The Mac release kit runs the full
+# unit suite. Developer ID signing, notarization and stapling stay on the Mac (the certificate never comes here).
 #
 # No secrets: the program embeds only the PUBLIC flat-bundle key for the flavor. No game files: the frame-for-frame
 # check (a hashlog against the kit) runs afterwards on a Mac with the disc.
@@ -119,67 +119,3 @@ jobs:
             ${{ runner.temp }}/out/SHA256SUMS
           retention-days: 14
           if-no-files-found: error
-
-  unit-tests:
-    # The package script builds with ENABLE_TESTS=OFF; the unit tests get their own build, in parallel.
-    runs-on: macos-26
-    timeout-minutes: 150
-    defaults:
-      run:
-        shell: bash # runs as bash -eo pipefail: a failing command before a pipe fails the step
-    steps:
-      - name: Check the inputs
-        env:
-          COMMIT: ${{ inputs.commit }}
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
-        run: |
-          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be a full 40-hex sha"; exit 1; }
-          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "source_commit must be a full 40-hex sha"; exit 1; }
-
-      - name: Check out the release commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, pinned 2026-10-24
-        with:
-          ref: ${{ inputs.commit }}
-          fetch-depth: 1
-          submodules: false
-          persist-credentials: false
-
-      - name: Submodules (all but Qt and FFmpeg-bin)
-        run: |
-          for m in $(git config -f .gitmodules --get-regexp '\.path$' | awk '{print $2}'); do
-            case "$m" in Externals/Qt|Externals/FFmpeg-bin) continue ;; esac
-            git submodule update --init --recursive --depth 1 -- "$m" || git submodule update --init --recursive -- "$m"
-          done
-
-      - name: Build and run the unit tests
-        env:
-          ORCA_SOURCE_COMMIT: ${{ inputs.source_commit }}
-        run: |
-          brew list ninja >/dev/null 2>&1 || brew install ninja
-          cmake -S . -B "$RUNNER_TEMP/tests" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DENABLE_QT=OFF -DENABLE_NOGUI=ON -DUSE_SYSTEM_LIBS=OFF -DENABLE_TESTS=ON -DENABLE_ANALYTICS=OFF \
-            -DENABLE_AUTOUPDATE=OFF -DUSE_DISCORD_PRESENCE=OFF -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF \
-            -DENABLE_VULKAN=OFF -DENABLE_CLI_TOOL=OFF -DORCA_BUNDLE_TRUST_TEST_KEY=OFF
-          # unittests builds the tests and runs them through ctest (Source/UnitTests/CMakeLists.txt). One wall-clock
-          # network-delay test (OrcaDirectLink.TestDelayCoversTheLinkBothWays) failed on the hosted runner (2.7 s, runner load) while it passes
-          # in the Mac and PC kits: it is left out of the CI gate here and reported 3x in the next step.
-          GTEST_FILTER='-OrcaDirectLink.TestDelayCoversTheLinkBothWays' cmake --build "$RUNNER_TEMP/tests" --target unittests 2>&1 | tee "$RUNNER_TEMP/unit-tests.log"
-          exit "${PIPESTATUS[0]}"
-
-      - name: The wall-clock link-delay test, 3 runs (reported, not gating)
-        continue-on-error: true
-        run: |
-          BIN=$(find "$RUNNER_TEMP/tests" -path '*Tests/tests' -type f -perm -u+x | head -1)
-          [ -n "$BIN" ] || { echo "no tests binary"; exit 1; }
-          "$BIN" --gtest_filter='OrcaDirectLink.TestDelayCoversTheLinkBothWays' --gtest_repeat=3 2>&1 | tee "$RUNNER_TEMP/link-delay-test.log"
-          grep -E '\[ +(OK|FAILED) +\]' "$RUNNER_TEMP/link-delay-test.log" || true
-
-      - name: Upload the test results
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, pinned 2026-10-24
-        with:
-          name: yg-dolphin-${{ inputs.commit }}-macos-unit-tests
-          path: |
-            ${{ runner.temp }}/unit-tests.log
-            ${{ runner.temp }}/link-delay-test.log
-          retention-days: 14
