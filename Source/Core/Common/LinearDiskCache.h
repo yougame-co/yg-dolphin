@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -53,7 +54,9 @@ class LinearDiskCache
 {
 public:
   // return number of read entries
-  u32 OpenAndRead(const std::string& filename, LinearDiskCacheReader<K, V>& reader)
+  u32 OpenAndRead(const std::string& filename, LinearDiskCacheReader<K, V>& reader,
+                  u32 max_value_size = std::numeric_limits<u32>::max(),
+                  u64 max_file_size = std::numeric_limits<u64>::max())
   {
     // Since we're reading/writing directly to the storage of K instances,
     // K must be trivially copyable.
@@ -69,7 +72,7 @@ public:
     const u64 file_size = m_file.GetSize();
 
     m_header.Init();
-    if (m_file.IsOpen() && ValidateHeader())
+    if (m_file.IsOpen() && file_size <= max_file_size && ValidateHeader())
     {
       // good header, read some key/value pairs
       K key;
@@ -81,8 +84,10 @@ public:
 
       while (m_file.ReadArray(&value_size, 1))
       {
-        const u64 next_extent = m_file.Tell() + sizeof(value_size) + value_size;
-        if (next_extent > file_size)
+        // Validate the complete record before allocating: a damaged length must not request an
+        // unbounded allocation, or wrap the extent calculation for value types larger than u8.
+        const u64 bytes = sizeof(K) + u64{value_size} * sizeof(V) + sizeof(entry_number);
+        if (value_size > max_value_size || bytes > file_size - m_file.Tell())
           break;
 
         value = std::make_unique_for_overwrite<V[]>(value_size);

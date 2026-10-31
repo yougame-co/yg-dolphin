@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "VideoCommon/ShaderCache.h"
+#include "VideoCommon/ShaderCacheData.h"
+
+#include <limits>
 
 #include <algorithm>
 #include <chrono>
@@ -390,7 +393,16 @@ void ShaderCache::LoadShaderCache(T& cache, APIType api_type, const char* type, 
     CacheReader(T& cache_) : cache(cache_) {}
     void Read(const K& key, const u8* value, u32 value_size) override
     {
-      auto shader = g_gfx->CreateShaderFromBinary(stage, value, value_size);
+      std::span<const u8> binary(value, value_size);
+      if (g_backend_info.api_type == APIType::Metal)
+      {
+        const auto checked =
+            ShaderCacheData::Open({key.GetUidDataRaw(), key.GetUidDataSize()}, binary);
+        if (!checked)
+          return;
+        binary = *checked;
+      }
+      auto shader = g_gfx->CreateShaderFromBinary(stage, binary.data(), binary.size());
       if (shader)
       {
         auto& entry = cache.shader_map[key];
@@ -402,7 +414,8 @@ void ShaderCache::LoadShaderCache(T& cache, APIType api_type, const char* type, 
         case ShaderStage::Vertex:
           INCSTAT(g_stats.num_vertex_shaders_created);
 #ifdef _WIN32
-          Orca::GpuDiagnostics::ShaderCreated(false, std::is_same_v<K, UberShader::VertexShaderUid>);
+          Orca::GpuDiagnostics::ShaderCreated(false,
+                                              std::is_same_v<K, UberShader::VertexShaderUid>);
 #endif
           INCSTAT(g_stats.num_vertex_shaders_alive);
           break;
@@ -425,7 +438,12 @@ void ShaderCache::LoadShaderCache(T& cache, APIType api_type, const char* type, 
 
   std::string filename = GetDiskShaderCacheFileName(api_type, type, include_gameid, true);
   CacheReader reader(cache);
-  u32 count = cache.disk_cache.OpenAndRead(filename, reader);
+  const bool metal = api_type == APIType::Metal;
+  u32 count = cache.disk_cache.OpenAndRead(
+      filename, reader,
+      metal ? ShaderCacheData::MAX_PAYLOAD_SIZE + 2 * ShaderCacheData::Digest{}.size() :
+              std::numeric_limits<u32>::max(),
+      metal ? 256 * 1024 * 1024 : std::numeric_limits<u64>::max());
   INFO_LOG_FMT(VIDEO, "Loaded {} cached shaders from {}", count, filename);
 }
 
@@ -639,6 +657,8 @@ const AbstractShader* ShaderCache::InsertVertexShader(const VertexShaderUid& uid
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
     {
       auto binary = shader->GetBinary();
+      if (m_api_type == APIType::Metal && !binary.empty())
+        binary = ShaderCacheData::Seal({uid.GetUidDataRaw(), uid.GetUidDataSize()}, binary);
       if (!binary.empty())
         m_vs_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
     }
@@ -664,6 +684,8 @@ const AbstractShader* ShaderCache::InsertVertexUberShader(const UberShader::Vert
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
     {
       auto binary = shader->GetBinary();
+      if (m_api_type == APIType::Metal && !binary.empty())
+        binary = ShaderCacheData::Seal({uid.GetUidDataRaw(), uid.GetUidDataSize()}, binary);
       if (!binary.empty())
         m_uber_vs_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
     }
@@ -689,6 +711,8 @@ const AbstractShader* ShaderCache::InsertPixelShader(const PixelShaderUid& uid,
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
     {
       auto binary = shader->GetBinary();
+      if (m_api_type == APIType::Metal && !binary.empty())
+        binary = ShaderCacheData::Seal({uid.GetUidDataRaw(), uid.GetUidDataSize()}, binary);
       if (!binary.empty())
         m_ps_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
     }
@@ -714,6 +738,8 @@ const AbstractShader* ShaderCache::InsertPixelUberShader(const UberShader::Pixel
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
     {
       auto binary = shader->GetBinary();
+      if (m_api_type == APIType::Metal && !binary.empty())
+        binary = ShaderCacheData::Seal({uid.GetUidDataRaw(), uid.GetUidDataSize()}, binary);
       if (!binary.empty())
         m_uber_ps_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
     }
@@ -744,6 +770,8 @@ const AbstractShader* ShaderCache::CreateGeometryShader(const GeometryShaderUid&
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
     {
       auto binary = shader->GetBinary();
+      if (m_api_type == APIType::Metal && !binary.empty())
+        binary = ShaderCacheData::Seal({uid.GetUidDataRaw(), uid.GetUidDataSize()}, binary);
       if (!binary.empty())
         m_gs_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
     }
