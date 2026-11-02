@@ -90,26 +90,14 @@ std::optional<Identity> Identify(const std::string& path, std::string* reason)
     return std::nullopt;
   };
   std::error_code ec;
-#ifdef _WIN32
-  // Not canonical() on Windows: its GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED |
-  // VOLUME_NAME_DOS) is refused inside the app's AppContainer even though the file itself opens
-  // and reads (11-01, P+'s launcher). The identity is the volume serial and file id read below,
-  // which another name for the same file can't change; the path is only recorded beside it.
-  const auto canonical = std::filesystem::absolute(StringToPath(path), ec).lexically_normal();
-  if (ec)
-    return fail("file status failed: " + ec.message());
-#else
   const auto canonical = std::filesystem::canonical(StringToPath(path), ec);
   if (ec)
     return fail(ec == std::errc::no_such_file_or_directory ? "missing" :
                 "file status failed: " + ec.message());
-#endif
-  const auto status = std::filesystem::status(canonical, ec);
-  if (status.type() == std::filesystem::file_type::not_found)
-    return fail("missing");
+  const bool regular = std::filesystem::is_regular_file(canonical, ec);
   if (ec)
     return fail("file status failed: " + ec.message());
-  if (!std::filesystem::is_regular_file(status))
+  if (!regular)
     return fail("not a regular file");
   Identity identity;
   identity.path = PathToString(canonical);
