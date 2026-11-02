@@ -232,8 +232,8 @@ TEST_F(OrcaBootAudit, PathAndVolumeChangesAreMisses)
 
 TEST_F(OrcaBootAudit, AnotherSpellingOfThePathIsTheSameFile)
 {
-  // Windows identifies without canonical() (refused in the app's AppContainer on some Windows 10
-  // machines), so a path with ".." must still reach the same file.
+  // Windows identifies without canonical() (refused inside the app's AppContainer), so a path
+  // with ".." must still reach the same file.
   ASSERT_TRUE(File::CreateFullPath(dir + "/sub/"));
   const auto direct = Identify(path);
   std::string reason;
