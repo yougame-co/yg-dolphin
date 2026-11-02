@@ -230,6 +230,28 @@ TEST_F(OrcaBootAudit, PathAndVolumeChangesAreMisses)
   EXPECT_FALSE(record.Matches(identity, expected));
 }
 
+TEST_F(OrcaBootAudit, AnotherSpellingOfThePathIsTheSameFile)
+{
+  // Windows identifies without canonical() (refused inside the app's AppContainer), so a path
+  // with ".." must still reach the same file.
+  ASSERT_TRUE(File::CreateFullPath(dir + "/sub/"));
+  const auto direct = Identify(path);
+  std::string reason;
+  const auto dotted = Identify(dir + "/sub/../loader.dol", &reason);
+  ASSERT_TRUE(direct);
+  ASSERT_TRUE(dotted) << reason;
+  EXPECT_EQ(dotted->size, direct->size);
+  EXPECT_EQ(dotted->volume, direct->volume);
+  EXPECT_EQ(dotted->file_id, direct->file_id);
+}
+
+TEST_F(OrcaBootAudit, AMissingFileSaysMissing)
+{
+  std::string reason;
+  EXPECT_FALSE(Identify(dir + "/no-such-loader.dol", &reason));
+  EXPECT_EQ(reason, "missing");
+}
+
 TEST_F(OrcaBootAudit, ColdVerificationPopulatesAWarmRecordAndStillAudits)
 {
   const auto cold = Start();
