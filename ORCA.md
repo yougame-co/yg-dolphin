@@ -2863,6 +2863,10 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.99
+
+- Windows: Project+ and other games that boot through a launcher start again in the app's protected mode. Since 0.3.94 YG Dolphin closed before its first frame there, because Windows refused a file-name lookup it made while checking the launcher ("file status failed: Access denied"). It now identifies the launcher without that lookup. Built on 0.3.96: nothing else changes.
+
 ### 0.3.96
 
 - Smoothness reports: YG Dolphin now reports how evenly frames reach the screen, the hitches over 25, 33 and 50 ms, how deep rollbacks go and how long each screen transition takes (`orca perf` `pace` and `scene` lines), so the team can find and fix stutter. Play is exactly as before.
