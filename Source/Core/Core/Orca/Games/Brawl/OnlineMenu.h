@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -132,6 +133,21 @@ bool SequenceHoldsDropIn(std::string_view sequence);
 bool DropInHeld();
 // Versus fight/results latch: release only at a character select or menu. Pure.
 bool FightHoldsDropIn(std::string_view scene, std::string_view sequence, bool held);
+// Host policy only: these observations never write game memory or enter a replay.
+class FightHoldLatch
+{
+public:
+  void Observe(std::string_view scene, std::string_view sequence)
+  {
+    m_held.store(FightHoldsDropIn(scene, sequence, Held()), std::memory_order_relaxed);
+  }
+  bool Held() const { return m_held.load(std::memory_order_relaxed); }
+  void Reset() {}
+
+private:
+  std::atomic<bool> m_held{false};
+};
+void ResetFightHold();
 // Last first-run reading of the Versus fight/results latch. Any thread.
 bool FightInProgress();
 // Whether the game was in its Training mode (sqTraining) at its last first-run frame, for the

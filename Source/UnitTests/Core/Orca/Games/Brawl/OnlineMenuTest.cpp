@@ -2643,3 +2643,18 @@ TEST(OrcaOnlineMenuDropIn, TourneyAndRotationKeepImmediateJoins)
     EXPECT_FALSE(FightHoldsDropIn("scMemoryChange", sequence, true));
   }
 }
+
+TEST(OrcaOnlineMenuDropIn, FreshStartDiscardsTheOldFightEvenBeforeTheNextSelect)
+{
+  for (const char* scene : {"scTitle", "scMemoryChange", ""})
+  {
+    FightHoldLatch latch;
+    latch.Observe("scMelee", "sqVsMelee");
+    ASSERT_TRUE(latch.Held());
+    latch.Reset();  // Successful FreshStart, before its reset/menu tail.
+    latch.Observe(scene, "");
+    EXPECT_FALSE(latch.Held()) << scene;
+    latch.Observe("scMelee", "sqVsMelee");
+    EXPECT_TRUE(latch.Held());  // A later real fight still holds a new friend.
+  }
+}

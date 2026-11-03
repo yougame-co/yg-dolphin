@@ -2462,6 +2462,7 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   match.running = frame - 1;
   // The exit and a new seed are the first frame's typed events; FreshMove applies them at that
   // frame's hook, here and in every replay of it. Reset games have neither event.
+  Orca::UX::Game().Read().ResetFightHold();
   match.fight_let_in = false;
   match.replay = FreshReplayStart(kind, frame, match.origin_hash, exit,
                                   kind == FreshKind::Menu ? NewHistorySeed() : 0);

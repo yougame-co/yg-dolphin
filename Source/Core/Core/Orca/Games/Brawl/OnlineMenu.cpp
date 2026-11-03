@@ -258,7 +258,7 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
 namespace
 {
 std::atomic<bool> s_drop_in_held{false};
-std::atomic<bool> s_fight_in_progress{false};
+FightHoldLatch s_fight_in_progress;
 std::atomic<bool> s_training{false};
 
 // Versus sequences: a friend who joins there is already where friends play.
@@ -291,7 +291,12 @@ bool FightHoldsDropIn(std::string_view scene, std::string_view sequence, bool he
 
 bool FightInProgress()
 {
-  return s_fight_in_progress.load(std::memory_order_relaxed);
+  return s_fight_in_progress.Held();
+}
+
+void ResetFightHold()
+{
+  s_fight_in_progress.Reset();
 }
 
 bool DropInHeld()
@@ -420,10 +425,7 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     const bool test_hold = !s_test_hold_over && frame >= s_test_hold.first &&
                            frame < s_test_hold.second && TestKnobsAllowed();
     s_drop_in_held = SequenceHoldsDropIn(in.sequence) || test_hold;
-    s_fight_in_progress.store(
-        FightHoldsDropIn(ReadSceneName(m), in.sequence,
-                         s_fight_in_progress.load(std::memory_order_relaxed)),
-        std::memory_order_relaxed);
+    s_fight_in_progress.Observe(ReadSceneName(m), in.sequence);
     s_training.store(in.sequence == "sqTraining", std::memory_order_relaxed);
   }
   // The friends bytes are the match block's, in sora_scene's free space: not in a game whose free
