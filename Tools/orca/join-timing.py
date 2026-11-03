@@ -121,6 +121,7 @@ def main():
                 friend.send(f'join {room}')
             if scenario == 'EL':
                 host.wait('the join waits for this match to end', 30, after=accept['ms'])
+                friend.wait('orca state friend-holding', 30, after=accept['ms'])
                 record('Driver', 'mark', 'Fight hold observed; let-in')
                 host.send('let-in')
             friend.wait('Drop-in: plugged into port', 900 if scenario == 'E' else a.timeout,
@@ -156,6 +157,17 @@ def main():
                 result['reason'] = 'Missing positive session checksum count'
             result['load_end'] = os.getloadavg()
             result['phases'] = phases(result, events)
+            milestones = result['phases'].get('milestones', {})
+            if scenario == 'E' and milestones.get('fight_hold'):
+                end = milestones.get('results_end')
+                fresh = milestones.get('fresh_restore_end')
+                scheduled = next((e for e in events if e['who'] == 'Host' and
+                                  e['ms'] >= result['accept_ms'] and
+                                  'fresh start at the next boundary' in e['line']), None)
+                result['fight_finished_before_fresh'] = bool(
+                    end and fresh and scheduled and end['ms'] < scheduled['ms'] < fresh['ms'])
+                if not result['fight_finished_before_fresh']:
+                    result.update(outcome='FAIL', reason='Fight/results did not finish before fresh start')
             log.close()
             (work / 'result.json').write_text(json.dumps(result, indent=2)+'\n')
             print(f'END {scenario} {result["outcome"]} checksums={counts}', flush=True)
