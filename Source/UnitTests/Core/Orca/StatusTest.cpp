@@ -227,10 +227,12 @@ TEST(OrcaStatus, CoSeatsCapsAreAppendOnlyAndFitLegacyReaders)
       }
       before += " record hostui";
       SetEnv("ORCA_COSEATS", "0");
-      EXPECT_EQ(Orca::Status::OfferedCaps(), before + " qdoubles rdoubles");
+      // lazyroom stays last, past the 24 words an older app reads (it drops it, keeping today's path).
+      const std::string lazy = product ? "" : " lazyroom";
+      EXPECT_EQ(Orca::Status::OfferedCaps(), before + " qdoubles rdoubles" + lazy);
       SetEnv("ORCA_COSEATS", "1");
       const auto after = Orca::Status::OfferedCaps();
-      EXPECT_EQ(after, before + " coseats qdoubles rdoubles");
+      EXPECT_EQ(after, before + " coseats qdoubles rdoubles" + lazy);
       EXPECT_EQ(after.find("pick-doubles"), std::string::npos);
       std::FILE* output = std::tmpfile();
       ASSERT_NE(output, nullptr);
@@ -239,16 +241,17 @@ TEST(OrcaStatus, CoSeatsCapsAreAppendOnlyAndFitLegacyReaders)
       std::rewind(output);
       char buffer[1024]{};
       ASSERT_NE(std::fgets(buffer, sizeof(buffer), output), nullptr);
-      EXPECT_EQ(std::string(buffer), "orca caps " + before + " coseats qdoubles rdoubles\n");
+      EXPECT_EQ(std::string(buffer), "orca caps " + before + " coseats qdoubles rdoubles" + lazy + "\n");
       Orca::Status::SetOutput(nullptr);
       std::fclose(output);
       std::istringstream words(after);
       unsigned count = 0;
       for (std::string word; words >> word;)
         ++count;
-      const unsigned expected = product ? 23 : 24;
+      const unsigned expected = product ? 23 : 25;
       EXPECT_EQ(count, expected);
-      EXPECT_LE(count, 24u);
+      // Everything but lazyroom fits the 24 words an older app reads.
+      EXPECT_LE(count - (product ? 0 : 1), 24u);
       Orca::Status::SetAppCaps("join");
       EXPECT_FALSE(Orca::Status::Cap("coseats"));
       EXPECT_FALSE(Orca::Status::Cap("qdoubles"));

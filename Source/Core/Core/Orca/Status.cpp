@@ -224,6 +224,8 @@ std::string OfferedCaps()
     caps += " qdoubles rdoubles";
   if (s_shortcuts_available)
     caps += fmt::format(" {}", SHORTCUTS_CAP);
+  // The 25th word in a session: an app that reads 24 (desktop before ORCA_CAPS_MAX 32) drops it, so
+  // the page never agrees it and the room opens at boot as before.
   if (SessionActive() && !s_online_withdrawn && !Rollback::ReplayStream::ProductMode() &&
       !Mod::LocalPackRequested())
     caps += fmt::format(" {}", LAZYROOM_CAP);
