@@ -228,6 +228,9 @@ if run_step("rooms"):
     friend.expect("orca caps", 30)
     friend.send("caps join leave stats")
     friend.expect("orca state playing", 90)
+    # playing is announced before canonical boot has reached its local origin. Exclude boot
+    # from the empty-room deadline, especially with a paced vanilla boot.
+    friend.wait_log(r"Drop-in: origin at frame", 90)
     time.sleep(3)
     empty = code("emp")
     sent = time.time()
@@ -246,7 +249,7 @@ if run_step("rooms"):
     friend.send(f"join {taken}")
     friend.wait_log(rf"in room {taken} on seat 1, joining", 30, after=mark)
     host_player = "orca-rooms-" + code("h")
-    host = Orca("Host", {"ORCA_ROOM": taken, "ORCA_TEST_PLAYER": host_player})
+    host = Orca("Host", {"ORCA_ROOM": taken, "ORCA_TEST_PLAYER": host_player}, script=False)
     orcas.append(host)
     host.expect("orca caps", 30)
     host.send("caps join leave stats")
@@ -267,9 +270,11 @@ if run_step("rooms"):
     mark = friend.log_size()
     friend.send(f"join {fresh}")
     host.expect("orca state friend-joining", 60)
-    # Catching up starts once the keyframe is loaded (the "joining" percent says 50 from the end of
-    # the download until the last few seconds of catching up, so the log says when).
-    friend.wait_log(r"Drop-in: loaded keyframe frame", 60, after=mark, poll=0.02)
+    # The current input-replay protocol first rebuilds locally, then catches up live. The old
+    # machine-image protocol used "loaded keyframe" for the equivalent boundary. Keep this
+    # host on the menus so this room/cancellation check does not request a solo fight hold.
+    friend.wait_log(r"Drop-in: (?:loaded keyframe frame|rebuilt replay frame)",
+                    60, after=mark, poll=0.005)
     sent = time.time()
     since, after = len(friend.seen), friend.log_size()
     friend.send("leave")
