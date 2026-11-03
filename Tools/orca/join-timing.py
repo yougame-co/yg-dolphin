@@ -129,7 +129,7 @@ def main():
                 friend.send(f'join {room}')
             if scenario == 'EL':
                 host.wait('the join waits for this match to end', 30, after=accept['ms'])
-                friend.wait('orca state friend-holding', 30, after=accept['ms'])
+                friend.wait('orca state friend-waiting', 30, after=accept['ms'])
                 record('Driver', 'mark', 'Fight hold observed; let-in')
                 host.send('let-in')
             friend.wait('Drop-in: plugged into port', 900 if scenario == 'E' else a.timeout,
@@ -151,6 +151,9 @@ def main():
                 o.stop()
             bad = [e for e in events if re.search(r'Desync|orca error', e['line'])]
             result['error_lines'] = bad
+            state_error = waiting_state_error(events)
+            if state_error:
+                result.update(outcome='FAIL', reason=state_error)
             if bad:
                 result['outcome'] = 'FAIL'
             counts = {}
@@ -183,6 +186,12 @@ def main():
             print(f'END {scenario} {result["outcome"]} checksums={counts}', flush=True)
             failures += result['outcome'] != 'PASS'
     return int(bool(failures))
+
+
+def waiting_state_error(events):
+    if any(e['who'] == 'Friend' and e['line'] == 'orca state friend-holding' for e in events):
+        return 'A joiner printed the host-only friend-holding state'
+    return None
 
 
 def phases(result, events):

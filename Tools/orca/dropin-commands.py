@@ -200,12 +200,12 @@ if friend.proc.poll() is not None:
     fail("friend stopped after leaving")
 
 # 4. Again; explicitly let the returning friend into the solo fight if it is held.
-# Older binaries join immediately; the default fight-hold engine reports friend-holding first.
+# Older binaries join immediately; the default fight-hold engine reports friend-waiting first.
 friend.send(f"join {ROOM}")
 end = time.time() + 120
 while True:
     state = friend.expect("orca state ", max(0.1, end - time.time()))
-    if state == "orca state friend-holding":
+    if state == "orca state friend-waiting":
         host.send("let-in")
     if state == "orca state playing":
         break
