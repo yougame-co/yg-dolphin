@@ -309,6 +309,12 @@ bool AppCapsAnswered()
   return s_app_answered;
 }
 
+bool StateIs(std::string_view state)
+{
+  std::lock_guard lock(s_mutex);
+  return s_state == state;
+}
+
 bool Offers(std::string_view name)
 {
   return Agreed(OfferedCaps(), name).contains(name);

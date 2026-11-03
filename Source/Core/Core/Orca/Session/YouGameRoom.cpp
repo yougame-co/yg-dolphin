@@ -101,6 +101,7 @@ constexpr auto DIRECT_SUMMARY_EVERY = std::chrono::milliseconds(250);
 using Clock = std::chrono::steady_clock;
 // How long a host with no invite waits for the app's caps before opening its room as before.
 constexpr std::chrono::seconds LAZYROOM_ANSWER_WAIT{30};
+constexpr std::chrono::seconds LAZYROOM_PLAYING_WAIT{60};
 
 // Rooms come and go within one process (reopened, joined, left), each mirroring itself to the page
 // on its own threads. The page must only get the newest room's updates, never a late one from an
@@ -1815,7 +1816,13 @@ struct YouGameRoom::Impl
       return false;
     NOTICE_LOG_FMT(NETPLAY, "Orca: no room until the app asks for one (lazyroom)");
     End("No room until an invite or a match", "");
-    Orca::Status::Event("roomless");
+    // The app may answer caps before the game prints `playing`: the page reads `playing` then
+    // `roomless`, never the other way round.
+    const auto playing_by = Clock::now() + LAZYROOM_PLAYING_WAIT;
+    while (!Orca::Status::StateIs("playing") && !stop && Clock::now() < playing_by)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    if (!stop)
+      Orca::Status::Event("roomless");
     return true;
   }
 

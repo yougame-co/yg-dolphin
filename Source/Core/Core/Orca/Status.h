@@ -159,6 +159,8 @@ void SetAppCaps(std::string_view list);
 bool Cap(std::string_view name);
 // Whether the app has sent any `caps` line this run.
 bool AppCapsAnswered();
+// Whether the last `orca state` line printed was this one.
+bool StateIs(std::string_view state);
 // Whether this boot offers `name` (OfferedCaps), whatever the app answered.
 bool Offers(std::string_view name);
 // "orca stats <json>" (with the "stats" capability).
