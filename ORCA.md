@@ -2876,6 +2876,10 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.100
+
+- Friends join sooner after a fresh start. During a solo Versus fight and its results, a friend waits until the host returns to the menus; returning friends and other room modes can still join straight away.
+
 ### 0.3.99
 
 - Windows: Project+ and other games that boot through a launcher start again in the app's protected mode. Since 0.3.94 YG Dolphin closed before its first frame there, because Windows refused a file-name lookup it made while checking the launcher ("file status failed: Access denied"). It now identifies the launcher without that lookup. Built on 0.3.98: nothing else changes.
