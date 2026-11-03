@@ -101,7 +101,6 @@ class Orca:
         env = {
             "HOME": os.environ["HOME"],
             "TMPDIR": os.environ.get("TMPDIR", WORK),
-            "YG_THROTTLE": "1",
             "PATH": os.environ["PATH"],
             "ORCA_SESSION": "1",
             "ORCA_TEST_COMMANDS": "1",
