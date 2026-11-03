@@ -9,12 +9,14 @@
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <set>
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -2656,5 +2658,234 @@ TEST(OrcaOnlineMenuDropIn, FreshStartDiscardsTheOldFightEvenBeforeTheNextSelect)
     EXPECT_FALSE(latch.Held()) << scene;
     latch.Observe("scMelee", "sqVsMelee");
     EXPECT_TRUE(latch.Held());  // A later real fight still holds a new friend.
+  }
+}
+
+namespace
+{
+struct FightExitBoundary
+{
+  std::string_view scene;
+  std::string_view sequence = "sqVsMelee";
+  bool fight_held = true;
+  bool single_player_held = false;
+};
+
+// The first-run scene reader and HostEvents use these production decisions in this order.
+// Keep the friend waiting throughout: a request, timeout or explicit latch reset must not be
+// what releases it. Once released, check both a recent host's in-place offer and an aged host's
+// fresh start followed by its next eligible offer boundary.
+void ExpectFightExit(std::initializer_list<FightExitBoundary> boundaries)
+{
+  using namespace Rollback::OnlineMatch;
+  FightHoldLatch latch;
+  FightHoldInputs fight;
+  fight.waiting = true;
+  FreshInputs start;
+  start.enabled = true;
+  start.origin_ready = true;
+  start.waiting = true;
+  start.history_frames = FRESH_FRIENDS_AFTER + 1;
+  for (const auto& boundary : boundaries)
+  {
+    SCOPED_TRACE(std::string(boundary.scene) + " / " + std::string(boundary.sequence));
+    latch.Observe(boundary.scene, boundary.sequence);
+    ASSERT_EQ(latch.Held(), boundary.fight_held);
+    fight.fight = latch.Held();
+    EXPECT_EQ(FightJoinHeld(fight), boundary.fight_held);
+    // ORCA_TEST_FIGHT_HOLD=off bypasses this same predicate, including a latched transition.
+    fight.enabled = false;
+    EXPECT_FALSE(FightJoinHeld(fight));
+    fight.enabled = true;
+    start.single_player = SequenceHoldsDropIn(boundary.sequence);
+    EXPECT_EQ(start.single_player, boundary.single_player_held);
+    if (start.single_player)
+      EXPECT_EQ(DecideFreshStart(start), FreshStep::Hold);
+    if (FightJoinHeld(fight) || start.single_player)
+      continue;  // HostEvents returns here, before fresh-start/capture selection.
+    EXPECT_EQ(DecideFreshStart(start), FreshStep::Now);
+  }
+  ASSERT_FALSE(latch.Held());
+  ASSERT_FALSE(start.single_player);
+  ASSERT_EQ(DecideFreshStart(start), FreshStep::Now);
+  // The ordinary fresh tail is still capped and must reach the first-keyframe gate.
+  ASSERT_TRUE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE, 72, 300, 300));
+  const auto fresh_offer = ChooseJoinCapture(nullptr, false, 301, 300);
+  ASSERT_TRUE(fresh_offer);
+  EXPECT_EQ(fresh_offer->frame, 301);
+  // No fresh start is required when this host's own history is still short.
+  start.history_frames = FRESH_FRIENDS_AFTER;
+  ASSERT_EQ(DecideFreshStart(start), FreshStep::None);
+  const auto in_place_offer = ChooseJoinCapture(nullptr, false, 1000, 300);
+  ASSERT_TRUE(in_place_offer);
+  EXPECT_EQ(in_place_offer->frame, 1000);
+}
+}  // namespace
+
+TEST(OrcaFightHold, PauseQuitReleasesAtCharacterSelect)
+{
+  ExpectFightExit({{"scMelee"},
+                   {"scMelee"},  // Pause is still the fight scene.
+                   {"scMemoryChange"},
+                   {"", ""},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, PauseQuitWithNoContestResultsReleasesAtCharacterSelect)
+{
+  // Brawl's no-contest result uses the same scVsResult as a completed fight.
+  ExpectFightExit({{"scMelee"},
+                   {"scMelee"},
+                   {"scMemoryChange"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqPrizeCheck"},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, ResultsContinueReleasesAfterPrizeCheck)
+{
+  ExpectFightExit({{"scMelee"},
+                   {"scMemoryChange"},
+                   {"scVsResult"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqPrizeCheck"},
+                   {"", ""},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, ResultsThenBackOutReachesMainMenu)
+{
+  // Back out is CSS -> sqMenuMain, including the patched return to the ONLINE page.
+  ExpectFightExit({{"scMelee"},
+                   {"scMemoryChange"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqPrizeCheck"},
+                   {"scSelctCharacter", "sqVsMelee", false},
+                   {"scMemoryChange", "sqMenuMain", false},
+                   {"muMenuMain", "sqMenuMain", false}});
+}
+
+TEST(OrcaFightHold, ResultsToMainMenuReleasesEvenWithoutASelectObservation)
+{
+  // The reader need not have seen a CSS frame for a main-menu boundary to release the latch.
+  ExpectFightExit({{"scMelee"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqMenuMain"},
+                   {"muMenuMain", "sqMenuMain", false}});
+}
+
+TEST(OrcaFightHold, TitleTransitionReleasesAtThePatchedMainMenu)
+{
+  // Both profiles skip scTitle's logo/movie to sqMenuMain. Title/loading alone is not a menu.
+  ExpectFightExit({{"scMelee"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqTitle"},
+                   {"scTitle", "sqTitle"},
+                   {"scMemoryChange", "sqMenuMain"},
+                   {"muMenuMain", "sqMenuMain", false}});
+}
+
+TEST(OrcaFightHold, LastStockFinishReleasesAfterResults)
+{
+  ExpectFightExit({{"scMelee"},
+                   {"scMelee"},
+                   {"scMemoryChange"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqPrizeCheck"},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, TimeoutFinishReleasesAfterResults)
+{
+  // The scene policy does not depend on the stock/time decision in the result block.
+  ExpectFightExit({{"scMelee"},
+                   {"scMelee"},
+                   {"scMemoryChange"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqPrizeCheck"},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, SuddenDeathSceneReentryHoldsUntilTheFinalResultsAndSelect)
+{
+  ExpectFightExit({{"scMelee"},
+                   {"scMemoryChange"},
+                   {"", ""},
+                   {"scMelee"},
+                   {"scMemoryChange"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqPrizeCheck"},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, BrawlSuddenDeathWithinTheFightSceneReleasesAfterResults)
+{
+  // Fighters can disappear and rebuild in scMelee; that is not a CSS/menu boundary.
+  ExpectFightExit({{"scMelee"},
+                   {"scMelee"},
+                   {"scMelee"},
+                   {"scMemoryChange"},
+                   {"scVsResult"},
+                   {"scMemoryChange", "sqPrizeCheck"},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, SpecialBrawlFinishAndPauseQuitReleaseAtItsSelect)
+{
+  ExpectFightExit({{"scMelee", "sqSpMelee"},
+                   {"scMemoryChange", "sqSpMelee"},
+                   {"scVsResult", "sqSpMelee"},
+                   {"scMemoryChange", "sqPrizeCheck"},
+                   {"scSelctCharacter", "sqSpMelee", false}});
+  ExpectFightExit({{"scMelee", "sqSpMelee"},
+                   {"scMelee", "sqSpMelee"},
+                   {"scMemoryChange", "sqSpMelee"},
+                   {"scSelctCharacter", "sqSpMelee", false}});
+}
+
+TEST(OrcaFightHold, ProjectPlusResultsSkipReleasesWithoutAResultsScene)
+{
+  // L+R+X bypasses scVsResult; scMemoryChange must retain the hold until CSS is seen.
+  ExpectFightExit({{"scMelee"},
+                   {"scMemoryChange"},
+                   {"", "sqVsMelee"},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, ProjectPlusRunbackKeepsTheFightHeldUntilTheHostExits)
+{
+  // A salty runback/endless friendly starts another fight, without a menu boundary. Quitting
+  // that rematch (or skipping its results) must still release the original waiting friend.
+  ExpectFightExit({{"scMelee"},
+                   {"scMemoryChange"},
+                   {"scMelee"},
+                   {"scMemoryChange"},
+                   {"scMelee"},
+                   {"scMemoryChange"},
+                   {"scSelctCharacter", "sqVsMelee", false}});
+}
+
+TEST(OrcaFightHold, TrainingExitReleasesTheSinglePlayerHoldAtMainMenu)
+{
+  // Training is held by SequenceHoldsDropIn, never by the Versus latch. Its CSS is not a
+  // friends menu; returning to sqMenuMain releases the single-player hold as well.
+  ExpectFightExit({{"scMelee", "sqTraining", false, true},
+                   {"scMemoryChange", "sqTraining", false, true},
+                   {"scSelctCharacter", "sqTraining", false, true},
+                   {"scMemoryChange", "sqMenuMain", false},
+                   {"muMenuMain", "sqMenuMain", false}});
+}
+
+TEST(OrcaFightHold, TourneyAndRotationExitsKeepImmediateJoins)
+{
+  for (const char* sequence : {"sqToMelee", "sqQuMelee"})
+  {
+    SCOPED_TRACE(sequence);
+    ExpectFightExit({{"scMelee", sequence, false},
+                     {"scMemoryChange", sequence, false},
+                     {"scVsResult", sequence, false},
+                     {"scMemoryChange", sequence, false},
+                     {"scSelctCharacter", sequence, false},
+                     {"muMenuMain", "sqMenuMain", false}});
   }
 }
