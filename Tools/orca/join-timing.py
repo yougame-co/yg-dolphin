@@ -30,6 +30,7 @@ def main():
     p.add_argument('--timeout', type=float, default=300)
     p.add_argument('--fast-offer-off', action='store_true')
     p.add_argument('--fight-hold-off', action='store_true')
+    p.add_argument('--require-fight-hold', action='store_true')
     a = p.parse_args()
     a.out = a.out.resolve()
     a.out.mkdir(parents=True, exist_ok=True)
@@ -164,6 +165,8 @@ def main():
             result['load_end'] = os.getloadavg()
             result['phases'] = phases(result, events)
             milestones = result['phases'].get('milestones', {})
+            if scenario == 'E' and a.require_fight_hold and not milestones.get('fight_hold'):
+                result.update(outcome='FAIL', reason='Expected a solo fight hold')
             if scenario == 'E' and milestones.get('fight_hold'):
                 end = milestones.get('results_end')
                 fresh = milestones.get('fresh_restore_end')
