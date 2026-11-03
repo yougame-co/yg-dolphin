@@ -6,7 +6,7 @@
 #
 # 1. A friend joins a room nobody's game is in: it gives up within seconds (peer_left), plays on.
 # 2. The friend reaches a room before its host's game does: the host finds someone else hosting
-#    it, says so (orca error network) and opens a fresh room; the friend gives up (peer_left).
+#    it, reports the taken-room reason and opens a fresh room; the friend gives up (peer_left).
 # 3. The friend leaves while it catches up (the host's keyframe is 25 s old, from a prepare-join, so
 #    the friend replays 25 s of its game): it leaves at once ("left"), and the host hears a plain
 #    leave, not a stall. Then it joins the host's fresh room: "friend-joined" once it plugs in.
@@ -254,9 +254,9 @@ if run_step("rooms"):
     host.expect("orca caps", 30)
     host.send("caps join leave stats")
     host.expect("orca state playing", 90)
-    line = host.expect("orca error network", 30)
-    if "hosting this room" not in line:
-        fail(f"the host's error doesn't say why: {line}")
+    # Room resilience now reports the taken-room reason and reopens automatically, without
+    # surfacing an app error for a successful solo recovery.
+    host.wait_log(r"Someone else was already hosting this room", 30)
     fresh = host.wait_log(r"Drop-in: hosting room ([a-z0-9]+) again", 30).group(1)
     if fresh == taken:
         fail("the host kept the room someone else hosts")
