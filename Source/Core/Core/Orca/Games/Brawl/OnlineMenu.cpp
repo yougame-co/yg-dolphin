@@ -283,7 +283,8 @@ bool SequenceHoldsDropIn(std::string_view sequence)
 
 bool FightHoldsDropIn(std::string_view scene, std::string_view sequence, bool held)
 {
-  if (MenusScene(scene, sequence))
+  // Between-fight bracket/rotation scenes are not established: keep their immediate joins.
+  if (sequence == "sqToMelee" || sequence == "sqQuMelee" || MenusScene(scene, sequence))
     return false;
   return held || (IsVersusSequence(sequence) && (scene == "scMelee" || scene == "scVsResult"));
 }
