@@ -227,6 +227,7 @@ struct Match
   // The host holds this join while its game is in a single-player mode.
   bool host_holding = false;
   bool host_hold_fight = false;
+  HoldMessageTimer host_hold_message;
   Clock::time_point boot_time{}, offered_time{}, loaded_time{};
   double load_ms = 0;
   bool joined = false;
@@ -2210,6 +2211,7 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
         {
           match.host_holding = event.holding;
           match.host_hold_fight = fight;
+          match.host_hold_message.Reset();
           NOTICE_LOG_FMT(ROLLBACK, "Drop-in: the host {}",
                          event.holding ? (fight ? "is playing a match: the join waits" :
                                                  "is in a single-player mode: the join waits") :
@@ -2217,11 +2219,6 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
           if (event.holding)
           {
             Orca::Status::State(fight ? "friend-holding" : "friend-waiting");
-            ShowJoinMessage(
-                fmt::format("{} is playing {}: you'll join when they're back in the menus",
-                            match.host_name.empty() ? "Your friend" : match.host_name,
-                            fight ? "a match" : "a single-player mode"),
-                static_cast<u32>(std::chrono::milliseconds(JOIN_LIMIT).count()));
           }
           else
           {
@@ -2287,7 +2284,15 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
     }
     // A held join has no time limit; the limit counts from when the host lets it go on.
     if (match.host_holding)
+    {
       match.boot_time = Clock::now();
+      if (match.host_hold_message.Due(match.boot_time, JOIN_LIMIT))
+        ShowJoinMessage(
+            fmt::format("{} is playing {}: you'll join when they're back in the menus",
+                        match.host_name.empty() ? "Your friend" : match.host_name,
+                        match.host_hold_fight ? "a match" : "a single-player mode"),
+            static_cast<u32>(std::chrono::milliseconds(JOIN_LIMIT).count()));
+    }
     if (!match.host_room_wait.until && Clock::now() - match.boot_time > JOIN_LIMIT)
     {
       match.join_error_code = "network";

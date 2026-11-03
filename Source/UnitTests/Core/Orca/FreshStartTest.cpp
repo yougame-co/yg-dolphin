@@ -660,3 +660,19 @@ TEST(OrcaFightHold, RecoveringFriendsRejoinInPlaceEvenWithANewFriendWaiting)
   start.in_place = true;
   EXPECT_EQ(DecideFreshStart(start), FreshStep::None);
 }
+
+TEST(OrcaFightHold, WaitingMessageRenewsOncePerExpiryAndOnHoldChange)
+{
+  HoldMessageTimer timer;
+  const auto start = HoldMessageTimer::Clock::time_point{};
+  const auto lifetime = std::chrono::seconds(90);
+  EXPECT_TRUE(timer.Due(start, lifetime));
+  EXPECT_FALSE(timer.Due(start, lifetime));
+  EXPECT_FALSE(timer.Due(start + lifetime - std::chrono::milliseconds(1), lifetime));
+  EXPECT_TRUE(timer.Due(start + lifetime, lifetime));
+  EXPECT_FALSE(timer.Due(start + lifetime, lifetime));
+  EXPECT_TRUE(timer.Due(start + lifetime * 2, lifetime));
+  timer.Reset();  // A different hold kind replaces the text immediately.
+  EXPECT_TRUE(timer.Due(start + lifetime * 2, lifetime));
+  EXPECT_FALSE(timer.Due(start + lifetime * 2, lifetime));
+}

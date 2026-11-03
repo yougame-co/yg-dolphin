@@ -295,6 +295,23 @@ struct FightHoldInputs
 };
 // Only a solo host's friend waits for a Versus fight/results to end.
 bool FightJoinHeld(const FightHoldInputs& in);
+// A persistent join message is renewed once per lifetime while a hold continues.
+class HoldMessageTimer
+{
+public:
+  using Clock = std::chrono::steady_clock;
+  void Reset() { m_next.reset(); }
+  bool Due(Clock::time_point now, Clock::duration lifetime)
+  {
+    if (m_next)
+      return false;
+    m_next = now + lifetime;
+    return true;
+  }
+
+private:
+  std::optional<Clock::time_point> m_next;
+};
 // Host wall time only: warn once, then hold a reset join for three seconds. Other starts and a
 // cancelled or held join clear the warning, so a later join gets its own notice.
 FreshStep WarnBeforeResetJoin(FreshStep step, FreshKind kind, bool queue_armed,
