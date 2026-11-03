@@ -279,6 +279,20 @@ struct FreshInputs
   int fresh_after = -1;
 };
 FreshStep DecideFreshStart(const FreshInputs& in);
+struct FightHoldInputs
+{
+  bool enabled = true;
+  bool fight = false;
+  bool waiting = false;
+  bool joining = false;
+  bool session = false;
+  bool seated_or_plugging = false;
+  bool doubles = false;
+  bool in_queue_room = false;
+  bool let_in = false;
+};
+// Only a solo host's friend waits for a Versus fight/results to end.
+bool FightJoinHeld(const FightHoldInputs& in);
 // Host wall time only: warn once, then hold a reset join for three seconds. Other starts and a
 // cancelled or held join clear the warning, so a later join gets its own notice.
 FreshStep WarnBeforeResetJoin(FreshStep step, FreshKind kind, bool queue_armed,

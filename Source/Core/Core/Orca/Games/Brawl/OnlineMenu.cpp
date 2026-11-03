@@ -280,6 +280,11 @@ bool SequenceHoldsDropIn(std::string_view sequence)
   return std::ranges::find(held, sequence) != held.end();
 }
 
+bool FightHoldsDropIn(std::string_view scene, std::string_view sequence, bool held)
+{
+  return false;
+}
+
 bool DropInHeld()
 {
   return s_drop_in_held.load();

@@ -620,3 +620,28 @@ TEST(OrcaFreshStart, FriendsOfferFollowsTheUnseenTailAtTheNextBoundary)
   EXPECT_EQ(offer->frame, 301);
   EXPECT_EQ(offer->frame - 229, 72);
 }
+
+TEST(OrcaFightHold, OnlyASoloHostsWaitingFriendHolds)
+{
+  FightHoldInputs in;
+  in.fight = true;
+  in.waiting = true;
+  EXPECT_TRUE(FightJoinHeld(in));
+  for (bool FightHoldInputs::* field : {&FightHoldInputs::joining, &FightHoldInputs::session,
+                                       &FightHoldInputs::seated_or_plugging,
+                                       &FightHoldInputs::doubles, &FightHoldInputs::in_queue_room,
+                                       &FightHoldInputs::let_in})
+  {
+    in.*field = true;
+    EXPECT_FALSE(FightJoinHeld(in));
+    in.*field = false;
+  }
+  in.enabled = false;
+  EXPECT_FALSE(FightJoinHeld(in));
+  in.enabled = true;
+  in.fight = false;  // CSS or menu
+  EXPECT_FALSE(FightJoinHeld(in));
+  in.fight = true;
+  in.waiting = false;
+  EXPECT_FALSE(FightJoinHeld(in));
+}

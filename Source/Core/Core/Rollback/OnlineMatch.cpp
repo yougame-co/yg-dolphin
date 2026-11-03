@@ -5740,6 +5740,11 @@ std::optional<JoinCapture> ChooseJoinCapture(const Orca::Net::Session* session, 
   return std::nullopt;
 }
 
+bool FightJoinHeld(const FightHoldInputs& in)
+{
+  return false;
+}
+
 FreshStep DecideFreshStart(const FreshInputs& in)
 {
   if (!in.enabled || in.joining || in.session || in.seated_or_plugging)

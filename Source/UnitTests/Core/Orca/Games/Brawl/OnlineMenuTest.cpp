@@ -2616,3 +2616,20 @@ TEST(OrcaOnlineMenuReader, SceneExitWritesOnlyItsDeclaredSingletonWords)
                            [&](const auto& region) { return region.Contains(address, 1); }))
         << std::hex << address;
 }
+
+TEST(OrcaOnlineMenuDropIn, VersusFightAndResultsHoldUntilTheSelectOrMenus)
+{
+  for (const char* sequence : {"sqVsMelee", "sqSpMelee", "sqToMelee", "sqQuMelee"})
+  {
+    EXPECT_TRUE(FightHoldsDropIn("scMelee", sequence, false));
+    EXPECT_TRUE(FightHoldsDropIn("scVsResult", sequence, false));
+    EXPECT_TRUE(FightHoldsDropIn("scMemoryChange", sequence, true));
+    EXPECT_TRUE(FightHoldsDropIn("", "", true));
+    EXPECT_FALSE(FightHoldsDropIn("scSelctCharacter", sequence, true));
+    EXPECT_FALSE(FightHoldsDropIn("muMenuMain", "sqMenuMain", true));
+    // A stage select before the first fight is still open to a friend.
+    EXPECT_FALSE(FightHoldsDropIn("scSelStage", sequence, false));
+  }
+  EXPECT_FALSE(FightHoldsDropIn("scMelee", "sqTraining", false));
+  EXPECT_FALSE(FightHoldsDropIn("scMelee", "sqSingleSimple", false));
+}
