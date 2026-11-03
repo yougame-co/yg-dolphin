@@ -77,6 +77,9 @@ def main():
             inp = ''
             if scenario == 'E':
                 inp = (Path(__file__).resolve().parent / 'inputs/pplus-cpu-loop.txt').read_text()
+                watch = work / 'cpu-watch.txt'
+                watch.write_text('@* 0 watch [[[[805a0060]+4]+400]+48]+1b4 a2-kind\n')
+                extra['ORCA_UX_PROBE'] = str(watch)
             host = Orca('Host', work, a, extra, inp, record, events)
             pair.append(host)
             h_origin = host.wait('Drop-in: origin at frame', a.timeout)
@@ -234,6 +237,7 @@ class Orca:
             '-C', f'Dolphin.Core.DefaultISO={a.disc}', '-e', a.pplus]
         (work / (name + '-command.json')).write_text(json.dumps({'argv': args,
             'environment': environment}, indent=2))
+        self.record(name, 'mark', 'Load before launch ' + str(os.getloadavg()))
         self.record(name, 'mark', 'Process launch')
         self.proc = subprocess.Popen(args, env=environment, cwd=work, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
