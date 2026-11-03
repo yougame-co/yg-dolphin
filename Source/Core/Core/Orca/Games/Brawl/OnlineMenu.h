@@ -142,7 +142,7 @@ public:
     m_held.store(FightHoldsDropIn(scene, sequence, Held()), std::memory_order_relaxed);
   }
   bool Held() const { return m_held.load(std::memory_order_relaxed); }
-  void Reset() {}
+  void Reset() { m_held.store(false, std::memory_order_relaxed); }
 
 private:
   std::atomic<bool> m_held{false};
