@@ -62,6 +62,8 @@ protected:
     logger->EnableListener(Common::Log::LogListener::FILE_LISTENER, false);
     logger->EnableListener(Common::Log::LogListener::CONSOLE_LISTENER, false);
     logger->SetEnable(Common::Log::LogType::ROLLBACK, true);
+    ASSERT_TRUE(logger->IsEnabled(Common::Log::LogType::ROLLBACK,
+                                  Common::Log::LogLevel::LNOTICE));
   }
   void TearDown() override
   {
@@ -99,6 +101,16 @@ protected:
   std::string old_user;
   std::string directory;
 };
+
+auto AllStats(const Stats& s)
+{
+  return std::tie(s.rollbacks, s.resimulated_frames, s.deepest_rollback, s.saves,
+                  s.snapshot_every, s.stalls, s.checksums_matched, s.confirmed_frame,
+                  s.delay, s.delay_fixed, s.delay_raises, s.delay_lowers, s.delay_reverts,
+                  s.waits, s.frame_advantage, s.hitches, s.peer_hitches, s.load_hitches,
+                  s.counted_stalls, s.spared_stalls, s.rtt_median, s.peer_rtt_median,
+                  s.late_seats);
+}
 
 struct GateRawTransport final : Transport
 {
@@ -154,6 +166,7 @@ TEST_F(OrcaGateRaw, ZeroEventsStillBeginsBeforeSummary)
   GateRawTransport transport;
   {
     Session session(Config{}, game, transport);
+    Summary(session, "leave");
   }
   ASSERT_EQ(Events().size(), 1u);
   fmt::print("GATE_RAW_CAPTURE_BEGIN\n{}GATE_RAW_CAPTURE_END\n", capture->lines);
@@ -183,6 +196,7 @@ TEST_F(OrcaGateRaw, RollbackDoesNotExtendStallWait)
       };
       for (int i = 0; i < 700; ++i)
         ASSERT_EQ(boundary().kind, StepKind::Run);
+      Summary(session, "frame 700");
       transport.allow = false;
       bool stalled = false;
       for (int i = 0; i < 20 && !stalled; ++i)
@@ -215,6 +229,60 @@ TEST_F(OrcaGateRaw, RollbackDoesNotExtendStallWait)
     EXPECT_EQ(events[1], expected);
     fmt::print("GATE_RAW_CAPTURE_BEGIN\n{}GATE_RAW_CAPTURE_END\n", capture->lines);
   }
+}
+
+TEST_F(OrcaGateRaw, ShutdownHasNoSummaryAndSinkDoesNotChangeBehaviour)
+{
+  using Result = std::tuple<std::vector<std::pair<StepKind, int>>, Stats,
+                            std::vector<std::string>>;
+  const auto run = [&](bool sink) {
+    auto* logger = Common::Log::LogManager::GetInstance();
+    logger->EnableListener(Common::Log::LogListener::LOG_WINDOW_LISTENER, sink);
+    capture->lines.clear();
+    FakeGame game;
+    GateRawTransport transport;
+    Config config;
+    config.time_sync = false;
+    config.fixed_delay = 2;
+    Result result;
+    {
+      Session session(config, game, transport);
+      transport.session = &session;
+      int completed = -1;
+      bool stalled = false;
+      for (int i = 0; i < 730 && !stalled; ++i)
+      {
+        transport.allow = i < 700;
+        const auto step = session.OnBoundary(completed, Pad{});
+        std::get<0>(result).emplace_back(step.kind, step.frame);
+        EXPECT_NE(step.kind, StepKind::Ended) << session.Error();
+        if (step.kind == StepKind::Run || step.kind == StepKind::Rollback)
+          completed = game.Run();
+        stalled = step.kind == StepKind::Stall;
+      }
+      EXPECT_TRUE(stalled);
+      std::get<1>(result) = session.GetStats();
+      std::get<2>(result) = transport.packets;
+    }
+    EXPECT_EQ(capture->lines.find("Online match"), std::string::npos);
+    if (sink)
+    {
+      const auto events = Events();
+      EXPECT_EQ(events.size(), 2u);
+      if (events.size() == 2)
+        EXPECT_FALSE(events[1].get("after_input").get<bool>());
+    }
+    else
+    {
+      EXPECT_TRUE(capture->lines.empty());
+    }
+    return result;
+  };
+  const auto enabled = run(true);
+  const auto disabled = run(false);
+  EXPECT_EQ(std::get<0>(enabled), std::get<0>(disabled));
+  EXPECT_EQ(AllStats(std::get<1>(enabled)), AllStats(std::get<1>(disabled)));
+  EXPECT_EQ(std::get<2>(enabled), std::get<2>(disabled));
 }
 
 TEST_F(OrcaGateRaw, ScriptedWindowsAndDisabledSinkPreserveBehaviour)
@@ -284,7 +352,7 @@ TEST_F(OrcaGateRaw, ScriptedWindowsAndDisabledSinkPreserveBehaviour)
     Summary(session, "frame 3600");
     start_stall();
     game.now_ms += 12;
-    // Session destruction must flush this unfinished stall and close the tail.
+    // Session destruction flushes this unfinished stall without a summary.
     result.stats = session.GetStats();
     result.packets = transport.packets;
     result.state = game.m_state;
@@ -321,15 +389,7 @@ TEST_F(OrcaGateRaw, ScriptedWindowsAndDisabledSinkPreserveBehaviour)
   EXPECT_EQ(enabled.packets, disabled.packets);
   EXPECT_EQ(enabled.state, disabled.state);
   EXPECT_EQ(enabled.resets, disabled.resets);
-  const auto stats = [](const Stats& s) {
-    return std::tie(s.rollbacks, s.resimulated_frames, s.deepest_rollback, s.saves,
-                    s.snapshot_every, s.stalls, s.checksums_matched, s.confirmed_frame,
-                    s.delay, s.delay_fixed, s.delay_raises, s.delay_lowers, s.delay_reverts,
-                    s.waits, s.frame_advantage, s.hitches, s.peer_hitches, s.load_hitches,
-                    s.counted_stalls, s.spared_stalls, s.rtt_median, s.peer_rtt_median,
-                    s.late_seats);
-  };
-  EXPECT_EQ(stats(enabled.stats), stats(disabled.stats));
+  EXPECT_EQ(AllStats(enabled.stats), AllStats(disabled.stats));
   EXPECT_TRUE(capture->lines.empty());
 }
 }  // namespace Orca::Net::Test

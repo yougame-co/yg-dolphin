@@ -23,7 +23,9 @@ args = parser.parse_args()
 def source(commit, path):
     if commit == 'WORKTREE':
         return Path(path).read_text()
-    return subprocess.check_output(['git', 'show', f'{commit}:{path}']).decode()
+    result = subprocess.run(['git', 'show', f'{commit}:{path}'], capture_output=True)
+    evaluator.require(result.returncode == 0, 'engine source unavailable at commit: ' + path)
+    return result.stdout.decode()
 
 base = evaluator.source_hashes('e7b886d', source)
 candidate = evaluator.source_hashes(args.candidate, source, raw=True)
@@ -40,7 +42,14 @@ for region, path, kind, name, discriminator in evaluator.SOURCE_REGIONS:
                               _mask=masks[args.candidate, path])
     assert before == after and base[region] == candidate[region], region
     print(f'PASS {region}: byte-identical after strip_emits')
-print('PASS raw_emitter: unique macro and function extracted')
+sources = evaluator.pinned_sources(args.candidate, source, raw=True)
+evaluator.emitter_guard(sources, required=True)
+region = evaluator.extract(sources, 'raw_emitter', evaluator.RAW_EMIT_MACRO, evaluator.RAW_EMITTER_FUNCTION)
+start, end = evaluator.emitter_definition(sources[evaluator.GATE_RAW])
+assert region == sources[evaluator.GATE_RAW][start:end].encode() + b'\n' + evaluator.extract(
+    sources[evaluator.SESSION], 'function', evaluator.RAW_EMITTER_FUNCTION)
+print('PASS raw_emitter: found once; GateRaw.h define + Session.cpp EmitRaw')
+print('PASS guard: one plain define, no undef, no conditional define, no GateRaw.h cpp include')
 print('PASS strip_emits: no refused lines in any source file')
 if args.logs:
     text = args.logs.read_text()
@@ -48,6 +57,7 @@ if args.logs:
     # logger envelope; gtest output itself is not part of the replay.
     chunks = text.split('GATE_RAW_CAPTURE_BEGIN\n')[1:]
     assert chunks, 'no captured unit-test log'
+    saw_tail = False
     for index, chunk in enumerate(chunks):
         log = chunk.split('GATE_RAW_CAPTURE_END', 1)[0]
         # Use the evaluator's unchanged summary reader, with a fixed local hour.
@@ -57,6 +67,10 @@ if args.logs:
             evaluator.windows.time.strptime('2026-11-03 00:00:00', '%Y-%m-%d %H:%M:%S'))
         parsed = [counts for _, counts in evaluator.windows.seat_lines(fixture, start)]
         assert parsed, 'no captured summaries'
-        raw, windows = evaluator.reconcile(log, parsed)
+        tail = {}
+        raw, windows = evaluator.reconcile(log, parsed, tail=tail)
         assert raw
-        print(f'PASS capture {index}: {len(windows)} windows reconciled: {windows}')
+        saw_tail |= any(tail.values())
+        print(f'PASS capture {index}: {len(windows)} windows reconciled: {windows}; tail={tail}')
+    assert saw_tail, 'no capture ends with a validated tail after the final summary'
+    print('PASS session tail: captured teardown after final summary, within 1800 frames')

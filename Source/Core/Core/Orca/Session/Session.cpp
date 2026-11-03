@@ -1,10 +1,6 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// This file also exports the single reviewed macro definition to GateRaw.h.
-#ifdef ORCA_GATE_RAW_MACRO_ONLY
-#define ORCA_GATE_RAW_EMIT(...) Orca::Gate::EmitRaw(__VA_ARGS__)
-#else
 #include "Core/Orca/Session/Session.h"
 
 #include <algorithm>
@@ -70,19 +66,6 @@ void Orca::Gate::EmitRaw(const Net::Session& session, Event event,
                       raw.settle_frame, session.m_last_hitch_frame,
                       session.m_last_peer_stall_frame));
     raw.pending = false;
-  }
-  if (event == Event::Shutdown)
-  {
-    // Some teardown paths have no LogStats call. Close their actual tail here,
-    // after the unfinished stall, using only the existing cumulative counters.
-    const auto& stats = session.m_stats;
-    NOTICE_LOG_FMT(ROLLBACK,
-                   "Online match at ended session: frame {}, {} rollbacks, {} re-run frames, "
-                   "deepest {}, {} stalls ({} counted), {} waits, {} hitches here "
-                   "({} more in game loads), {} checksums matched",
-                   session.m_frame, stats.rollbacks, stats.resimulated_frames,
-                   stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits,
-                   stats.hitches, stats.load_hitches, stats.checksums_matched);
   }
 }
 
@@ -2665,5 +2648,3 @@ void Session::SendPacket()
   m_transport.Send(packet);
 }
 }  // namespace Orca::Net
-
-#endif  // ORCA_GATE_RAW_MACRO_ONLY

@@ -45,8 +45,4 @@ void EmitRaw(const Net::Session& session, Event event,
              std::chrono::steady_clock::duration held = {});
 }  // namespace Orca::Gate
 
-// Include only Session.cpp's macro branch: the evaluator requires the one textual
-// definition there, and both translation units need that same definition.
-#define ORCA_GATE_RAW_MACRO_ONLY
-#include "Core/Orca/Session/Session.cpp"
-#undef ORCA_GATE_RAW_MACRO_ONLY
+#define ORCA_GATE_RAW_EMIT(...) Orca::Gate::EmitRaw(__VA_ARGS__)
