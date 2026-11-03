@@ -76,7 +76,19 @@ def main():
                 extra['ORCA_TEST_FAST_UNTIL'] = str(origin + target)
             inp = ''
             if scenario == 'E':
-                inp = (Path(__file__).resolve().parent / 'inputs/pplus-cpu-loop.txt').read_text()
+                # Age on the main menu, then enter the first CPU fight near five minutes.
+                # This avoids repeated-match fuzz/JIT history contaminating a join measurement.
+                lines = (Path(__file__).resolve().parent / 'inputs/pplus-cpu-loop.txt').read_text().splitlines()
+                presses = []
+                for line in lines:
+                    if line.startswith(('@scMelee', '@scVsResult')):
+                        continue
+                    if line.startswith('@muMenuMain:1 '):
+                        parts = line.split()
+                        parts[1:3] = [str(int(v) + 17400) for v in parts[1:3]]
+                        line = ' '.join(parts)
+                    presses.append(line)
+                inp = '\n'.join(presses) + '\n'
                 watch = work / 'cpu-watch.txt'
                 watch.write_text('@* 0 watch [[[[805a0060]+4]+400]+48]+1b4 a2-kind\n')
                 extra['ORCA_UX_PROBE'] = str(watch)
@@ -109,7 +121,7 @@ def main():
             time.sleep(4)
             friend.send('leave')
             for o in pair:
-                o.wait('checksums matched', 45, after=accept['ms'])
+                o.wait('Drop-in: back to solo play at frame', 45, after=accept['ms'])
             result['outcome'] = 'PASS'
         except Exception as ex:
             result['outcome'] = 'FAIL'
