@@ -86,7 +86,8 @@ def main():
             if scenario in ('E', 'EL'):
                 # Age on the main menu, then enter the first CPU fight near five minutes.
                 # This avoids repeated-match fuzz/JIT history contaminating a join measurement.
-                lines = (Path(__file__).resolve().parent / 'inputs/pplus-cpu-loop.txt').read_text().splitlines()
+                input_name = 'pplus-cpu-loop.txt' if a.pplus else 'bf-cpu-loop.txt'
+                lines = (Path(__file__).resolve().parent / 'inputs' / input_name).read_text().splitlines()
                 presses = []
                 for line in lines:
                     if line.startswith(('@scMelee', '@scVsResult')):
