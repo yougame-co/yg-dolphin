@@ -1,6 +1,10 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+// This file also exports the single reviewed macro definition to GateRaw.h.
+#ifdef ORCA_GATE_RAW_MACRO_ONLY
+#define ORCA_GATE_RAW_EMIT(...) Orca::Gate::EmitRaw(__VA_ARGS__)
+#else
 #include "Core/Orca/Session/Session.h"
 
 #include <algorithm>
@@ -10,6 +14,77 @@
 #include <utility>
 
 #include <fmt/format.h>
+
+#include "Common/Logging/Log.h"
+
+void Orca::Gate::EmitRaw(const Net::Session& session, Event event,
+                        std::chrono::steady_clock::duration elapsed,
+                        std::chrono::steady_clock::duration held)
+{
+  // This is the only writer of m_gate_raw. Session decisions never read it.
+  auto& raw = session.m_gate_raw;
+  const auto write = [](const std::string& json) {
+    NOTICE_LOG_FMT(ROLLBACK, "ORCA_GATE_RAW {}", json);
+  };
+  if (!raw.begun)
+  {
+    raw.begun = true;
+    write(R"({"v":1,"kind":"begin"})");
+  }
+  if (event == Event::HitchTiming)
+  {
+    raw.hitch_ms = std::chrono::duration<double, std::milli>(elapsed).count();
+    raw.held_ms = std::chrono::duration<double, std::milli>(held).count();
+    return;
+  }
+  if (event == Event::LocalHitch || event == Event::LoadHitch)
+  {
+    // Boundary stages the measured durations before either counting callback.
+    // Emit every notification; a caller without timing remains visibly invalid.
+    write(fmt::format(R"({{"v":1,"kind":"hitch","id":{},"frame":{},"ms":{},"held_ms":{},"class":"{}"}})",
+                      raw.next_id++, session.m_frame, raw.hitch_ms, raw.held_ms,
+                      event == Event::LocalHitch ? "here" : "load"));
+    raw.hitch_ms = 0;
+    raw.held_ms = 0;
+    return;
+  }
+  if (event == Event::StallStart)
+  {
+    raw.pending = true;
+    raw.frame = session.m_stall_frame;
+    raw.began_ms = session.m_stall_began_ms;
+    raw.frames_ahead = session.m_frame - session.ConfirmedFrame();
+    raw.after_input = session.ConfirmedFrame() >= 0;
+    raw.plugged = session.Plugged(session.m_config.local_seat, session.m_frame);
+    raw.settle_frame = std::max(0, session.SettleFrom());
+    return;
+  }
+  if (raw.pending && (event == Event::StallEnd || event == Event::Summary || event == Event::Shutdown))
+  {
+    const bool finished = event == Event::StallEnd;
+    const double end = session.m_stall_ended_ms >= 0 ?
+                           session.m_stall_ended_ms : session.m_game.NowMs();
+    write(fmt::format(R"({{"v":1,"kind":"stall","id":{},"frame":{},"wait_ms":{},"frames_ahead":{},"after_input":{},"plugged":{},"settle_frame":{},"last_hitch_frame":{},"last_peer_stall_frame":{}}})",
+                      raw.next_id++, raw.frame, std::max(0.0, end - raw.began_ms),
+                      raw.frames_ahead, finished && raw.after_input, raw.plugged,
+                      raw.settle_frame, session.m_last_hitch_frame,
+                      session.m_last_peer_stall_frame));
+    raw.pending = false;
+  }
+  if (event == Event::Shutdown)
+  {
+    // Some teardown paths have no LogStats call. Close their actual tail here,
+    // after the unfinished stall, using only the existing cumulative counters.
+    const auto& stats = session.m_stats;
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Online match at ended session: frame {}, {} rollbacks, {} re-run frames, "
+                   "deepest {}, {} stalls ({} counted), {} waits, {} hitches here "
+                   "({} more in game loads), {} checksums matched",
+                   session.m_frame, stats.rollbacks, stats.resimulated_frames,
+                   stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits,
+                   stats.hitches, stats.load_hitches, stats.checksums_matched);
+  }
+}
 
 namespace Orca::Net
 {
@@ -109,6 +184,7 @@ Session::Session(const Config& config, Game& game, Transport& transport)
     : m_config(config), m_game(game), m_transport(transport), m_dirty(INT_MAX),
       m_delay(config.input_delay), m_hold_windows(STALL_HOLD_WINDOWS)
 {
+  ORCA_GATE_RAW_EMIT(*this, Gate::Event::Begin);
   for (const int seat : m_config.co_seats)
   {
     if (seat < 0 || seat >= m_config.seats || seat >= MAX_SEATS || seat == m_config.local_seat ||
@@ -167,6 +243,11 @@ Session::Session(const Config& config, Game& game, Transport& transport)
         m_co_local[seat][frame] = m_config.start_pads[seat];
   for (int s = 0; s < m_config.seats; ++s)
     AdvanceReceived(s);
+}
+
+Session::~Session()
+{
+  ORCA_GATE_RAW_EMIT(*this, Gate::Event::Shutdown);
 }
 
 const Pad* Session::DepartedPad(int seat, int frame) const
@@ -1262,6 +1343,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
       m_stall_began_ms = m_game.NowMs();
       m_stall_after_input = ConfirmedFrame() >= 0 && Plugged(m_config.local_seat, m_frame) &&
                             m_frame >= SettleFrom();
+      ORCA_GATE_RAW_EMIT(*this, Gate::Event::StallStart);
     }
     m_stalling = true;
     m_stall_ended_ms = -1;
@@ -1284,6 +1366,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
     }
     m_stats.spared_stalls = m_spared[0];
   }
+  ORCA_GATE_RAW_EMIT(*this, Gate::Event::StallEnd);
   // After a stall or a wait, the time it held is not made up.
   if (m_stalling || m_waiting)
     m_game.ResetPacing();
@@ -1493,12 +1576,14 @@ void Session::OnLocalHitch()
   ++m_hitches;
   m_stats.hitches = m_hitches;
   m_last_hitch_frame = m_frame;
+  ORCA_GATE_RAW_EMIT(*this, Gate::Event::LocalHitch);
 }
 
 void Session::OnLoadHitch()
 {
   ++m_stats.load_hitches;
   m_last_hitch_frame = m_frame;
+  ORCA_GATE_RAW_EMIT(*this, Gate::Event::LoadHitch);
 }
 
 void Session::SetFixedDelay(std::optional<int> frames)
@@ -2580,3 +2665,5 @@ void Session::SendPacket()
   m_transport.Send(packet);
 }
 }  // namespace Orca::Net
+
+#endif  // ORCA_GATE_RAW_MACRO_ONLY

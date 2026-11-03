@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/Session/GateRaw.h"
 
 // Orca's rollback session: the input exchange and the decision of which frame the emulator runs
 // next. It knows nothing about Dolphin; the emulator implements Game and the network side
@@ -315,6 +316,7 @@ class Session
 {
 public:
   Session(const Config& config, Game& game, Transport& transport);
+  ~Session();
 
   // Called at every boundary. `completed_frame` is the frame that just finished (-1 at the very
   // first boundary). `local_pad` is the local controller now; it applies to frame (next frame +
@@ -488,6 +490,11 @@ private:
   std::array<int, MAX_SEATS> m_authority_ack{-1, -1, -1, -1};
   std::array<std::array<int, MAX_SEATS>, MAX_SEATS> m_peer_ack{};
   std::map<int, DepartedInputs> m_departed;
+
+  friend void Orca::Gate::EmitRaw(const Session&, Gate::Event,
+                                 std::chrono::steady_clock::duration,
+                                 std::chrono::steady_clock::duration);
+  mutable Gate::RawState m_gate_raw;
 
   Config m_config;
   Game& m_game;

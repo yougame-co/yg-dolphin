@@ -4616,6 +4616,7 @@ std::optional<int> Boundary(Core::System& system,
       std::chrono::duration<double, std::milli>(LastFrameHeldMs()));
   if (match.last_return && now - *match.last_return > HITCH_TIME && !match.port->CatchingUp())
   {
+    ORCA_GATE_RAW_EMIT(*match.session, Orca::Gate::Event::HitchTiming, now - *match.last_return, held);
     if (now - *match.last_return - held > HITCH_TIME)
       match.session->OnLocalHitch();
     else
@@ -5169,6 +5170,7 @@ void LogStats(const char* when)
   const Match& match = TheMatch();
   if (!match.session)
     return;
+  ORCA_GATE_RAW_EMIT(*match.session, Orca::Gate::Event::Summary);
   const Orca::Net::Stats& stats = match.session->GetStats();
   NOTICE_LOG_FMT(
       ROLLBACK,
