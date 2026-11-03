@@ -2770,7 +2770,9 @@ Friends.
 | stdout | Who | When |
 |---|---|---|
 | `orca state friend-holding` | host | A friend waits to join while this game plays a single-player mode. |
-| `orca state friend-waiting` | joiner | The host's game is in a single-player mode: this join waits. |
+| `orca state friend-waiting` | joiner | The host's game is in a single-player mode or solo Versus fight: this join waits. |
+
+The host's `friend-holding` also covers a solo Versus fight/results hold; the joiner keeps `friend-waiting`.
 
 Harness knobs (test runs only): `ORCA_UX_TEST_PLUG_AT=<frame>` plugs the ports after the first in
 from that frame (port 1 alone before), as a friend's drop-in does at its frame S, for synctests of

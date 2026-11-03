@@ -2218,7 +2218,7 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
                                          "is back in the menus: the join goes on");
           if (event.holding)
           {
-            Orca::Status::State(fight ? "friend-holding" : "friend-waiting");
+            Orca::Status::State("friend-waiting");
           }
           else
           {

@@ -778,7 +778,9 @@ same move from its own origin. So is a new seed for the game's random numbers
   (`FRESH_FRIENDS_AFTER`); a shorter one, a host that just booted or just fresh-started, joins in
   place. A host in a single-player mode holds the friend first, as before. A solo host in a
   Versus fight (CPUs or local players) or its results holds the friend until the character select
-  or menus. The host sees “<name> joins when this match ends”; the friend sees `friend-holding`.
+  or menus. The host sees “<name> joins when this match ends”; the friend prints `friend-waiting`.
+  Recovering friends rejoin in place, including a batch with a new friend. Tourney and Rotation
+  keep immediate joins: their between-fight scenes have not been established.
   `let-in` ends that fight hold and starts the join now. Doubles batches and queue rooms retain
   their own logic. Elsewhere (menus or a select) the fresh start is immediate. The decision
   is `DecideFreshStart`, a pure function. Never in a session.
@@ -816,8 +818,9 @@ same move from its own origin. So is a new seed for the game's random numbers
   since: how long either player played before no longer matters. After a queue room the player's own
   game comes back as before (the queue image).
 - **What it resets.** A friends fresh start resets what the host set up alone: Versus rules, items,
-  the stage list, Project+'s Code Menu, tags made in the game. A fight is reset only if the host
-  explicitly uses `let-in` (or disables the fight-hold test flag). Each
+  the stage list, Project+'s Code Menu, tags made in the game. A held fight is reset only if the host
+  explicitly uses `let-in` (or disables the fight-hold test flag); Tourney and Rotation keep
+  their immediate-join behavior. Each
   player's YouGame tag and controls carry over as port values.
 - **NAND.** A restore rewrites only the files that differ and removes the rest
   (`ReplaceNandTree`), so a fresh start doesn't write Brawl's 39 MB of boot files again.
