@@ -693,6 +693,10 @@ void Platform::ProcessEmbedCommands()
       in >> value;
       Orca::Online::TestDirect(value);
     }
+    else if (cmd == "let-in")
+    {
+      Orca::Online::LetIn();
+    }
     else if (cmd == "prepare-join")
     {
       // The host invited a friend who will drop into this game.

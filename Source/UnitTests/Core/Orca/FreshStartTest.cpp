@@ -590,3 +590,89 @@ TEST(OrcaCoSeats, SetOverButtonsKeepTheLeadSample)
     }
   }
 }
+
+// The offer gate remains absolute frame 300. A friend's settled tail reaches it unseen,
+// so the following boundary can capture immediately instead of showing frames 266-299.
+TEST(OrcaFreshStart, FriendsTailReachesTheOfferGateBeforeShowing)
+{
+  EXPECT_FALSE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE, 37, 265, 300));
+  EXPECT_FALSE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE, 71, 299, 300));
+  EXPECT_TRUE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE, 72, 300, 300));
+  // Gate reached still needs CSS settling or the existing tail limit.
+  EXPECT_FALSE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE - 1, 72, 300, 300));
+  EXPECT_TRUE(FreshTailSettled(FreshKind::Menu, 0, FRESH_TAIL_LIMIT, 828, 300));
+  // Flag off / queue tails supply no extra gate. Reset games retain their one-frame tail.
+  EXPECT_TRUE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE, 37, 265, 0));
+  EXPECT_TRUE(FreshTailSettled(FreshKind::Reset, 0, 1, 229, 300));
+  // Vanilla Brawl's origin already exceeds the absolute gate.
+  EXPECT_TRUE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE, 37, 1560, 300));
+}
+
+TEST(OrcaFreshStart, FriendsOfferFollowsTheUnseenTailAtTheNextBoundary)
+{
+  int tail_end = 265;
+  while (!FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE,
+                           tail_end - 229 + 1, tail_end, 300))
+    ++tail_end;
+  ASSERT_EQ(tail_end, 300);
+  const auto offer = ChooseJoinCapture(nullptr, false, tail_end + 1, 230);
+  ASSERT_TRUE(offer);
+  EXPECT_EQ(offer->frame, 301);
+  EXPECT_EQ(offer->frame - 229, 72);
+}
+
+TEST(OrcaFightHold, OnlyASoloHostsWaitingFriendHolds)
+{
+  FightHoldInputs in;
+  in.fight = true;
+  in.waiting = true;
+  EXPECT_TRUE(FightJoinHeld(in));
+  for (bool FightHoldInputs::* field : {&FightHoldInputs::joining, &FightHoldInputs::session,
+                                       &FightHoldInputs::seated_or_plugging,
+                                       &FightHoldInputs::doubles, &FightHoldInputs::in_queue_room,
+                                       &FightHoldInputs::let_in})
+  {
+    in.*field = true;
+    EXPECT_FALSE(FightJoinHeld(in));
+    in.*field = false;
+  }
+  in.enabled = false;
+  EXPECT_FALSE(FightJoinHeld(in));
+  in.enabled = true;
+  in.fight = false;  // CSS or menu
+  EXPECT_FALSE(FightJoinHeld(in));
+  in.fight = true;
+  in.waiting = false;
+  EXPECT_FALSE(FightJoinHeld(in));
+}
+
+TEST(OrcaFightHold, RecoveringFriendsRejoinInPlaceEvenWithANewFriendWaiting)
+{
+  FightHoldInputs fight;
+  fight.fight = true;
+  fight.waiting = true;
+  EXPECT_TRUE(FightJoinHeld(fight));
+  // HostEvents supplies any_of(recovering), including the mixed recovering/new batch.
+  fight.recovering = true;
+  EXPECT_FALSE(FightJoinHeld(fight));
+  auto start = SoloHost();
+  start.waiting = true;
+  start.in_place = true;
+  EXPECT_EQ(DecideFreshStart(start), FreshStep::None);
+}
+
+TEST(OrcaFightHold, WaitingMessageRenewsOncePerExpiryAndOnHoldChange)
+{
+  HoldMessageTimer timer;
+  const auto start = HoldMessageTimer::Clock::time_point{};
+  const auto lifetime = std::chrono::seconds(90);
+  EXPECT_TRUE(timer.Due(start, lifetime));
+  EXPECT_FALSE(timer.Due(start, lifetime));
+  EXPECT_FALSE(timer.Due(start + lifetime - std::chrono::milliseconds(1), lifetime));
+  EXPECT_TRUE(timer.Due(start + lifetime, lifetime));
+  EXPECT_FALSE(timer.Due(start + lifetime, lifetime));
+  EXPECT_TRUE(timer.Due(start + lifetime * 2, lifetime));
+  timer.Reset();  // A different hold kind replaces the text immediately.
+  EXPECT_TRUE(timer.Due(start + lifetime * 2, lifetime));
+  EXPECT_FALSE(timer.Due(start + lifetime * 2, lifetime));
+}

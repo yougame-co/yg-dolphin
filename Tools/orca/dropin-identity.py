@@ -80,6 +80,8 @@ class Orca:
         os.makedirs(self.user)
         env = {
             "HOME": os.environ["HOME"],
+            "TMPDIR": os.environ.get("TMPDIR", WORK),
+            "YG_THROTTLE": "1",
             "PATH": os.environ["PATH"],
             "ORCA_SESSION": "1",
             "ORCA_TEST_COMMANDS": "1",
@@ -91,7 +93,7 @@ class Orca:
             "YG_HASHLOG": os.path.join(WORK, f"hash-{name}.txt"),
         }
         if PPLUS:
-            env["ORCA_PROFILE"] = "PPLUS32"
+            env["ORCA_PROFILE"] = os.environ.get("ORCA_PROFILE", "PPLUS32")
         # A local rooms stack (ORCA_SITE) and the fresh start's knobs (ORCA.md "Fresh starts").
         for key in ("ORCA_SITE", "ORCA_TEST_FRESH", "ORCA_TEST_FRESH_AFTER"):
             if os.environ.get(key):
@@ -106,6 +108,8 @@ class Orca:
         else:
             args += ["-e", DISC]
         self.err = open(os.path.join(WORK, f"{name}.log"), "w")
+        while os.getloadavg()[0] >= 20:
+            time.sleep(5)
         self.proc = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=self.err, text=True, bufsize=1)
         threading.Thread(target=self.read, daemon=True).start()

@@ -258,6 +258,7 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
 namespace
 {
 std::atomic<bool> s_drop_in_held{false};
+FightHoldLatch s_fight_in_progress;
 std::atomic<bool> s_training{false};
 
 // Versus sequences: a friend who joins there is already where friends play.
@@ -278,6 +279,24 @@ bool SequenceHoldsDropIn(std::string_view sequence)
       "sqAdventure",    "sqCoinShooter",   "sqCoinshooter", "sqEdit",
       "sqReplay",       "sqTyFigDisp",     "sqChallenger",  "sqDebugDefault"};
   return std::ranges::find(held, sequence) != held.end();
+}
+
+bool FightHoldsDropIn(std::string_view scene, std::string_view sequence, bool held)
+{
+  // Between-fight bracket/rotation scenes are not established: keep their immediate joins.
+  if (sequence == "sqToMelee" || sequence == "sqQuMelee" || MenusScene(scene, sequence))
+    return false;
+  return held || (IsVersusSequence(sequence) && (scene == "scMelee" || scene == "scVsResult"));
+}
+
+bool FightInProgress()
+{
+  return s_fight_in_progress.Held();
+}
+
+void ResetFightHold()
+{
+  s_fight_in_progress.Reset();
 }
 
 bool DropInHeld()
@@ -406,6 +425,7 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     const bool test_hold = !s_test_hold_over && frame >= s_test_hold.first &&
                            frame < s_test_hold.second && TestKnobsAllowed();
     s_drop_in_held = SequenceHoldsDropIn(in.sequence) || test_hold;
+    s_fight_in_progress.Observe(ReadSceneName(m), in.sequence);
     s_training.store(in.sequence == "sqTraining", std::memory_order_relaxed);
   }
   // The friends bytes are the match block's, in sora_scene's free space: not in a game whose free

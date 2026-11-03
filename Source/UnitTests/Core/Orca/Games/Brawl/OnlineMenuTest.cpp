@@ -2616,3 +2616,45 @@ TEST(OrcaOnlineMenuReader, SceneExitWritesOnlyItsDeclaredSingletonWords)
                            [&](const auto& region) { return region.Contains(address, 1); }))
         << std::hex << address;
 }
+
+TEST(OrcaOnlineMenuDropIn, VersusFightAndResultsHoldUntilTheSelectOrMenus)
+{
+  for (const char* sequence : {"sqVsMelee", "sqSpMelee"})
+  {
+    EXPECT_TRUE(FightHoldsDropIn("scMelee", sequence, false));
+    EXPECT_TRUE(FightHoldsDropIn("scVsResult", sequence, false));
+    EXPECT_TRUE(FightHoldsDropIn("scMemoryChange", sequence, true));
+    EXPECT_TRUE(FightHoldsDropIn("", "", true));
+    EXPECT_FALSE(FightHoldsDropIn("scSelctCharacter", sequence, true));
+    EXPECT_FALSE(FightHoldsDropIn("muMenuMain", "sqMenuMain", true));
+    // A stage select before the first fight is still open to a friend.
+    EXPECT_FALSE(FightHoldsDropIn("scSelStage", sequence, false));
+  }
+  EXPECT_FALSE(FightHoldsDropIn("scMelee", "sqTraining", false));
+  EXPECT_FALSE(FightHoldsDropIn("scMelee", "sqSingleSimple", false));
+}
+
+TEST(OrcaOnlineMenuDropIn, TourneyAndRotationKeepImmediateJoins)
+{
+  for (const char* sequence : {"sqToMelee", "sqQuMelee"})
+  {
+    EXPECT_FALSE(FightHoldsDropIn("scMelee", sequence, false));
+    EXPECT_FALSE(FightHoldsDropIn("scVsResult", sequence, false));
+    EXPECT_FALSE(FightHoldsDropIn("scMemoryChange", sequence, true));
+  }
+}
+
+TEST(OrcaOnlineMenuDropIn, FreshStartDiscardsTheOldFightEvenBeforeTheNextSelect)
+{
+  for (const char* scene : {"scTitle", "scMemoryChange", ""})
+  {
+    FightHoldLatch latch;
+    latch.Observe("scMelee", "sqVsMelee");
+    ASSERT_TRUE(latch.Held());
+    latch.Reset();  // Successful FreshStart, before its reset/menu tail.
+    latch.Observe(scene, "");
+    EXPECT_FALSE(latch.Held()) << scene;
+    latch.Observe("scMelee", "sqVsMelee");
+    EXPECT_TRUE(latch.Held());  // A later real fight still holds a new friend.
+  }
+}

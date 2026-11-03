@@ -146,7 +146,7 @@ bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::s
 // Host: unplug a friend and tell them why ("desync", "stalled", "network").
 void DropPeer(int seat, const std::string& reason);
 // Host: whether to hold joins that are waiting for a keyframe (YouGameRoom::HoldJoins).
-void HoldJoins(bool holding);
+void HoldJoins(bool holding, bool fight = false);
 // Whether a session error means the games desynced (disagreeing inputs or checksums, or a
 // correction that arrived too late to apply).
 bool IsDesync(const std::string& session_error);
@@ -168,6 +168,9 @@ void OfferKeyframe(int seat, const Net::KeyframeInfo& info);
 void PrepareJoin();
 // True once after a PrepareJoin; the emulator thread takes it at a frame boundary.
 bool TakePrepareJoin();
+// The app explicitly lets a waiting friend into the solo host's fight now. Boundary-consumed.
+void LetIn();
+bool TakeLetIn();
 
 // Drop-in work waiting for the next frame boundary: a friend arriving, a PrepareJoin while the room
 // is up, or the app's join or leave once its caps allow them. Ends a solo pause
