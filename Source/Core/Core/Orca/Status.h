@@ -121,6 +121,11 @@ inline constexpr const char* HOSTUI_CAP = "hostui";
 // enables this only after installing all its key/focus handlers; headless and Qt do not offer it.
 inline constexpr const char* SHORTCUTS_CAP = "shortcuts";
 void SetShortcutsAvailable(bool available);
+// "lazyroom": with the app's agreement, a host's game boots with no room and opens one only for an
+// invite (the app's `host <code>`, a code the site already opened) or a queue match, and prints
+// "orca state roomless" whenever it has none (Session/Online.h HostLater). Offered with join and
+// host, after "shortcuts", so an app that reads fewer words drops it first and keeps today's path.
+inline constexpr const char* LAZYROOM_CAP = "lazyroom";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
 // the pick caps where supported, then "talk", "rumble", "replay" in product playback,
 // "broadcast" in product playback on builds with the sink, then "record" and "hostui" in every
@@ -152,6 +157,10 @@ void WithdrawOnline();
 void ResetOnline();
 void SetAppCaps(std::string_view list);
 bool Cap(std::string_view name);
+// Whether the app has sent any `caps` line this run.
+bool AppCapsAnswered();
+// Whether this boot offers `name` (OfferedCaps), whatever the app answered.
+bool Offers(std::string_view name);
 // "orca stats <json>" (with the "stats" capability).
 void Stats(std::string_view json);
 // "orca shaders <compiled> <total>", about once a second while the boot compiles shaders before the

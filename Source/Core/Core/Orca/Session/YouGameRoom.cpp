@@ -99,6 +99,8 @@ constexpr auto DIRECT_STALL_GAP = std::chrono::milliseconds(4);
 constexpr auto DIRECT_SUMMARY_EVERY = std::chrono::milliseconds(250);
 
 using Clock = std::chrono::steady_clock;
+// How long a host with no invite waits for the app's caps before opening its room as before.
+constexpr std::chrono::seconds LAZYROOM_ANSWER_WAIT{30};
 
 // Rooms come and go within one process (reopened, joined, left), each mirroring itself to the page
 // on its own threads. The page must only get the newest room's updates, never a late one from an
@@ -1796,6 +1798,27 @@ struct YouGameRoom::Impl
   }
 
   // The room's ticket and code, from the desktop app's bridge or (tests) the site.
+  // "lazyroom" (Status::LAZYROOM_CAP), a host with no invite: the app answers the caps only after
+  // the first frame, so the host plays now (its role is known) and the ticket waits for that
+  // answer. If the app agrees, no room opens until it asks for one (`host <code>`): this room ends
+  // as a normal leave and the app hears "roomless". Otherwise the ticket goes ahead as before.
+  bool LazyRoomAgreed()
+  {
+    {
+      std::lock_guard lock(mutex);
+      role_known = true;
+    }
+    const auto until = Clock::now() + LAZYROOM_ANSWER_WAIT;
+    while (!Orca::Status::AppCapsAnswered() && !stop && Clock::now() < until)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    if (stop || !Orca::Status::Cap(Orca::Status::LAZYROOM_CAP))
+      return false;
+    NOTICE_LOG_FMT(NETPLAY, "Orca: no room until the app asks for one (lazyroom)");
+    End("No room until an invite or a match", "");
+    Orca::Status::Event("roomless");
+    return true;
+  }
+
   bool Ticket(std::string* url, std::string* ticket)
   {
     picojson::object lobby;
@@ -1924,6 +1947,8 @@ struct YouGameRoom::Impl
         // The app opened an invite: this Orca joins the friend's game.
         if (!room.empty())
           joining = true;
+        else if (Orca::Status::Offers(Orca::Status::LAZYROOM_CAP) && LazyRoomAgreed())
+          return false;
       }
       if (room.empty())
         room = RandomString(CODE_ALPHABET, 8);

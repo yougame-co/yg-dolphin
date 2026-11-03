@@ -36,6 +36,7 @@ std::atomic<bool> s_started{false};
 std::atomic<bool> s_online_withdrawn{false};
 std::atomic<bool> s_stopping{false};
 std::atomic<bool> s_shortcuts_available{false};
+std::atomic<bool> s_app_answered{false};
 std::FILE* s_out = nullptr;
 // Capability readers run on the room/controller threads. Never keep this lock during output.
 std::mutex s_caps_mutex;
@@ -223,6 +224,9 @@ std::string OfferedCaps()
     caps += " qdoubles rdoubles";
   if (s_shortcuts_available)
     caps += fmt::format(" {}", SHORTCUTS_CAP);
+  if (SessionActive() && !s_online_withdrawn && !Rollback::ReplayStream::ProductMode() &&
+      !Mod::LocalPackRequested())
+    caps += fmt::format(" {}", LAZYROOM_CAP);
   return caps;
 }
 
@@ -295,6 +299,17 @@ void SetAppCaps(std::string_view list)
   std::lock_guard lock(s_mutex);
   s_app_list = std::string(list);
   AgreeCaps(offered, list);
+  s_app_answered = true;
+}
+
+bool AppCapsAnswered()
+{
+  return s_app_answered;
+}
+
+bool Offers(std::string_view name)
+{
+  return Agreed(OfferedCaps(), name).contains(name);
 }
 
 bool Cap(std::string_view name)

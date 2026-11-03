@@ -1150,12 +1150,20 @@ void ForgetRoom(Match& match)
 // Stop sends "leave" then "quit" at once; the delay keeps the quit from finding a ticket request.
 constexpr std::chrono::seconds REOPEN_DELAY{1};
 
+// "lazyroom" (Orca/Status.h): the app opens rooms when the player asks for one (an invite or a
+// queue match), so a game left on its own keeps none.
+bool LazyRoom()
+{
+  return Orca::Status::Cap(Orca::Status::LAZYROOM_CAP);
+}
+
 // Solo again: on port 1, open a room of its own; elsewhere none ("no-room"): hosts play port 1.
+// With lazyroom, none on any port: the app hears "roomless" (TellNoRoom).
 void ReopenRoom(Match& match)
 {
   ForgetRoom(match);
   Orca::Online::ShutdownInBackground();
-  if (match.local_seat == 0)
+  if (match.local_seat == 0 && !LazyRoom())
     match.reopen_pending = Clock::now() + REOPEN_DELAY;
   else
     match.tell_no_room = true;
@@ -1305,14 +1313,18 @@ void KeepRoomOpen(Match& match, Clock::time_point now = Clock::now())
   // A matchmade room closed after its result: never rejoin that code; open a fresh room.
   if (code == "match-over")
   {
-    NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the room closed after its result; a room of its own");
+    NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the room closed after its result; {}",
+                   LazyRoom() ? "no room until the app asks for one" : "a room of its own");
     Orca::Status::Event("friend-left match-over");
     Orca::UX::Search::End();
     match.linger_until.reset();
     ResetDropIn(match);
     ForgetRoom(match);
     Orca::Online::ShutdownInBackground();
-    Orca::Online::StartRoom("", false);
+    if (LazyRoom())
+      match.tell_no_room = true;
+    else
+      Orca::Online::StartRoom("", false);
     return;
   }
   if (match.reopen_gave_up)
@@ -3022,12 +3034,20 @@ void HostInPlay(Match& match, const std::string& code)
     Orca::Status::Line("unsupported host");
     return;
   }
+  // With lazyroom, a player off the queue hosts the friends room the page opened for an invite.
+  const bool friends = LazyRoom() && !QueueOrSearch();
   Reseat(match);
   ResetDropIn(match);
   ForgetRoom(match);
   match.linger_until.reset();
   Orca::Online::ShutdownInBackground();
-  Orca::Online::StartRoom(code, false, false);
+  Orca::Online::StartRoom(code, false, friends);
+  if (friends)
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: hosting friends room {} from frame {}", code,
+                   match.running + 1);
+    return;
+  }
   Orca::UX::Search::Matched(true);
   // Once the welcome names the queue, this game fresh-starts into the room's character select
   // (DecideFreshStart); the header and rule locks follow at the next alone boundary after it. Once
@@ -3183,7 +3203,7 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
   match.keyframe.reset();
   // This player's own game plays port 1, and a room of its own opens (a former joiner had none).
   Reseat(match);
-  if (match.tell_no_room)
+  if (match.tell_no_room && !LazyRoom())
   {
     match.tell_no_room = false;
     match.reopen_pending = Clock::now() + REOPEN_DELAY;
@@ -3421,14 +3441,16 @@ void RearmFriendsPick(Match& match)
 
 // A player on a port other than 1 that didn't come home at this boundary (say, in a fight) has no
 // room of its own: the app hears "no-room" once, after the old room has finished leaving, so it
-// never sees that room again. It still comes home once back on the menus.
+// never sees that room again. It still comes home once back on the menus. With lazyroom every
+// port hears "roomless" instead: no room until the app asks for one.
 void TellNoRoom(Match& match)
 {
   if (!match.tell_no_room || Orca::Online::RoomsLeaving())
     return;
   match.tell_no_room = false;
-  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: no room of its own on port {}", match.local_seat + 1);
-  Orca::Status::State("no-room");
+  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: no room of its own on port {}{}", match.local_seat + 1,
+                 LazyRoom() ? " until the app asks for one" : "");
+  Orca::Status::Event(LazyRoom() ? "roomless" : "no-room");
 }
 
 // A joiner whose host's game carries another header than this room's leaves before playing it.
