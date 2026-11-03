@@ -645,3 +645,18 @@ TEST(OrcaFightHold, OnlyASoloHostsWaitingFriendHolds)
   in.waiting = false;
   EXPECT_FALSE(FightJoinHeld(in));
 }
+
+TEST(OrcaFightHold, RecoveringFriendsRejoinInPlaceEvenWithANewFriendWaiting)
+{
+  FightHoldInputs fight;
+  fight.fight = true;
+  fight.waiting = true;
+  EXPECT_TRUE(FightJoinHeld(fight));
+  // HostEvents supplies any_of(recovering), including the mixed recovering/new batch.
+  fight.recovering = true;
+  EXPECT_FALSE(FightJoinHeld(fight));
+  auto start = SoloHost();
+  start.waiting = true;
+  start.in_place = true;
+  EXPECT_EQ(DecideFreshStart(start), FreshStep::None);
+}

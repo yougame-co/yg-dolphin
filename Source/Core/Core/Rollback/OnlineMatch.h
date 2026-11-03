@@ -281,6 +281,8 @@ struct FreshInputs
 FreshStep DecideFreshStart(const FreshInputs& in);
 struct FightHoldInputs
 {
+  // Any recovering arrival must rejoin the existing fight in place.
+  bool recovering = false;
   bool enabled = true;
   bool fight = false;
   bool waiting = false;

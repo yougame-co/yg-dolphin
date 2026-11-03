@@ -2619,7 +2619,7 @@ TEST(OrcaOnlineMenuReader, SceneExitWritesOnlyItsDeclaredSingletonWords)
 
 TEST(OrcaOnlineMenuDropIn, VersusFightAndResultsHoldUntilTheSelectOrMenus)
 {
-  for (const char* sequence : {"sqVsMelee", "sqSpMelee", "sqToMelee", "sqQuMelee"})
+  for (const char* sequence : {"sqVsMelee", "sqSpMelee"})
   {
     EXPECT_TRUE(FightHoldsDropIn("scMelee", sequence, false));
     EXPECT_TRUE(FightHoldsDropIn("scVsResult", sequence, false));
@@ -2632,4 +2632,14 @@ TEST(OrcaOnlineMenuDropIn, VersusFightAndResultsHoldUntilTheSelectOrMenus)
   }
   EXPECT_FALSE(FightHoldsDropIn("scMelee", "sqTraining", false));
   EXPECT_FALSE(FightHoldsDropIn("scMelee", "sqSingleSimple", false));
+}
+
+TEST(OrcaOnlineMenuDropIn, TourneyAndRotationKeepImmediateJoins)
+{
+  for (const char* sequence : {"sqToMelee", "sqQuMelee"})
+  {
+    EXPECT_FALSE(FightHoldsDropIn("scMelee", sequence, false));
+    EXPECT_FALSE(FightHoldsDropIn("scVsResult", sequence, false));
+    EXPECT_FALSE(FightHoldsDropIn("scMemoryChange", sequence, true));
+  }
 }
