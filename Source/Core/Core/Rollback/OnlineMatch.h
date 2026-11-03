@@ -235,7 +235,8 @@ enum class FreshKind
 };
 FreshKind FreshKindForOrigin(OriginRule rule);
 bool FreshExitAllowed(FreshKind kind, u8 exit);
-bool FreshTailSettled(FreshKind kind, int css_streak, int length);
+bool FreshTailSettled(FreshKind kind, int css_streak, int length, int frame = 0,
+                      int offer_from = 0);
 // The new history's metadata and typed events. Reset histories have neither an exit nor a seed.
 Orca::Net::ReplayArchive FreshReplayStart(FreshKind kind, int frame, u64 origin_hash, u8 exit,
                                         u32 seed);
@@ -278,6 +279,39 @@ struct FreshInputs
   int fresh_after = -1;
 };
 FreshStep DecideFreshStart(const FreshInputs& in);
+struct FightHoldInputs
+{
+  // Any recovering arrival must rejoin the existing fight in place.
+  bool recovering = false;
+  bool enabled = true;
+  bool fight = false;
+  bool waiting = false;
+  bool joining = false;
+  bool session = false;
+  bool seated_or_plugging = false;
+  bool doubles = false;
+  bool in_queue_room = false;
+  bool let_in = false;
+};
+// Only a solo host's friend waits for a Versus fight/results to end.
+bool FightJoinHeld(const FightHoldInputs& in);
+// A persistent join message is renewed once per lifetime while a hold continues.
+class HoldMessageTimer
+{
+public:
+  using Clock = std::chrono::steady_clock;
+  void Reset() { m_next.reset(); }
+  bool Due(Clock::time_point now, Clock::duration lifetime)
+  {
+    if (m_next && now < *m_next)
+      return false;
+    m_next = now + lifetime;
+    return true;
+  }
+
+private:
+  std::optional<Clock::time_point> m_next;
+};
 // Host wall time only: warn once, then hold a reset join for three seconds. Other starts and a
 // cancelled or held join clear the warning, so a later join gets its own notice.
 FreshStep WarnBeforeResetJoin(FreshStep step, FreshKind kind, bool queue_armed,

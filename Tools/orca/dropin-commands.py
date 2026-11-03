@@ -57,6 +57,8 @@ class Orca:
         os.makedirs(user)
         env = {
             "HOME": os.environ["HOME"],
+            "TMPDIR": os.environ.get("TMPDIR", WORK),
+            "YG_THROTTLE": "1",
             "PATH": os.environ["PATH"],
             "ORCA_SESSION": "1",
             "ORCA_TEST_COMMANDS": "1",
@@ -67,7 +69,7 @@ class Orca:
             "YG_SCENES": "1",
         }
         if PPLUS:
-            env["ORCA_PROFILE"] = "PPLUS32"
+            env["ORCA_PROFILE"] = os.environ.get("ORCA_PROFILE", "PPLUS32")
         # A local rooms stack (ORCA_SITE) and the fresh start's knobs (ORCA.md "Fresh starts").
         for key in ("ORCA_SITE", "ORCA_TEST_FRESH", "ORCA_TEST_FRESH_AFTER"):
             if os.environ.get(key):
@@ -84,6 +86,8 @@ class Orca:
         else:
             args += ["-e", DISC]
         self.err = open(os.path.join(WORK, f"{name}.log"), "w")
+        while os.getloadavg()[0] >= 20:
+            time.sleep(5)
         self.proc = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=self.err, text=True, bufsize=1)
         threading.Thread(target=self.read, daemon=True).start()
@@ -195,9 +199,18 @@ time.sleep(5)
 if friend.proc.poll() is not None:
     fail("friend stopped after leaving")
 
-# 4. Again; then the host leaves.
+# 4. Again; explicitly let the returning friend into the solo fight if it is held.
+# Older binaries join immediately; the default fight-hold engine reports friend-waiting first.
 friend.send(f"join {ROOM}")
-friend.expect("orca state playing", 120)
+end = time.time() + 120
+while True:
+    state = friend.expect("orca state ", max(0.1, end - time.time()))
+    if state == "orca state friend-waiting":
+        host.send("let-in")
+    if state == "orca state playing":
+        break
+    if time.time() >= end:
+        fail("rejoin did not reach playing after let-in")
 time.sleep(20)
 host.send("leave")
 host.expect("orca state left", 30)

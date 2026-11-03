@@ -1349,6 +1349,7 @@ struct YouGameRoom::Impl
   std::optional<std::pair<std::vector<KeyframeInfo::Name>, int>> pending_names;
   // Host: joins held (HoldJoins), and whether a change is still to be announced.
   bool holding = false;
+  bool holding_for_fight = false;
   bool hold_told = true;
   // Whether this Orca joins someone else's game (RoomOptions::joining, or the app's invite), known
   // once the ticket is in (role_known, under mutex).
@@ -4612,10 +4613,11 @@ struct YouGameRoom::Impl
     // A held join (HoldJoins): every joiner without a keyframe hears it on change and every second
     // while held (for late arrivals and reconnects).
     {
-      bool hold_now, hold_changed;
+      bool hold_now, hold_changed, fight_now;
       {
         std::lock_guard lock(mutex);
         hold_now = holding;
+        fight_now = holding_for_fight;
         hold_changed = !std::exchange(hold_told, true);
       }
       if (!joining && (hold_changed || (hold_now && now - last_hello >= HELLO_EVERY)))
@@ -4623,6 +4625,8 @@ struct YouGameRoom::Impl
         picojson::object d;
         d["k"] = picojson::value("hold");
         d["on"] = picojson::value(hold_now);
+        if (hold_now && fight_now)
+          d["why"] = picojson::value("fight");
         for (const auto& [id, peer] : peers)
         {
           if (peer.heard && !peer.drop_in_host && !peer.sent_packet)
@@ -6126,6 +6130,9 @@ struct YouGameRoom::Impl
         return;
       PeerEvent event{PeerEvent::Kind::Hold, peer.slot, true, peer.name, {}, {}};
       event.holding = d.count("on") && d.at("on").evaluate_as_boolean();
+      if (event.holding && d.count("why") && d.at("why").is<std::string>() &&
+          d.at("why").get<std::string>() == "fight")
+        event.reason = "fight";
       Emit(std::move(event));
       return;
     }
@@ -6642,12 +6649,14 @@ void YouGameRoom::DropPeer(int seat, const std::string& reason)
     m_impl->pending_drops.emplace_back(seat, reason);
 }
 
-void YouGameRoom::HoldJoins(bool holding)
+void YouGameRoom::HoldJoins(bool holding, bool fight)
 {
   std::lock_guard lock(m_impl->mutex);
-  if (m_impl->holding == holding)
+  fight = holding && fight;
+  if (m_impl->holding == holding && m_impl->holding_for_fight == fight)
     return;
   m_impl->holding = holding;
+  m_impl->holding_for_fight = fight;
   m_impl->hold_told = false;
 }
 

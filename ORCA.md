@@ -776,8 +776,13 @@ same move from its own origin. So is a new seed for the game's random numbers
   room's welcome named the queue (`host` arms it). A friend arriving at a host with no session
   fresh-starts it when the host's history since its last start is over 10 s
   (`FRESH_FRIENDS_AFTER`); a shorter one, a host that just booted or just fresh-started, joins in
-  place. A host in a single-player mode holds the friend first, as before; anywhere else (the
-  menus, a select, a Versus fight against CPUs, results) the fresh start is immediate. The decision
+  place. A host in a single-player mode holds the friend first, as before. A solo host in a
+  Versus fight (CPUs or local players) or its results holds the friend until the character select
+  or menus. The host sees “<name> joins when this match ends”; the friend prints `friend-waiting`.
+  Recovering friends rejoin in place, including a batch with a new friend. Tourney and Rotation
+  keep immediate joins: their between-fight scenes have not been established.
+  `let-in` ends that fight hold and starts the join now. Doubles batches and queue rooms retain
+  their own logic. Elsewhere (menus or a select) the fresh start is immediate. The decision
   is `DecideFreshStart`, a pure function. Never in a session.
 - **Where to.** A queue room: its Casual or Ranked select. A friend: the Casual or Ranked select the
   host is on, so Play again re-arms there once the friend leaves; otherwise With Friends.
@@ -789,7 +794,10 @@ same move from its own origin. So is a new seed for the game's random numbers
 - **The tail.** From the origin until the character select has been up 30 frames (600 at most),
   the host runs unthrottled, unseen and muted, like a rebuild of the same frames: the hook re-runs
   and plays the replay's typed events, and nothing is announced. Then the game shows as usual; the
-  readers start over on the select.
+  readers start over on the select. A friend's menu tail also reaches the first-keyframe gate
+  (normally absolute frame 300) before showing, so the next boundary can make the offer at once.
+  The gate remains intact. Queue tails and reset starts keep their existing endings; a mod gate
+  beyond the 600-frame tail limit is still waited for normally.
 - **A queue room's host** then plays nothing until the room's header is in, and its own pick goes
   back on the room's select by its own inputs (`Queue.h` `StepOwnPick`): the hand to where its token
   was placed on its own select, A once still over that character, B if it landed on another, X
@@ -810,13 +818,17 @@ same move from its own origin. So is a new seed for the game's random numbers
   since: how long either player played before no longer matters. After a queue room the player's own
   game comes back as before (the queue image).
 - **What it resets.** A friends fresh start resets what the host set up alone: Versus rules, items,
-  the stage list, Project+'s Code Menu, a fight against CPUs in progress, tags made in the game. Each
+  the stage list, Project+'s Code Menu, tags made in the game. A held fight is reset only if the host
+  explicitly uses `let-in` (or disables the fight-hold test flag); Tourney and Rotation keep
+  their immediate-join behavior. Each
   player's YouGame tag and controls carry over as port values.
 - **NAND.** A restore rewrites only the files that differ and removes the rest
   (`ReplaceNandTree`), so a fresh start doesn't write Brawl's 39 MB of boot files again.
 
 Test knobs (`TestKnobsAllowed`): `ORCA_TEST_FRESH=off` (no fresh starts: every join replays from the
 origin in place), `ORCA_TEST_FRESH_AFTER=<frames>` (the friends threshold),
+`ORCA_TEST_JOIN_FAST_OFFER=off` (restore the settled-tail ending before the offer gate),
+`ORCA_TEST_FIGHT_HOLD=off` (restore immediate joins during a solo Versus fight/results),
 `ORCA_TEST_FAST_UNTIL=<frame>` (solo frames before it run unthrottled, to age a host quickly, until
 its first fresh start or session).
 
@@ -2552,6 +2564,7 @@ log their raw request and the unchanged bounds after hiding the window. Unset, t
 | `notice <kind> <name> <text> [<key> <verb>]` | One of the YouGame overlay's lines (join, leave, invite, ...). Never logged. |
 | `talk listen\|send\|sent\|error <name> <text>` / `talk off` | Hold-to-talk's row, cap `talk`: one row after the notices, replaced by each line. Fields as in `chat`. Never logged. |
 | `feedback` / `host-menu` | Cap `hostui`: request feedback with a game screenshot, or toggle the native host menu. Ignored without the agreed cap. The app relays these shortcuts only from its focused view. |
+| `let-in` | While a friend waits for the solo host's Versus fight/results to end, release that hold and fresh-start now. Ignored outside an active fight hold. Uses the same stdin channel as `join` and `prepare-join`; desktop wiring is separate. |
 | `quit` | Stop at once and exit. |
 
 Most commands are gated by capabilities (`caps`) that Orca and the app agree on; a later `caps` line
@@ -2862,6 +2875,10 @@ STUN and TURN are internet traffic and work in every mode.
 ## Changes by release
 
 What each release changed for players, in plain words.
+
+### 0.3.100
+
+- Friends join sooner after a fresh start. During a solo Versus fight and its results, a friend waits until the host returns to the menus; returning friends and other room modes can still join straight away.
 
 ### 0.3.99
 

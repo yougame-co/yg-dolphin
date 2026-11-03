@@ -287,6 +287,20 @@ TEST(OrcaMod, TreeRefusals)
   EXPECT_TRUE(refused("{"));
 }
 
+TEST(OrcaMod, ThreeDigitPatchComparesNumerically)
+{
+  using Orca::Mod::VersionAtLeast;
+  EXPECT_TRUE(VersionAtLeast("0.3.100", "0.3.99"));
+  EXPECT_FALSE(VersionAtLeast("0.3.99", "0.3.100"));
+  EXPECT_TRUE(VersionAtLeast("0.3.100", "0.3.100"));
+  EXPECT_TRUE(VersionAtLeast("0.3.0100", "0.3.0099"));
+  std::string error;
+  EXPECT_TRUE(Orca::Mod::ParseManifest(BrawlWith("engine", R"({"api": 1, "minOrca": "0.3.99"})"),
+                                       &error)) << error;
+  EXPECT_TRUE(Orca::Mod::ParseManifest(BrawlWith("engine", R"({"api": 1, "minOrca": "0.3.100"})"),
+                                       &error)) << error;
+}
+
 TEST(OrcaMod, MinOrcaAboveThisBuildRefuses)
 {
   // Number by number, not as text.

@@ -6,10 +6,10 @@
 #
 # 1. A friend joins a room nobody's game is in: it gives up within seconds (peer_left), plays on.
 # 2. The friend reaches a room before its host's game does: the host finds someone else hosting
-#    it, says so (orca error network) and opens a fresh room; the friend gives up (peer_left).
-# 3. The friend leaves while it catches up (the host's keyframe is 25 s old, from a prepare-join, so
-#    the friend replays 25 s of its game): it leaves at once ("left"), and the host hears a plain
-#    leave, not a stall. Then it joins the host's fresh room: "friend-joined" once it plugs in.
+#    it, reports the taken-room reason and opens a fresh room; the friend gives up (peer_left).
+# 3. The friend cancels during its local input replay: its own pre-join game is restored on port 1,
+#    it leaves at once ("left"), and the host hears a plain leave, not a stall. Then it joins the
+#    host's fresh room: "friend-joined" once it plugs in.
 # 4. The host's room socket drops mid-match (the test-only "test-drop-room"): it reconnects
 #    in the background to the same room and seat. The friend retains its session and room.
 #    Then the app's Stop on the host, "leave" and "quit" at once: the friend hears it within ~1 s.
@@ -100,6 +100,8 @@ class Orca:
         os.makedirs(user)
         env = {
             "HOME": os.environ["HOME"],
+            "TMPDIR": os.environ.get("TMPDIR", WORK),
+            "YG_THROTTLE": "1",
             "PATH": os.environ["PATH"],
             "ORCA_SESSION": "1",
             "ORCA_TEST_COMMANDS": "1",
@@ -122,6 +124,8 @@ class Orca:
                 "-C", "Logger.Options.Verbosity=3", "-e", DISC]
         self.log_path = os.path.join(WORK, f"{name}.log")
         self.err = open(self.log_path, "w")
+        while os.getloadavg()[0] >= 20:
+            time.sleep(5)
         self.proc = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=self.err, text=True, bufsize=1)
         threading.Thread(target=self.read, daemon=True).start()
@@ -224,6 +228,9 @@ if run_step("rooms"):
     friend.expect("orca caps", 30)
     friend.send("caps join leave stats")
     friend.expect("orca state playing", 90)
+    # playing is announced before canonical boot has reached its local origin. Exclude boot
+    # from the empty-room deadline, especially with a paced vanilla boot.
+    friend.wait_log(r"Drop-in: origin at frame", 90)
     time.sleep(3)
     empty = code("emp")
     sent = time.time()
@@ -242,14 +249,15 @@ if run_step("rooms"):
     friend.send(f"join {taken}")
     friend.wait_log(rf"in room {taken} on seat 1, joining", 30, after=mark)
     host_player = "orca-rooms-" + code("h")
-    host = Orca("Host", {"ORCA_ROOM": taken, "ORCA_TEST_PLAYER": host_player})
+    host = Orca("Host", {"ORCA_ROOM": taken, "ORCA_TEST_PLAYER": host_player,
+                         "ORCA_TEST_FRESH_AFTER": "100000000"}, script=False)
     orcas.append(host)
     host.expect("orca caps", 30)
     host.send("caps join leave stats")
     host.expect("orca state playing", 90)
-    line = host.expect("orca error network", 30)
-    if "hosting this room" not in line:
-        fail(f"the host's error doesn't say why: {line}")
+    # Room resilience now reports the taken-room reason and reopens automatically, without
+    # surfacing an app error for a successful solo recovery.
+    host.wait_log(r"Someone else was already hosting this room", 30)
     fresh = host.wait_log(r"Drop-in: hosting room ([a-z0-9]+) again", 30).group(1)
     if fresh == taken:
         fail("the host kept the room someone else hosts")
@@ -263,18 +271,22 @@ if run_step("rooms"):
     mark = friend.log_size()
     friend.send(f"join {fresh}")
     host.expect("orca state friend-joining", 60)
-    # Catching up starts once the keyframe is loaded (the "joining" percent says 50 from the end of
-    # the download until the last few seconds of catching up, so the log says when).
-    friend.wait_log(r"Drop-in: loaded keyframe frame", 60, after=mark, poll=0.02)
+    # Cancel inside the local input replay (50..90), before FinishReplay creates the live
+    # session. A completed rebuild can already have caught up when stdin reaches the boundary.
+    # Keep the host on menus so this cancellation check does not request a solo fight hold.
+    friend.expect("orca state joining 6", 60)
     sent = time.time()
     since, after = len(friend.seen), friend.log_size()
     friend.send("leave")
     friend.expect("orca state left", 5)
-    log(f"left while catching up after {time.time() - sent:.2f} s")
-    friend.wait_log(r"Drop-in: left while catching up", 5, after=mark)
+    log(f"left during replay after {time.time() - sent:.2f} s")
+    friend.wait_log(r"Drop-in: playing solo on port 1 .*left before joining",
+                    5, after=mark)
     host.expect("orca state friend-left left", 10,
                 forbid=("orca error", "orca state friend-left stalled", "orca state friend-joined"))
-    friend.home_or_no_room(10, after, since)
+    # Replay cancellation restores the friend's pre-join game on its own port 1, rather than
+    # keeping the host's game on a guest port and then going home from it.
+    friend.alive()
     time.sleep(2)
     friend.send(f"join {fresh}")
     host.expect("orca state friend-joining", 60)
@@ -320,7 +332,7 @@ if run_step("rooms"):
 
 # 5. The page's Leave through the app's bridge. Each Orca gets its own fake bridge minting dev
 # tickets for the same dev game. The friend's bridge names the host's room, as an opened invite
-# does; the host's sends Leave eight seconds after the room reads ready, once the friend is in.
+# does; the host's sends Leave eight seconds after the friend is live.
 paged = code("pge")
 bridge_log = os.path.join(WORK, "bridge.log")
 friend_bridge_log = os.path.join(WORK, "bridge-friend.log")
@@ -371,14 +383,17 @@ def wait_mirror(path, test, timeout, why):
     fail(f"{why} in {timeout} s (mirrors: {shown})")
 
 
-def pad(port, buttons=0, axes=None):
-    """The app's controller (a bridge with FAKE_PAD_LIVE=1): held until the next call."""
-    req = urllib.request.Request(f"http://127.0.0.1:{port}/test-pad",
-                                 data=json.dumps({"buttons": buttons,
-                                                  "axes": axes or [128, 128, 128, 128]}).encode(),
+def bridge_post(port, action, payload):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/{action}",
+                                 data=json.dumps(payload).encode(),
                                  headers={"Authorization": "Bearer t0ken",
                                           "content-type": "application/json"})
     urllib.request.urlopen(req, timeout=5).read()
+
+
+def pad(port, buttons=0, axes=None):
+    """The app's live controller: held until the next call."""
+    bridge_post(port, "test-pad", {"buttons": buttons, "axes": axes or [128, 128, 128, 128]})
 
 
 def press(port, button, hold=0.15):
@@ -468,7 +483,7 @@ def came_home(f, friend_log, room, since, after):
 
 try:
     if run_step("page"):
-        port = start_bridge(bridge_log, FAKE_LEAVE_AFTER="8")
+        port = start_bridge(bridge_log, FAKE_NO_LEAVE="1")
         host = Orca("Host2", {"ORCA_ROOM": paged, "YOUGAME_BRIDGE": f"http://127.0.0.1:{port}",
                               "YOUGAME_TOKEN": "t0ken", "YOUGAME_GAME": "orca-test"})
         orcas.append(host)
@@ -487,6 +502,9 @@ try:
         host.expect("orca state friend-joining", 60)
         friend.expect("orca state playing", 120)
         since, after = len(friend.seen), friend.log_size()
+        # Room-ready precedes canonical boot. Arm this fixture after the friend is live,
+        # so the page's eight-second leave cannot cancel a join still booting.
+        bridge_post(port, "test-leave", {"delay": 8})
         host.expect("orca state left", 30, forbid=("orca error",))
         friend.expect("orca state host-left", 30, forbid=("orca error",))
         how = friend.home_or_no_room(10, after, since)

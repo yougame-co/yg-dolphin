@@ -665,10 +665,10 @@ void DropPeer(int seat, const std::string& reason)
     room->DropPeer(seat, reason);
 }
 
-void HoldJoins(bool holding)
+void HoldJoins(bool holding, bool fight)
 {
   if (const auto room = Room())
-    room->HoldJoins(holding);
+    room->HoldJoins(holding, fight);
 }
 
 bool IsDesync(const std::string& session_error)
@@ -748,6 +748,7 @@ void OfferKeyframe(int seat, const Net::KeyframeInfo& info)
 namespace
 {
 std::atomic<bool> s_prepare_join{false};
+std::atomic<bool> s_let_in{false};
 }
 
 void PrepareJoin()
@@ -758,6 +759,16 @@ void PrepareJoin()
 bool TakePrepareJoin()
 {
   return s_prepare_join.exchange(false, std::memory_order_relaxed);
+}
+
+void LetIn()
+{
+  s_let_in.store(true, std::memory_order_relaxed);
+}
+
+bool TakeLetIn()
+{
+  return s_let_in.exchange(false, std::memory_order_relaxed);
 }
 
 bool DropInPending()
@@ -775,7 +786,8 @@ bool DropInPending()
   const auto room = Room();
   if (!room || room->GetState() == Net::RoomState::Ended)
     return false;
-  return s_prepare_join.load(std::memory_order_relaxed) || room->ArrivalPending();
+  return s_prepare_join.load(std::memory_order_relaxed) ||
+         s_let_in.load(std::memory_order_relaxed) || room->ArrivalPending();
 }
 
 bool ArrivalPending()

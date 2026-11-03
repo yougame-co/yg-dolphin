@@ -101,6 +101,8 @@ class Orca:
         os.makedirs(user)
         env = {
             "HOME": os.environ["HOME"],
+            "TMPDIR": os.environ.get("TMPDIR", WORK),
+            "YG_THROTTLE": "1",
             "PATH": os.environ["PATH"],
             "ORCA_SESSION": "1",
             "ORCA_TEST_COMMANDS": "1",
@@ -111,7 +113,7 @@ class Orca:
             "YG_SCENES": "1",
         }
         if PPLUS:
-            env["ORCA_PROFILE"] = "PPLUS32"
+            env["ORCA_PROFILE"] = os.environ.get("ORCA_PROFILE", "PPLUS32")
         # A local rooms stack (ORCA_SITE), and the fresh start's knobs: by default the friend joins
         # in place and FriendsMove moves both games.
         if not os.environ.get("ORCA_TEST_FRESH") and not os.environ.get("ORCA_TEST_FRESH_AFTER"):
@@ -129,6 +131,8 @@ class Orca:
             args += ["-e", disc]
         self.log_path = os.path.join(WORK, f"{name}.log")
         self.err = open(self.log_path, "w")
+        while os.getloadavg()[0] >= 20:
+            time.sleep(5)
         self.proc = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=self.err, text=True, bufsize=1)
         threading.Thread(target=self.read, daemon=True).start()
