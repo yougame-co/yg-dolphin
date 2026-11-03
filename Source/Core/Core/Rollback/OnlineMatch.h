@@ -235,7 +235,8 @@ enum class FreshKind
 };
 FreshKind FreshKindForOrigin(OriginRule rule);
 bool FreshExitAllowed(FreshKind kind, u8 exit);
-bool FreshTailSettled(FreshKind kind, int css_streak, int length);
+bool FreshTailSettled(FreshKind kind, int css_streak, int length, int frame = 0,
+                      int offer_from = 0);
 // The new history's metadata and typed events. Reset histories have neither an exit nor a seed.
 Orca::Net::ReplayArchive FreshReplayStart(FreshKind kind, int frame, u64 origin_hash, u8 exit,
                                         u32 seed);

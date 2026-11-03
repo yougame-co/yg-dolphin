@@ -5338,7 +5338,7 @@ bool FreshExitAllowed(FreshKind kind, u8 exit)
   return kind == FreshKind::Reset ? exit == 0 : Orca::Net::ValidMenuExit(exit);
 }
 
-bool FreshTailSettled(FreshKind kind, int css_streak, int length)
+bool FreshTailSettled(FreshKind kind, int css_streak, int length, int frame, int offer_from)
 {
   return kind == FreshKind::Reset || css_streak >= FRESH_CSS_SETTLE || length >= FRESH_TAIL_LIMIT;
 }
