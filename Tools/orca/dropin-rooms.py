@@ -124,6 +124,8 @@ class Orca:
                 "-C", "Logger.Options.Verbosity=3", "-e", DISC]
         self.log_path = os.path.join(WORK, f"{name}.log")
         self.err = open(self.log_path, "w")
+        while os.getloadavg()[0] >= 20:
+            time.sleep(5)
         self.proc = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=self.err, text=True, bufsize=1)
         threading.Thread(target=self.read, daemon=True).start()

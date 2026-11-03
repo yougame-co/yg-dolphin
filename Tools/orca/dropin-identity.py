@@ -108,6 +108,8 @@ class Orca:
         else:
             args += ["-e", DISC]
         self.err = open(os.path.join(WORK, f"{name}.log"), "w")
+        while os.getloadavg()[0] >= 20:
+            time.sleep(5)
         self.proc = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=self.err, text=True, bufsize=1)
         threading.Thread(target=self.read, daemon=True).start()
