@@ -18,7 +18,7 @@ add_dolphin_test(ESFormatsTest IOS/ES/FormatsTest.cpp)
 
 add_dolphin_test(FileSystemTest IOS/FS/FileSystemTest.cpp)
 
-add_dolphin_test(OrcaSessionTest Orca/SessionTest.cpp)
+add_dolphin_test(OrcaSessionTest Orca/SessionTest.cpp Orca/GateRawTest.cpp)
 add_dolphin_test(OrcaStatusTest Orca/StatusTest.cpp Orca/BootMemoryTest.cpp)
 if(NOT MSVC)
   set_property(SOURCE Orca/BootMemoryTest.cpp APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
