@@ -7,9 +7,9 @@
 # 1. A friend joins a room nobody's game is in: it gives up within seconds (peer_left), plays on.
 # 2. The friend reaches a room before its host's game does: the host finds someone else hosting
 #    it, reports the taken-room reason and opens a fresh room; the friend gives up (peer_left).
-# 3. The friend leaves while it catches up (the host's keyframe is 25 s old, from a prepare-join, so
-#    the friend replays 25 s of its game): it leaves at once ("left"), and the host hears a plain
-#    leave, not a stall. Then it joins the host's fresh room: "friend-joined" once it plugs in.
+# 3. The friend cancels during its local input replay: its own pre-join game is restored on port 1,
+#    it leaves at once ("left"), and the host hears a plain leave, not a stall. Then it joins the
+#    host's fresh room: "friend-joined" once it plugs in.
 # 4. The host's room socket drops mid-match (the test-only "test-drop-room"): it reconnects
 #    in the background to the same room and seat. The friend retains its session and room.
 #    Then the app's Stop on the host, "leave" and "quit" at once: the friend hears it within ~1 s.
@@ -270,20 +270,22 @@ if run_step("rooms"):
     mark = friend.log_size()
     friend.send(f"join {fresh}")
     host.expect("orca state friend-joining", 60)
-    # The current input-replay protocol first rebuilds locally, then catches up live. The old
-    # machine-image protocol used "loaded keyframe" for the equivalent boundary. Keep this
-    # host on the menus so this room/cancellation check does not request a solo fight hold.
-    friend.wait_log(r"Drop-in: (?:loaded keyframe frame|rebuilt replay frame)",
-                    60, after=mark, poll=0.005)
+    # Cancel inside the local input replay (50..90), before FinishReplay creates the live
+    # session. A completed rebuild can already have caught up when stdin reaches the boundary.
+    # Keep the host on menus so this cancellation check does not request a solo fight hold.
+    friend.expect("orca state joining 6", 60)
     sent = time.time()
     since, after = len(friend.seen), friend.log_size()
     friend.send("leave")
     friend.expect("orca state left", 5)
-    log(f"left while catching up after {time.time() - sent:.2f} s")
-    friend.wait_log(r"Drop-in: left while catching up", 5, after=mark)
+    log(f"left during replay after {time.time() - sent:.2f} s")
+    friend.wait_log(r"Drop-in: playing solo on port 1 .*left before joining",
+                    5, after=mark)
     host.expect("orca state friend-left left", 10,
                 forbid=("orca error", "orca state friend-left stalled", "orca state friend-joined"))
-    friend.home_or_no_room(10, after, since)
+    # Replay cancellation restores the friend's pre-join game on its own port 1, rather than
+    # keeping the host's game on a guest port and then going home from it.
+    friend.alive()
     time.sleep(2)
     friend.send(f"join {fresh}")
     host.expect("orca state friend-joining", 60)
