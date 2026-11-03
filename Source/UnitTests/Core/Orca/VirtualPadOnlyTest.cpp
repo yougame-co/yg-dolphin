@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -237,4 +238,62 @@ TEST_F(OrcaVirtualPadOnly, CoSeatAssignmentsPrintOneCompleteLinePerChange)
   while (std::fgets(buffer, sizeof(buffer), output))
     lines += buffer;
   EXPECT_EQ(lines, "orca seats 1=none 2=none 3=none 4=none\n");
+}
+
+// Couch play: the lead keeps the one-seat chooser's pad and each other player reads their own
+// device, whatever seats the snapshot has.
+TEST_F(OrcaVirtualPadOnly, CouchPadsReadTheirOwnDevices)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  std::FILE* output = std::tmpfile();
+  ASSERT_NE(output, nullptr);
+  Orca::Status::SetOutput(output);
+  const Common::ScopeGuard restore_output([&] {
+    Orca::Status::SetOutput(nullptr);
+    std::fclose(output);
+  });
+  const ScopedEnv mode("ORCA_VIRTUAL_PAD_ONLY", "1");
+  const ScopedEnv stdio("YOUGAME_STDIO", "1");
+  const Common::ScopeGuard count([] { Orca::UX::SetLocalPadCount(1); });
+  Orca::UX::StartControllerStreamFromStdio();
+  ControlReference::SetInputGate(false);
+  std::string pads;
+  for (int index = 0; index < 3; ++index)
+  {
+    if (index)
+      pads += ',';
+    pads += "{\"index\":" + std::to_string(index) + R"(,"mapping":"standard","axes":[)" +
+            (index == 0 ? "1" : index == 1 ? "-1" : "0") + ",0,0,0],\"buttons\":[";
+    for (int button = 0; button < 17; ++button)
+      pads += button ? R"(,{"value":0,"pressed":false})" : R"({"value":0,"pressed":false})";
+    pads += "]}";
+  }
+  const std::string line =
+      R"(yg {"push":{"type":"controllers","snapshot":{"schema":1,"session":"couch",)"
+      R"("sequence":1,"sentAt":1000,"receivedAt":1000,"owned":false,"suspended":false,)"
+      R"("ports":[],"pads":[)" + pads + "]}}}";
+  ASSERT_TRUE(Orca::Bridge::Route({line}).empty());
+  using Orca::UX::LocalDevice;
+  using Orca::UX::PadSource;
+  EXPECT_EQ(Orca::UX::CouchDevices(),
+            (std::vector<LocalDevice>{{PadSource::Gamepad, 0}, {PadSource::Gamepad, 1},
+                                      {PadSource::Gamepad, 2}}));
+  Orca::UX::SetCouchPads({{PadSource::Gamepad, 1}, {PadSource::Gamepad, 2}});
+  const int sticks[] = {255, 1, 128, 128};
+  for (int ordinal = 0; ordinal < Orca::UX::MAX_LOCAL; ++ordinal)
+  {
+    const auto pad = Orca::UX::LocalPad(ordinal, true);
+    ASSERT_TRUE(pad);
+    EXPECT_EQ(pad->stickX, sticks[ordinal]);
+  }
+  // Leaving couch play goes back to one seat.
+  Orca::UX::SetLocalPadCount(1);
+  EXPECT_FALSE(Orca::UX::LocalPad(1, true));
+  EXPECT_EQ(Orca::UX::LocalPad(0, true)->stickX, 255);
+  std::rewind(output);
+  char buffer[256]{};
+  std::string lines;
+  while (std::fgets(buffer, sizeof(buffer), output))
+    lines += buffer;
+  EXPECT_EQ(lines, "orca seats 1=pad:0 2=pad:1 3=pad:2 4=none\n");
 }

@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Events.h"
@@ -27,17 +28,18 @@ namespace Orca::UX
 // input-age stats.
 std::optional<GCPadStatus> LocalPad(bool for_frame = false);
 std::optional<GCPadStatus> LocalPad(int ordinal, bool for_frame);
-// CPU thread: keep explicit assignment mode for the lifetime of a multi-seat match.
+// CPU thread: keep explicit assignment mode for the lifetime of a multi-seat match. Ends couch
+// play.
 void SetLocalPadCount(int n);
+// CPU thread: couch play (a game with no room, Rollback/OnlineMatch.cpp). Ordinal 0 stays the
+// legacy chooser's pick; ordinal n > 0 reads `co_devices[n - 1]` (neutral once it is gone).
+void SetCouchPads(const std::vector<LocalDevice>& co_devices);
+// CouchDevices for the newest snapshot; none without one. CPU thread.
+std::vector<LocalDevice> CouchDevices();
 
 // The app device the newest `for_frame` read took the local pad from: the adapter's physical port
 // or the standard pad's index in the app's snapshot. nullopt when that read had no app device
 // (Dolphin's own input), or before one. Any thread. For the game's rumble (UX/Rumble.h).
-struct LocalDevice
-{
-  PadSource source;
-  int index;
-};
 std::optional<LocalDevice> LastLocalDevice();
 std::optional<LocalDevice> LastLocalDevice(int ordinal);
 

@@ -531,4 +531,90 @@ std::array<std::optional<LocalChoice>, MAX_LOCAL> ChooseLocalPads(const Snapshot
   }
   return choices;
 }
+
+std::vector<LocalDevice> CouchDevices(const Snapshot& snapshot)
+{
+  std::vector<LocalDevice> devices;
+  const auto add = [&devices](LocalDevice device) {
+    if (std::ranges::find(devices, device) == devices.end())
+      devices.push_back(device);
+  };
+  if (const auto lead = ChooseLocalPad(snapshot, 0))
+    add({lead->source, lead->index});
+  if (snapshot.owned)
+  {
+    std::vector<int> ports;
+    for (const AdapterPort& p : snapshot.ports)
+      if (p.connected)
+        ports.push_back(p.port);
+    std::ranges::sort(ports);
+    for (const int port : ports)
+      add({PadSource::Adapter, port});
+  }
+  std::vector<int> pads;
+  for (const StandardPad& pad : snapshot.pads)
+    pads.push_back(pad.index);
+  std::ranges::sort(pads);
+  for (const int index : pads)
+    add({PadSource::Gamepad, index});
+  return devices;
+}
+
+CouchPorts SeatCouch(const CouchPorts& seated, const std::vector<LocalDevice>& devices)
+{
+  CouchPorts ports{};
+  if (devices.empty())
+    return ports;
+  ports[0] = devices.front();
+  const auto placed = [&ports](LocalDevice device) {
+    return std::ranges::find(ports, std::optional(device)) != ports.end();
+  };
+  // A player keeps their port while their controller stays; a new lead's old port is free.
+  for (int port = 1; port < MAX_LOCAL; ++port)
+  {
+    if (seated[port] && !placed(*seated[port]) &&
+        std::ranges::find(devices, *seated[port]) != devices.end())
+    {
+      ports[port] = seated[port];
+    }
+  }
+  for (const LocalDevice& device : devices)
+  {
+    if (placed(device))
+      continue;
+    const auto free = std::find(ports.begin() + 1, ports.end(), std::nullopt);
+    if (free == ports.end())
+      break;
+    *free = device;
+  }
+  return ports;
+}
+
+std::optional<LocalChoice> ChooseDevice(const Snapshot& snapshot, double age_ms,
+                                        LocalDevice device)
+{
+  const bool stale = !(age_ms <= STALE_MS) || snapshot.suspended;
+  if (device.source == PadSource::Adapter)
+  {
+    if (!snapshot.owned)
+      return std::nullopt;
+    for (const AdapterPort& p : snapshot.ports)
+    {
+      if (!p.connected || p.port != device.index)
+        continue;
+      const double report_age = snapshot.sent_at - snapshot.received_at + age_ms;
+      const bool neutral = stale || snapshot.received_at <= 0 || !(report_age <= STALE_MS);
+      return LocalChoice{PadSource::Adapter, p.port, neutral ? NeutralPad() : MapAdapterPort(p),
+                         neutral};
+    }
+    return std::nullopt;
+  }
+  for (const StandardPad& pad : snapshot.pads)
+  {
+    if (pad.index == device.index)
+      return LocalChoice{PadSource::Gamepad, pad.index, stale ? NeutralPad() : MapStandardPad(pad),
+                         stale};
+  }
+  return std::nullopt;
+}
 }  // namespace Orca::UX

@@ -100,9 +100,32 @@ struct LocalChoice
 // own input mapping instead of a stuck neutral pad. `age_ms` is measured on this machine's steady
 // clock, so staleness never compares two processes' wall clocks.
 std::optional<LocalChoice> ChooseLocalPad(const Snapshot& snapshot, double age_ms);
-constexpr int MAX_LOCAL = 2;
+// One per game port. A room's co-seats keep their own limit of 2 (the ticket's maxLocalPlayers);
+// only couch play (a game with no room) uses all four.
+constexpr int MAX_LOCAL = 4;
 // One seat uses the legacy chooser. Multiple seats use explicit assignments only; an empty
 // choice means connected neutral input, never fallback to another device or Dolphin's pad.
 std::array<std::optional<LocalChoice>, MAX_LOCAL> ChooseLocalPads(const Snapshot& snapshot,
                                                                double age_ms, int n);
+
+// An app device: the adapter's physical port or the standard pad's index in the snapshot.
+struct LocalDevice
+{
+  PadSource source;
+  int index;
+  bool operator==(const LocalDevice&) const = default;
+};
+// Couch play (a game with no room, Rollback/OnlineMatch.cpp): every distinct connected device,
+// the lead first as ChooseLocalPad picks it, then adapter ports in physical order, then standard
+// gamepads by index. Not capped: SeatCouch seats at most MAX_LOCAL.
+std::vector<LocalDevice> CouchDevices(const Snapshot& snapshot);
+// The couch device on each game port: the lead on port 1, a device already seated keeps its port,
+// a new one takes the lowest free port. Ports fill in order, so an adapter's physical positions are
+// not kept (adapter port 3 alone beside the lead plays port 2).
+using CouchPorts = std::array<std::optional<LocalDevice>, MAX_LOCAL>;
+CouchPorts SeatCouch(const CouchPorts& seated, const std::vector<LocalDevice>& devices);
+// `device`'s pad in this snapshot, neutral when stale like ChooseLocalPads; nullopt once it is
+// gone.
+std::optional<LocalChoice> ChooseDevice(const Snapshot& snapshot, double age_ms,
+                                        LocalDevice device);
 }  // namespace Orca::UX

@@ -22,6 +22,7 @@
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Session.h"
 #include "Core/Orca/Session/YouGameRoom.h"
+#include "Core/Orca/UX/Controllers.h"
 
 namespace Core
 {
@@ -618,6 +619,23 @@ bool Active();
 int LocalSeat();
 int LocalOrdinal(int seat);
 int LocalSeatCount();
+// CPU thread: couch play is on (no room; every local controller has its own port).
+bool Couch();
+struct CouchResult
+{
+  // co_seats after each step's StepCouch.
+  std::vector<std::vector<int>> co_seats;
+  std::vector<Orca::Net::Pads> log;
+  std::vector<Orca::Events::PortInfo> ports;
+  bool host_refused = false;
+  bool couch = false;
+};
+// Steps couch play once per entry of `steps` (the connected devices, as CouchDevices lists them),
+// one solo frame each. After step `host_after`, asks HostRefused with `on_menus` and, unless
+// refused, leaves the couch as HostInPlay does.
+CouchResult PumpCouchForTest(Core::System& system,
+    const std::vector<std::vector<Orca::UX::LocalDevice>>& steps, bool on_menus = true,
+    int host_after = -1);
 std::vector<Orca::Net::Pads> PumpSoloSeatsForTest(Core::System& system,
     const std::vector<int>& co_seats, int frames, bool fresh_tail,
     const std::function<Orca::Net::Pad(int)>& sample,

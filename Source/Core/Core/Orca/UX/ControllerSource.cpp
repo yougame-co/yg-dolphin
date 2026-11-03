@@ -575,13 +575,35 @@ struct Teardown
 
 // LastLocalDevice, packed so one atomic holds it: the source in bit 16, the index below.
 constexpr int NO_DEVICE = -1;
-std::array<std::atomic<int>, MAX_LOCAL> s_local_devices{NO_DEVICE, NO_DEVICE};
+std::array<std::atomic<int>, MAX_LOCAL> s_local_devices{NO_DEVICE, NO_DEVICE, NO_DEVICE,
+                                                        NO_DEVICE};
 std::atomic<int> s_local_count{1};
-std::array<std::atomic<bool>, MAX_LOCAL> s_assignment_known{false, false};
+std::array<std::atomic<bool>, MAX_LOCAL> s_assignment_known{false, false, false, false};
+// Couch play (SetCouchPads): the device behind each ordinal after the lead, packed.
+std::atomic<bool> s_couch{false};
+std::array<std::atomic<int>, MAX_LOCAL> s_couch_devices{NO_DEVICE, NO_DEVICE, NO_DEVICE,
+                                                        NO_DEVICE};
 
 int PackDevice(PadSource source, int index)
 {
   return (source == PadSource::Gamepad ? 1 << 16 : 0) | (index & 0xffff);
+}
+
+LocalDevice UnpackDevice(int packed)
+{
+  return LocalDevice{(packed >> 16) ? PadSource::Gamepad : PadSource::Adapter, packed & 0xffff};
+}
+
+// The count without changing the mode; a new count forgets the devices last seen.
+void SetCount(int n)
+{
+  if (s_local_count.exchange(std::clamp(n, 1, MAX_LOCAL), std::memory_order_relaxed) !=
+      std::clamp(n, 1, MAX_LOCAL))
+    for (int ordinal = 0; ordinal < MAX_LOCAL; ++ordinal)
+    {
+      s_local_devices[ordinal].store(NO_DEVICE, std::memory_order_relaxed);
+      s_assignment_known[ordinal].store(false, std::memory_order_relaxed);
+    }
 }
 
 // The pad from the newest snapshot; `for_frame` also records input age.
@@ -599,8 +621,20 @@ std::optional<LocalChoice> Choose(int ordinal, bool for_frame)
       return std::nullopt;
     if (ordinal < 0 || ordinal >= MAX_LOCAL)
       return std::nullopt;
-    choice = ChooseLocalPads(*cached->snapshot, cached->age_ms,
-                             s_local_count.load(std::memory_order_relaxed))[ordinal];
+    if (!s_couch.load(std::memory_order_relaxed))
+    {
+      choice = ChooseLocalPads(*cached->snapshot, cached->age_ms,
+                               s_local_count.load(std::memory_order_relaxed))[ordinal];
+    }
+    else if (ordinal == 0)
+    {
+      choice = ChooseLocalPad(*cached->snapshot, cached->age_ms);
+    }
+    else if (const int device = s_couch_devices[ordinal].load(std::memory_order_relaxed);
+             device != NO_DEVICE)
+    {
+      choice = ChooseDevice(*cached->snapshot, cached->age_ms, UnpackDevice(device));
+    }
     if (for_frame && ordinal == 0)
       age_line = s_stream->NoteFrame(*cached, choice ? &*choice : nullptr);
   }
@@ -687,13 +721,30 @@ void StartControllerStreamFromEnvironment()
 
 void SetLocalPadCount(int n)
 {
-  if (s_local_count.exchange(std::clamp(n, 1, MAX_LOCAL), std::memory_order_relaxed) !=
-      std::clamp(n, 1, MAX_LOCAL))
-    for (int ordinal = 0; ordinal < MAX_LOCAL; ++ordinal)
-    {
-      s_local_devices[ordinal].store(NO_DEVICE, std::memory_order_relaxed);
-      s_assignment_known[ordinal].store(false, std::memory_order_relaxed);
-    }
+  s_couch.store(false, std::memory_order_relaxed);
+  SetCount(n);
+}
+
+void SetCouchPads(const std::vector<LocalDevice>& co_devices)
+{
+  for (int ordinal = 1; ordinal < MAX_LOCAL; ++ordinal)
+  {
+    const size_t i = static_cast<size_t>(ordinal - 1);
+    s_couch_devices[ordinal].store(
+        i < co_devices.size() ? PackDevice(co_devices[i].source, co_devices[i].index) : NO_DEVICE,
+        std::memory_order_relaxed);
+  }
+  SetCount(1 + static_cast<int>(co_devices.size()));
+  s_couch.store(true, std::memory_order_relaxed);
+}
+
+std::vector<LocalDevice> CouchDevices()
+{
+  std::lock_guard lk(s_stream_lock);
+  if (!s_stream)
+    return {};
+  const std::optional<Stream::Cached> cached = s_stream->Latest();
+  return cached ? CouchDevices(*cached->snapshot) : std::vector<LocalDevice>{};
 }
 
 std::optional<GCPadStatus> LocalPad(bool for_frame)
@@ -709,9 +760,10 @@ std::optional<GCPadStatus> LocalPad(int ordinal, bool for_frame)
   const auto choice = Choose(ordinal, for_frame);
   if (for_frame)
   {
-    const bool multiple = s_local_count.load(std::memory_order_relaxed) > 1;
+    const int count = s_local_count.load(std::memory_order_relaxed);
+    const bool multiple = count > 1;
     bool changed = false;
-    for (int index = 0; index < (multiple ? MAX_LOCAL : 1); ++index)
+    for (int index = 0; index < count; ++index)
     {
       const auto selected = index == ordinal ? choice : Choose(index, false);
       const int device = selected ? PackDevice(selected->source, selected->index) : NO_DEVICE;
@@ -752,7 +804,7 @@ std::optional<LocalDevice> LastLocalDevice(int ordinal)
   const int packed = s_local_devices[ordinal].load(std::memory_order_relaxed);
   if (packed == NO_DEVICE)
     return std::nullopt;
-  return LocalDevice{(packed >> 16) ? PadSource::Gamepad : PadSource::Adapter, packed & 0xffff};
+  return UnpackDevice(packed);
 }
 
 ControllerTiming GetControllerTiming()

@@ -6,6 +6,7 @@
 // match, or before a friend joins a game it has played alone for a while, so a join replays only the
 // match's own frames.
 
+#include <bit>
 #include <chrono>
 #include <map>
 #include <optional>
@@ -13,6 +14,8 @@
 #include <gtest/gtest.h>
 
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/OnlineMenu.h"
+#include "Core/Orca/Games/Brawl/OnlineSeats.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Replay.h"
@@ -571,6 +574,102 @@ TEST(OrcaFreshStart, SoloCoSeatsKeepSeparatePadsPortsAndNeutralTails)
     EXPECT_FALSE(ports[1].remote);
     EXPECT_TRUE(ports[1].controls.empty());
   }
+}
+
+namespace
+{
+using Orca::UX::LocalDevice;
+using Orca::UX::PadSource;
+constexpr LocalDevice COUCH_A0{PadSource::Adapter, 0};
+constexpr LocalDevice COUCH_A2{PadSource::Adapter, 2};
+constexpr LocalDevice COUCH_P0{PadSource::Gamepad, 0};
+constexpr LocalDevice COUCH_P1{PadSource::Gamepad, 1};
+constexpr LocalDevice COUCH_P5{PadSource::Gamepad, 5};
+constexpr LocalDevice COUCH_P6{PadSource::Gamepad, 6};
+
+// The ports the game modules see (BrawlModule::OnBoundary, FriendsMove::Frame), as a mask.
+u8 Plugged(const std::vector<Orca::Events::PortInfo>& ports)
+{
+  u8 plugged = 0;
+  for (const auto& port : ports)
+    plugged |= static_cast<u8>(1 << port.port);
+  return plugged;
+}
+}  // namespace
+
+// Couch play (no room): every controller gets a port, each records its own pad, and a player who
+// unplugs frees only their own port.
+TEST(OrcaCouch, EveryLocalControllerPlaysItsOwnPort)
+{
+  auto& system = Core::System::GetInstance();
+  const auto result =
+      PumpCouchForTest(system, {{COUCH_A0},
+                                {COUCH_A0, COUCH_A2, COUCH_P1},
+                                {COUCH_A0, COUCH_P1},
+                                {COUCH_A0, COUCH_P1, COUCH_P0, COUCH_P5, COUCH_P6}});
+  EXPECT_TRUE(result.couch);
+  EXPECT_EQ(result.co_seats, (std::vector<std::vector<int>>{{}, {1, 2}, {2}, {1, 2, 3}}));
+  ASSERT_EQ(result.log.size(), 4u);
+  const std::vector<std::vector<bool>> plugged{{true, false, false, false},
+                                               {true, true, true, false},
+                                               {true, false, true, false},
+                                               {true, true, true, true}};
+  for (size_t frame = 0; frame < result.log.size(); ++frame)
+  {
+    for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+    {
+      if (plugged[frame][seat])
+        EXPECT_EQ(result.log[frame][seat][0], 0x10 + seat) << frame << " " << seat;
+      else
+        EXPECT_EQ(result.log[frame][seat], Orca::Net::UNPLUGGED_PAD) << frame << " " << seat;
+    }
+  }
+  // The game modules see one player, so local Versus stays the game's own.
+  ASSERT_EQ(result.ports.size(), 1u);
+  EXPECT_EQ(result.ports[0].port, 0);
+}
+
+// Menu gating: two ports in a room's history make a select online and pull friends toward With
+// Friends; a couch's ports don't, since PortsAt leaves them out (and the history keeps that list,
+// so replays and joiners decide the same).
+TEST(OrcaCouch, LocalVersusStaysOfflineOnTheCouch)
+{
+  auto& system = Core::System::GetInstance();
+  const auto couch = PumpCouchForTest(system, {{COUCH_A0, COUCH_P0, COUCH_P1}});
+  std::vector<Orca::Events::PortInfo> room;
+  PumpSoloSeatsForTest(system, {2}, 1, false, [](int) { return Orca::Net::Pad{}; }, &room);
+  const Orca::UX::Rules::Header offline;
+  EXPECT_FALSE(Orca::UX::OnlineSeats::Online(offline, 0, std::popcount(Plugged(couch.ports))));
+  EXPECT_TRUE(Orca::UX::OnlineSeats::Online(offline, 0, std::popcount(Plugged(room))));
+  Orca::UX::FriendsMove::Inputs in;
+  in.present = true;
+  in.frame = 100000;
+  in.plugged = Plugged(couch.ports);
+  EXPECT_FALSE(Orca::UX::FriendsMove::Decide(in).keep);
+  in.plugged = Plugged(room);
+  EXPECT_TRUE(Orca::UX::FriendsMove::Decide(in).keep);
+}
+
+// Hosting from the couch: refused mid-fight, like a game that isn't alone; on the menus the other
+// players step out and the host plays port 1 alone.
+TEST(OrcaCouch, HostingRetiresTheCouchOnlyOnTheMenus)
+{
+  auto& system = Core::System::GetInstance();
+  const std::vector<std::vector<LocalDevice>> steps{{COUCH_A0, COUCH_P0}, {COUCH_A0, COUCH_P0}};
+  auto result = PumpCouchForTest(system, steps, false, 0);
+  EXPECT_TRUE(result.host_refused);
+  EXPECT_TRUE(result.couch);
+  EXPECT_EQ(result.log[1][1][0], 0x11);
+  result = PumpCouchForTest(system, steps, true, 0);
+  EXPECT_FALSE(result.host_refused);
+  EXPECT_FALSE(result.couch);
+  EXPECT_EQ(result.log[0][1][0], 0x11);
+  EXPECT_EQ(result.log[1][1], Orca::Net::UNPLUGGED_PAD);
+  ASSERT_EQ(result.ports.size(), 1u);
+  // One player alone on the couch hosts mid-fight, as before.
+  result = PumpCouchForTest(system, {{COUCH_A0}}, false, 0);
+  EXPECT_FALSE(result.host_refused);
+  EXPECT_FALSE(result.couch);
 }
 
 TEST(OrcaCoSeats, SetOverButtonsKeepTheLeadSample)

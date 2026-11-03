@@ -620,7 +620,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     const auto local_pad = [](int local_seat) {
       const bool lead = local_seat == OnlineMatch::LocalSeat();
       int ordinal = lead ? 0 : Orca::Online::LocalIndex(local_seat);
-      if (!lead && ordinal < 0 && !Orca::Online::InRoom())
+      // Couch play has no room: its own ports, whatever an ended room still lists.
+      if (!lead && ((ordinal < 0 && !Orca::Online::InRoom()) || OnlineMatch::Couch()))
         ordinal = OnlineMatch::LocalOrdinal(local_seat);
       if (ordinal < 0)
         return Orca::Net::EncodePad(Orca::UX::NeutralPad());

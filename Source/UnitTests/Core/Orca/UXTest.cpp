@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -5242,7 +5243,8 @@ TEST(OrcaUXControllers, MultipleOrdinalsRequireExplicitUniqueDevices)
   {
     snapshot->suspended = suspended;
     choices = ChooseLocalPads(*snapshot, suspended ? 0 : 251, 2);
-    for (const auto& choice : choices)
+    EXPECT_FALSE(choices[2]);
+    for (const auto& choice : std::span(choices).first(2))
     {
       ASSERT_TRUE(choice);
       ExpectSame(choice->pad, NeutralPad());
@@ -5296,7 +5298,9 @@ TEST(OrcaUXControllers, ExplicitSeatsIgnorePadIndexAndOrder)
   snapshot.pads[1].index = 0;
   std::reverse(snapshot.pads.begin(), snapshot.pads.end());
   const auto after = ChooseLocalPads(snapshot, 0, 2);
-  for (int ordinal = 0; ordinal < MAX_LOCAL; ++ordinal)
+  EXPECT_FALSE(after[2]);
+  EXPECT_FALSE(after[3]);
+  for (int ordinal = 0; ordinal < 2; ++ordinal)
   {
     ASSERT_TRUE(before[ordinal]);
     ASSERT_TRUE(after[ordinal]);
@@ -5304,6 +5308,137 @@ TEST(OrcaUXControllers, ExplicitSeatsIgnorePadIndexAndOrder)
   }
   EXPECT_EQ(after[0]->pad.stickX, 255);
   EXPECT_EQ(after[1]->pad.stickX, 1);
+}
+
+namespace
+{
+AdapterPort CouchPort(int port, int seat, bool connected = true)
+{
+  AdapterPort p;
+  p.port = port;
+  p.seat = seat;
+  p.connected = connected;
+  return p;
+}
+
+StandardPad CouchPad(int index)
+{
+  StandardPad pad;
+  pad.index = index;
+  return pad;
+}
+
+constexpr LocalDevice Adapter(int port)
+{
+  return {PadSource::Adapter, port};
+}
+
+constexpr LocalDevice Gamepad(int index)
+{
+  return {PadSource::Gamepad, index};
+}
+}  // namespace
+
+// Couch play: the lead is whatever the one-seat chooser picks; everyone else follows, adapter
+// ports in physical order, then pads by index, each device once.
+TEST(OrcaUXControllers, CouchDevicesLeadThenAdaptersThenPads)
+{
+  Snapshot adapters;
+  adapters.owned = true;
+  adapters.ports = {CouchPort(0, 2), CouchPort(1, 0, false), CouchPort(2, 0), CouchPort(3, 1)};
+  // The lowest seat leads (port 3), not the lowest port.
+  ASSERT_TRUE(ChooseLocalPad(adapters, 0));
+  EXPECT_EQ(ChooseLocalPad(adapters, 0)->index, 2);
+  EXPECT_EQ(CouchDevices(adapters),
+            (std::vector<LocalDevice>{Adapter(2), Adapter(0), Adapter(3)}));
+
+  Snapshot pads;
+  pads.pads = {CouchPad(2), CouchPad(0), CouchPad(5)};
+  // The lead is the snapshot's first pad, as before; the rest go by index.
+  EXPECT_EQ(CouchDevices(pads), (std::vector<LocalDevice>{Gamepad(2), Gamepad(0), Gamepad(5)}));
+
+  Snapshot mixed = adapters;
+  mixed.pads = {CouchPad(1), CouchPad(0)};
+  EXPECT_EQ(CouchDevices(mixed), (std::vector<LocalDevice>{Adapter(2), Adapter(0), Adapter(3),
+                                                           Gamepad(0), Gamepad(1)}));
+  // An adapter the helper doesn't hold counts for nothing, as with the one-seat chooser.
+  mixed.owned = false;
+  EXPECT_EQ(CouchDevices(mixed), (std::vector<LocalDevice>{Gamepad(1), Gamepad(0)}));
+  EXPECT_TRUE(CouchDevices(Snapshot{}).empty());
+}
+
+TEST(OrcaUXControllers, CouchDevicesListEachDeviceOnce)
+{
+  Snapshot snapshot;
+  snapshot.owned = true;
+  snapshot.ports = {CouchPort(1, 0), CouchPort(1, 0), CouchPort(3, 0), CouchPort(3, 0)};
+  snapshot.pads = {CouchPad(4), CouchPad(4), CouchPad(0)};
+  EXPECT_EQ(CouchDevices(snapshot), (std::vector<LocalDevice>{Adapter(1), Adapter(3),
+                                                              Gamepad(0), Gamepad(4)}));
+  // The lead's device never comes back as another player.
+  snapshot.owned = false;
+  EXPECT_EQ(CouchDevices(snapshot), (std::vector<LocalDevice>{Gamepad(4), Gamepad(0)}));
+}
+
+TEST(OrcaUXControllers, CouchSeatsKeepEachPlayersPortAndFillTheLowestFree)
+{
+  const CouchPorts none{};
+  // Ports fill in order: adapter port 4 beside the lead plays port 2 (positions are not kept).
+  CouchPorts ports = SeatCouch(none, {Adapter(0), Adapter(3)});
+  EXPECT_EQ(ports, (CouchPorts{Adapter(0), Adapter(3), std::nullopt, std::nullopt}));
+  ports = SeatCouch(ports, {Adapter(0), Adapter(1), Adapter(3)});
+  EXPECT_EQ(ports, (CouchPorts{Adapter(0), Adapter(3), Adapter(1), std::nullopt}));
+  ports = SeatCouch(ports, {Adapter(0), Adapter(1), Adapter(3), Gamepad(0)});
+  EXPECT_EQ(ports, (CouchPorts{Adapter(0), Adapter(3), Adapter(1), Gamepad(0)}));
+  // Port 3's player unplugs: the others stay where they are.
+  ports = SeatCouch(ports, {Adapter(0), Adapter(3), Gamepad(0)});
+  EXPECT_EQ(ports, (CouchPorts{Adapter(0), Adapter(3), std::nullopt, Gamepad(0)}));
+  // More than four devices: the first four seated keep their ports; the fifth waits for one.
+  const std::vector<LocalDevice> six{Adapter(0), Adapter(1), Adapter(2), Adapter(3), Gamepad(0),
+                                     Gamepad(1)};
+  ports = SeatCouch(ports, six);
+  EXPECT_EQ(ports, (CouchPorts{Adapter(0), Adapter(3), Adapter(1), Gamepad(0)}));
+  ports = SeatCouch(ports, {Adapter(0), Adapter(1), Adapter(2), Adapter(3), Gamepad(1)});
+  EXPECT_EQ(ports, (CouchPorts{Adapter(0), Adapter(3), Adapter(1), Adapter(2)}));
+  // A new lead takes port 1; its old port is free, and the old lead takes the lowest free one.
+  ports = SeatCouch(ports, {Adapter(3), Adapter(0), Adapter(1), Adapter(2)});
+  EXPECT_EQ(ports, (CouchPorts{Adapter(3), Adapter(0), Adapter(1), Adapter(2)}));
+  EXPECT_EQ(SeatCouch(ports, {}), none);
+  EXPECT_EQ(SeatCouch(ports, {Gamepad(7)}),
+            (CouchPorts{Gamepad(7), std::nullopt, std::nullopt, std::nullopt}));
+}
+
+TEST(OrcaUXControllers, CouchDeviceReadsItsOwnPadUntilItIsGone)
+{
+  Snapshot snapshot;
+  snapshot.owned = true;
+  snapshot.sent_at = snapshot.received_at = 1000;
+  AdapterPort port = CouchPort(2, 0);
+  port.buttons = 0x0001;  // A
+  snapshot.ports = {CouchPort(0, 0), port};
+  StandardPad pad = CouchPad(3);
+  pad.axes[0] = 1;
+  snapshot.pads = {pad};
+  auto choice = ChooseDevice(snapshot, 0, Adapter(2));
+  ASSERT_TRUE(choice);
+  EXPECT_FALSE(choice->neutral);
+  ExpectSame(choice->pad, MapAdapterPort(port));
+  choice = ChooseDevice(snapshot, 0, Gamepad(3));
+  ASSERT_TRUE(choice);
+  EXPECT_EQ(choice->pad.stickX, 255);
+  // Stale or suspended input is neutral, as for every other seat.
+  choice = ChooseDevice(snapshot, 251, Adapter(2));
+  ASSERT_TRUE(choice);
+  EXPECT_TRUE(choice->neutral);
+  ExpectSame(choice->pad, NeutralPad());
+  snapshot.suspended = true;
+  EXPECT_TRUE(ChooseDevice(snapshot, 0, Gamepad(3))->neutral);
+  snapshot.suspended = false;
+  // Gone: unplugged, never in the snapshot, or an adapter the helper let go.
+  EXPECT_FALSE(ChooseDevice(snapshot, 0, Adapter(1)));
+  EXPECT_FALSE(ChooseDevice(snapshot, 0, Gamepad(0)));
+  snapshot.owned = false;
+  EXPECT_FALSE(ChooseDevice(snapshot, 0, Adapter(2)));
 }
 
 TEST(OrcaUXOrbCombo, CoSeatShortcutHasOnlyTheRecordedMask)

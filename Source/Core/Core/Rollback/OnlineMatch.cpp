@@ -152,6 +152,9 @@ struct Match
   bool reopen_join = false;
   int local_seat = 0;
   std::vector<int> co_seats;
+  // Couch play (StepCouch): with no room, every local controller has a port; the device on each.
+  bool couch = false;
+  Orca::UX::CouchPorts couch_ports{};
   // The frame the current boundary completes (-1 at the first boundary).
   int running = -1;
 
@@ -1197,6 +1200,70 @@ void Reseat(Match& match)
   match.port_names.clear();
 }
 
+// Couch play: while this game has no room (lazyroom), every local controller gets its own port, up
+// to 4, and local Versus stays the game's own. Never with a room, a session, a join or a reopen.
+bool CouchAllowed(const Match& match)
+{
+  return LazyRoom() && Orca::Online::RoomEnded() && !match.session && !match.joining &&
+         match.local_seat == 0 && !match.reopen_pending &&
+         !(match.room_lost && !match.reopen_gave_up) && !CanonicalBoot(match);
+}
+
+// Back to one local player on port 1. Logged when other ports had players.
+void LeaveCouch(Match& match, const char* why)
+{
+  if (!match.couch)
+    return;
+  if (!match.co_seats.empty())
+  {
+    std::string ports;
+    for (const int seat : match.co_seats)
+      ports += fmt::format(" {}", seat + 1);
+    NOTICE_LOG_FMT(ROLLBACK, "Couch: ports{} retired from frame {} ({})", ports,
+                   match.running + 1, why);
+  }
+  match.couch = false;
+  match.couch_ports = {};
+  match.co_seats.clear();
+  Orca::UX::SetLocalPadCount(1);
+}
+
+// At a boundary: the couch's ports for the controllers connected now (Orca::UX::SeatCouch). Each
+// player keeps their port while their controller stays. RunSolo records every port's pad, so the
+// history replays as played.
+void StepCouch(Match& match, bool allowed, const std::vector<Orca::UX::LocalDevice>& devices)
+{
+  if (!allowed)
+  {
+    LeaveCouch(match, "a room or a join");
+    return;
+  }
+  const Orca::UX::CouchPorts ports = Orca::UX::SeatCouch(match.couch_ports, devices);
+  if (match.couch && ports == match.couch_ports)
+    return;
+  match.couch = true;
+  match.couch_ports = ports;
+  match.co_seats.clear();
+  std::vector<Orca::UX::LocalDevice> co;
+  std::string seen;
+  for (int seat = 0; seat < Orca::UX::MAX_LOCAL; ++seat)
+  {
+    if (!ports[seat])
+      continue;
+    if (seat > 0)
+    {
+      match.co_seats.push_back(seat);
+      co.push_back(*ports[seat]);
+    }
+    seen += fmt::format(" {}={}:{}", seat + 1,
+                        ports[seat]->source == Orca::UX::PadSource::Adapter ? "adapter" : "pad",
+                        ports[seat]->index);
+  }
+  Orca::UX::SetCouchPads(co);
+  NOTICE_LOG_FMT(ROLLBACK, "Couch: ports {} (devices{}) from frame {}", 1 + co.size(),
+                 seen.empty() ? " none" : seen, match.running + 1);
+}
+
 // Host: its friends left. Leave a matchmade room for one of its own, unless a ranked set is still
 // being decided: then wait for the room's verdict (up to VERDICT_WAIT).
 void AfterFriendsGone(Match& match)
@@ -1519,7 +1586,8 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   ++match.host_boundaries;
   match.doubles = test_room ? test_room->Doubles() : Orca::Online::RoomDoubles();
   bool locals_changed = false;
-  if (!match.session && (test_room || Orca::Online::InRoom()))
+  // Couch play's ports are its own (StepCouch).
+  if (!match.session && !match.couch && (test_room || Orca::Online::InRoom()))
   {
     if (const auto locals = test_room ? test_room->CoSeatsForSolo() : Orca::Online::CoSeatsForSolo())
     {
@@ -2987,6 +3055,8 @@ void JoinInPlay(Match& match, const std::string& code, bool keep_room)
 {
   if (code == Orca::Online::Code() && match.joining)
     return;
+  // The friend's game replaces this one.
+  LeaveCouch(match, "joining");
   if (match.session)
     GoSolo(match, "joining another game", nullptr);
   ResetDropIn(match);
@@ -3020,9 +3090,11 @@ void JoinInPlay(Match& match, const std::string& code, bool keep_room)
   Orca::Status::State("joining 0");
 }
 
-// "host <code>": the page selected a room with an opponent who will drop in. Only while alone:
-// leave this room and host the selected one, on port 1 (Reseat).
-void HostInPlay(Match& match, const std::string& code)
+// Whether `host <code>` must wait: this game isn't alone, or couch players are mid-game (hosting
+// keeps one local player, and unplugging the others would take their fighters). The page then
+// shows its retry line.
+bool HostRefused(const Match& match, const std::string& code,
+                 std::optional<bool> test_menus = std::nullopt)
 {
   const bool alone = match.port && !match.session && !match.joining && !match.download &&
                      !match.job && !match.keyframe_wanted && match.waiting.empty() &&
@@ -3032,8 +3104,27 @@ void HostInPlay(Match& match, const std::string& code)
   {
     WARN_LOG_FMT(ROLLBACK, "Matchmaking: can't host room {}: this game isn't alone", code);
     Orca::Status::Line("unsupported host");
-    return;
+    return true;
   }
+  if (match.couch && !match.co_seats.empty() &&
+      !test_menus.value_or(Orca::UX::Game().Read().OnTheMenus()))
+  {
+    WARN_LOG_FMT(ROLLBACK, "Matchmaking: can't host room {}: {} couch players are mid-game", code,
+                 1 + match.co_seats.size());
+    Orca::Status::Line("unsupported host");
+    return true;
+  }
+  return false;
+}
+
+// "host <code>": the page selected a room with an opponent who will drop in. Only while alone:
+// leave this room and host the selected one, on port 1 (Reseat).
+void HostInPlay(Match& match, const std::string& code)
+{
+  if (HostRefused(match, code))
+    return;
+  // On the menus the couch's other players step out: a room has one local player.
+  LeaveCouch(match, "hosting");
   // With lazyroom, a player off the queue hosts the friends room the page opened for an invite.
   const bool friends = LazyRoom() && !QueueOrSearch();
   Reseat(match);
@@ -3587,7 +3678,7 @@ std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
               {match.local_seat, frame, std::move(own), std::move(controls), std::move(queue)});
     }
   }
-  if (!match.joining && !match.session)
+  if (!match.joining && !match.session && !match.couch)
     RefreshCoValues(match, frame);
   const auto port = [&](int seat) {
     Orca::Events::PortInfo info{seat, "", !IsLocal(match, seat), {}};
@@ -3603,6 +3694,11 @@ std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
   if (!match.session)
   {
     ports.push_back(port(match.local_seat));
+    // Couch players are local controllers, not online players: the game modules keep its own
+    // local Versus (no "online" select, no With Friends move; OnlineSeats.h, OnlineMenu.h), and
+    // the history records this list, so a replay or a later joiner's rebuild decides the same.
+    if (match.couch)
+      return ports;
     for (const int seat : match.co_seats)
       ports.push_back(port(seat));
     return ports;
@@ -4484,6 +4580,9 @@ std::optional<int> Boundary(Core::System& system,
     Linger(match);
     if (!Stopping(system))
       KeepRoomOpen(match);
+    const bool couch = CouchAllowed(match);
+    StepCouch(match, couch,
+              couch ? Orca::UX::CouchDevices() : std::vector<Orca::UX::LocalDevice>{});
     // While waiting for a ranked room's verdict, nobody new is taken in.
     if (!match.joining && !Orca::Online::RoomEnded() && !match.linger_until)
       HostEvents(system, match);
@@ -5119,6 +5218,12 @@ int LocalOrdinal(int seat)
   return co == match.co_seats.end() ? -1 : static_cast<int>(co - match.co_seats.begin()) + 1;
 }
 
+bool Couch()
+{
+  const Match& match = TheMatch();
+  return match.started && !match.finished && match.couch;
+}
+
 bool Active()
 {
   const Match& match = TheMatch();
@@ -5492,6 +5597,35 @@ std::vector<Pads> PumpSoloSeatsForTest(Core::System& system, const std::vector<i
   if (ports)
     *ports = PortsAt(match, frames);
   return match.log;
+}
+
+CouchResult PumpCouchForTest(Core::System& system,
+    const std::vector<std::vector<Orca::UX::LocalDevice>>& steps, bool on_menus, int host_after)
+{
+  const Common::ScopeGuard reset_count([] { Orca::UX::SetLocalPadCount(1); });
+  CouchResult result;
+  Match match;
+  match.origin_frame = 0;
+  match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
+  bool hosted = false;
+  for (size_t i = 0; i < steps.size(); ++i)
+  {
+    // After hosting this game is in a room, where couch play stops.
+    StepCouch(match, !hosted, steps[i]);
+    result.co_seats.push_back(match.co_seats);
+    RunSolo(match, [](int seat) { return Pad{static_cast<u8>(0x10 + seat), 0, 0, 0, 0, 0, 0, 0}; });
+    if (static_cast<int>(i) == host_after)
+    {
+      result.host_refused = HostRefused(match, "TESTCODE", on_menus);
+      hosted = !result.host_refused;
+      if (hosted)
+        LeaveCouch(match, "hosting");
+    }
+  }
+  result.ports = PortsAt(match, static_cast<int>(steps.size()));
+  result.log = match.log;
+  result.couch = match.couch;
+  return result;
 }
 
 Pads PumpSoloRoomForTest(Core::System& system, Orca::Net::YouGameRoom& room)
