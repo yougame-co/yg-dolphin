@@ -3541,7 +3541,11 @@ void TellNoRoom(Match& match)
   match.tell_no_room = false;
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: no room of its own on port {}{}", match.local_seat + 1,
                  LazyRoom() ? " until the app asks for one" : "");
-  Orca::Status::Event(LazyRoom() ? "roomless" : "no-room");
+  // Without lazyroom, exactly the old line (State drops a repeat; Event would not).
+  if (LazyRoom())
+    Orca::Status::Event("roomless");
+  else
+    Orca::Status::State("no-room");
 }
 
 // A joiner whose host's game carries another header than this room's leaves before playing it.
