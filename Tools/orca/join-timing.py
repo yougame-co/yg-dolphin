@@ -22,7 +22,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('binary')
     p.add_argument('disc')
-    p.add_argument('--pplus', required=True)
+    p.add_argument('--pplus')
+    p.add_argument('--profile', default='PPLUS321')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--plan', default='A,A,A,AL,B,C,C,D,E,GC,GD')
     p.add_argument('--origin', type=int, default=230)
@@ -61,7 +62,7 @@ def main():
         try:
             room = 'jt' + ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
             off = scenario.startswith('G')
-            target = {'B': 300, 'C': 18000, 'D': 108000, 'E': 18000,
+            target = {'B': 300, 'C': 18000, 'D': 108000, 'E': 18000, 'EL': 18000,
                       'GC': 18000, 'GD': 108000}.get(scenario, 0)
             friend = None
             if scenario != 'AL':
@@ -75,7 +76,7 @@ def main():
             if target >= 18000:
                 extra['ORCA_TEST_FAST_UNTIL'] = str(origin + target)
             inp = ''
-            if scenario == 'E':
+            if scenario in ('E', 'EL'):
                 # Age on the main menu, then enter the first CPU fight near five minutes.
                 # This avoids repeated-match fuzz/JIT history contaminating a join measurement.
                 lines = (Path(__file__).resolve().parent / 'inputs/pplus-cpu-loop.txt').read_text().splitlines()
@@ -88,6 +89,10 @@ def main():
                         parts[1:3] = [str(int(v) + 17400) for v in parts[1:3]]
                         line = ' '.join(parts)
                     presses.append(line)
+                # Let the first fight finish through ordinary controller inputs, then leave results.
+                presses += ['@scMelee 600 99999 1 SX=0',
+                            '@scVsResult mash 240 99999 1 40 A',
+                            '@scVsResult mash 600 99999 1 40 START']
                 inp = '\n'.join(presses) + '\n'
                 watch = work / 'cpu-watch.txt'
                 watch.write_text('@* 0 watch [[[[805a0060]+4]+400]+48]+1b4 a2-kind\n')
@@ -102,7 +107,7 @@ def main():
                 host.wait('frames run at their own pace', 900)
             elif target:
                 host.wait_frame(origin + target, a.timeout)
-            if scenario == 'E':
+            if scenario in ('E', 'EL'):
                 host.wait_current_scene('scMelee', a.timeout)
             result['load_accept'] = os.getloadavg()
             result['host_last_stats_at_accept'] = host.stats
@@ -114,7 +119,12 @@ def main():
                 pair.append(friend)
             else:
                 friend.send(f'join {room}')
-            friend.wait('Drop-in: plugged into port', a.timeout, after=accept['ms'])
+            if scenario == 'EL':
+                host.wait('the join waits for this match to end', 30, after=accept['ms'])
+                record('Driver', 'mark', 'Fight hold observed; let-in')
+                host.send('let-in')
+            friend.wait('Drop-in: plugged into port', 900 if scenario == 'E' else a.timeout,
+                        after=accept['ms'])
             host.wait('orca state friend-joined', 60, after=accept['ms'])
             record('Driver', 'mark', 'Both live observed')
             # Frozen binary exposes cumulative checksum matches on session end, not each exchange.
@@ -175,7 +185,11 @@ def phases(result, events):
     rebuilt = first('Friend', 'rebuilt replay frame')
     plugged = first('Friend', 'Drop-in: plugged into port')
     host_live = first('Host', 'orca state friend-joined')
-    marks = {'friend_launch': launch, 'friend_origin': origin, 'room_welcome': welcome,
+    hold = first('Host', 'the join waits for this match to end')
+    fight_end = first('Host', 'scMelee ->')
+    results_end = first('Host', 'scVsResult ->')
+    marks = {'fight_hold': hold, 'fight_end': fight_end, 'results_end': results_end,
+             'friend_launch': launch, 'friend_origin': origin, 'room_welcome': welcome,
              'host_arrival_hello_complete': arrival, 'fresh_restore_end': fresh,
              'fresh_tail_end': tail, 'offer_packed': packed, 'offer_sent': sent,
              'offer_received': received, 'rebuild_checksum_K_match': rebuilt,
@@ -190,6 +204,11 @@ def phases(result, events):
            'receive_to_rebuild_start_ms': None, 'fresh_restore_ms': None,
            'host_picture_hold_restore_plus_tail_ms': None, 'fresh_tail_only_ms': None,
            'download_done_ms': None, 'first_live_checksum_exchange_ms': None,
+           'fight_hold_to_release_ms': duration(hold, first('Host', 'the join goes on')),
+           'fight_end_to_both_live_ms':
+               round(max(plugged['ms'], host_live['ms'])-fight_end['ms'], 3)
+               if fight_end and plugged and host_live else None,
+           'tail_end_to_offer_ms': duration(tail, sent),
            'both_live_ms': round(max(plugged['ms'], host_live['ms'])-accept, 3)
                if plugged and host_live else None}
     if rebuilt:
@@ -238,7 +257,7 @@ class Orca:
         environment = {'HOME': str(home), 'TMPDIR': str(tmp), 'PATH': '/usr/bin:/bin',
             'ORCA_SESSION': '1', 'ORCA_TEST_COMMANDS': '1', 'ORCA_TEST_DEV_GAME': 'orca-dropin-test',
             'ORCA_NAME': name,
-            'ORCA_PROFILE': 'PPLUS321', 'YG_INPUT': str(script), 'YG_SCENES': '1',
+            'ORCA_PROFILE': a.profile if a.pplus else 'RSBE01', 'YG_INPUT': str(script), 'YG_SCENES': '1',
             'YG_THROTTLE': '1', 'SDL_JOYSTICK_HIDAPI': '0', 'SDL_HIDAPI_LIBUSB': '0'}
         environment.update(extra)
         args = ['nice', '-n', '10', a.binary, '-p', 'headless', '-u', str(user), '-v', 'Null',
@@ -246,9 +265,12 @@ class Orca:
             '-C', 'Logger.Logs.ROLLBACK=True', '-C', 'Logger.Logs.NETPLAY=True',
             '-C', 'Logger.Logs.CORE=True', '-C', 'Logger.Options.Verbosity=2',
             '-C', 'Logger.Options.WriteToConsole=True',
-            '-C', f'Dolphin.Core.DefaultISO={a.disc}', '-e', a.pplus]
+            *(['-C', f'Dolphin.Core.DefaultISO={a.disc}', '-e', a.pplus]
+              if a.pplus else ['-e', a.disc])]
         (work / (name + '-command.json')).write_text(json.dumps({'argv': args,
             'environment': environment}, indent=2))
+        while os.getloadavg()[0] >= 20:
+            time.sleep(5)
         self.record(name, 'mark', 'Load before launch ' + str(os.getloadavg()))
         self.record(name, 'mark', 'Process launch')
         self.proc = subprocess.Popen(args, env=environment, cwd=work, stdin=subprocess.PIPE,
