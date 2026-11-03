@@ -789,7 +789,10 @@ same move from its own origin. So is a new seed for the game's random numbers
 - **The tail.** From the origin until the character select has been up 30 frames (600 at most),
   the host runs unthrottled, unseen and muted, like a rebuild of the same frames: the hook re-runs
   and plays the replay's typed events, and nothing is announced. Then the game shows as usual; the
-  readers start over on the select.
+  readers start over on the select. A friend's menu tail also reaches the first-keyframe gate
+  (normally absolute frame 300) before showing, so the next boundary can make the offer at once.
+  The gate remains intact. Queue tails and reset starts keep their existing endings; a mod gate
+  beyond the 600-frame tail limit is still waited for normally.
 - **A queue room's host** then plays nothing until the room's header is in, and its own pick goes
   back on the room's select by its own inputs (`Queue.h` `StepOwnPick`): the hand to where its token
   was placed on its own select, A once still over that character, B if it landed on another, X
@@ -817,6 +820,7 @@ same move from its own origin. So is a new seed for the game's random numbers
 
 Test knobs (`TestKnobsAllowed`): `ORCA_TEST_FRESH=off` (no fresh starts: every join replays from the
 origin in place), `ORCA_TEST_FRESH_AFTER=<frames>` (the friends threshold),
+`ORCA_TEST_JOIN_FAST_OFFER=off` (restore the settled-tail ending before the offer gate),
 `ORCA_TEST_FAST_UNTIL=<frame>` (solo frames before it run unthrottled, to age a host quickly, until
 its first fresh start or session).
 

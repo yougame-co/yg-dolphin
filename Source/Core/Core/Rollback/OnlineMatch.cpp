@@ -503,6 +503,12 @@ std::optional<int> ChosenDelay()
 }
 
 // ---- Test knobs (UX/Probe.h TestKnobsAllowed) ----
+// ORCA_TEST_JOIN_FAST_OFFER=off: show a settled friends tail before the offer gate, as before.
+bool JoinFastOfferOn()
+{
+  static const bool off = Orca::GetEnv("ORCA_TEST_JOIN_FAST_OFFER") == "off";
+  return !(off && Orca::UX::TestKnobsAllowed());
+}
 // ORCA_TEST_FRESH=off: no fresh starts; every join replays from the host's origin in place.
 bool FreshStartsOn()
 {
@@ -780,7 +786,12 @@ void StepTail(Match& match, int frame)
   Match::Fresh& fresh = *match.fresh;
   fresh.css_streak = Orca::UX::Game().Read().LastSeen().css ? fresh.css_streak + 1 : 0;
   const int length = frame - match.origin_frame + 1;
-  if (!FreshTailSettled(fresh.kind, fresh.css_streak, length))
+  // Keep the gate, but spend the last pre-offer frames unseen and unthrottled. Queue tails
+  // retain their own header/steer path. A mod gate beyond the bounded tail is left unchanged.
+  const int offer_from = !fresh.queue && JoinFastOfferOn() &&
+                                 FirstKeyframeFrame() < match.origin_frame + FRESH_TAIL_LIMIT ?
+                             FirstKeyframeFrame() : 0;
+  if (!FreshTailSettled(fresh.kind, fresh.css_streak, length, frame, offer_from))
     return;
   if (fresh.kind == FreshKind::Menu && fresh.css_streak < FRESH_CSS_SETTLE)
   {
@@ -5340,7 +5351,8 @@ bool FreshExitAllowed(FreshKind kind, u8 exit)
 
 bool FreshTailSettled(FreshKind kind, int css_streak, int length, int frame, int offer_from)
 {
-  return kind == FreshKind::Reset || css_streak >= FRESH_CSS_SETTLE || length >= FRESH_TAIL_LIMIT;
+  return kind == FreshKind::Reset ||
+         ((css_streak >= FRESH_CSS_SETTLE || length >= FRESH_TAIL_LIMIT) && frame >= offer_from);
 }
 
 Orca::Net::ReplayArchive FreshReplayStart(FreshKind kind, int frame, u64 origin_hash, u8 exit,
