@@ -101,6 +101,7 @@ class Orca:
         env = {
             "HOME": os.environ["HOME"],
             "TMPDIR": os.environ.get("TMPDIR", WORK),
+            "YG_THROTTLE": "1",
             "PATH": os.environ["PATH"],
             "ORCA_SESSION": "1",
             "ORCA_TEST_COMMANDS": "1",
@@ -248,7 +249,8 @@ if run_step("rooms"):
     friend.send(f"join {taken}")
     friend.wait_log(rf"in room {taken} on seat 1, joining", 30, after=mark)
     host_player = "orca-rooms-" + code("h")
-    host = Orca("Host", {"ORCA_ROOM": taken, "ORCA_TEST_PLAYER": host_player}, script=False)
+    host = Orca("Host", {"ORCA_ROOM": taken, "ORCA_TEST_PLAYER": host_player,
+                         "ORCA_TEST_FRESH_AFTER": "100000000"}, script=False)
     orcas.append(host)
     host.expect("orca caps", 30)
     host.send("caps join leave stats")
@@ -330,7 +332,7 @@ if run_step("rooms"):
 
 # 5. The page's Leave through the app's bridge. Each Orca gets its own fake bridge minting dev
 # tickets for the same dev game. The friend's bridge names the host's room, as an opened invite
-# does; the host's sends Leave eight seconds after the room reads ready, once the friend is in.
+# does; the host's sends Leave eight seconds after the friend is live.
 paged = code("pge")
 bridge_log = os.path.join(WORK, "bridge.log")
 friend_bridge_log = os.path.join(WORK, "bridge-friend.log")
@@ -381,14 +383,17 @@ def wait_mirror(path, test, timeout, why):
     fail(f"{why} in {timeout} s (mirrors: {shown})")
 
 
-def pad(port, buttons=0, axes=None):
-    """The app's controller (a bridge with FAKE_PAD_LIVE=1): held until the next call."""
-    req = urllib.request.Request(f"http://127.0.0.1:{port}/test-pad",
-                                 data=json.dumps({"buttons": buttons,
-                                                  "axes": axes or [128, 128, 128, 128]}).encode(),
+def bridge_post(port, action, payload):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/{action}",
+                                 data=json.dumps(payload).encode(),
                                  headers={"Authorization": "Bearer t0ken",
                                           "content-type": "application/json"})
     urllib.request.urlopen(req, timeout=5).read()
+
+
+def pad(port, buttons=0, axes=None):
+    """The app's live controller: held until the next call."""
+    bridge_post(port, "test-pad", {"buttons": buttons, "axes": axes or [128, 128, 128, 128]})
 
 
 def press(port, button, hold=0.15):
@@ -478,7 +483,7 @@ def came_home(f, friend_log, room, since, after):
 
 try:
     if run_step("page"):
-        port = start_bridge(bridge_log, FAKE_LEAVE_AFTER="8")
+        port = start_bridge(bridge_log, FAKE_NO_LEAVE="1")
         host = Orca("Host2", {"ORCA_ROOM": paged, "YOUGAME_BRIDGE": f"http://127.0.0.1:{port}",
                               "YOUGAME_TOKEN": "t0ken", "YOUGAME_GAME": "orca-test"})
         orcas.append(host)
@@ -497,6 +502,9 @@ try:
         host.expect("orca state friend-joining", 60)
         friend.expect("orca state playing", 120)
         since, after = len(friend.seen), friend.log_size()
+        # Room-ready precedes canonical boot. Arm this fixture after the friend is live,
+        # so the page's eight-second leave cannot cancel a join still booting.
+        bridge_post(port, "test-leave", {"delay": 8})
         host.expect("orca state left", 30, forbid=("orca error",))
         friend.expect("orca state host-left", 30, forbid=("orca error",))
         how = friend.home_or_no_room(10, after, since)

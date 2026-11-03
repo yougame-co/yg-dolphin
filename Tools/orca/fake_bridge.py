@@ -102,6 +102,17 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_POST(self):
+        if self.path == "/test-leave" and self.authed():
+            msg = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            delay = msg.get("delay", 0)
+            if not isinstance(delay, (int, float)) or not 0 <= delay <= 30:
+                return self.reply(400, {"ok": False})
+            with lock:
+                if state["left"]:
+                    return self.reply(409, {"ok": False})
+                state["leave_at"] = time.time() + delay
+            log({"test_leave_after": delay})
+            return self.reply(200, {"ok": True})
         if self.path == "/test-pad" and self.authed() and PAD_LIVE:
             msg = json.loads(self.rfile.read(int(self.headers["content-length"])))
             with lock:
