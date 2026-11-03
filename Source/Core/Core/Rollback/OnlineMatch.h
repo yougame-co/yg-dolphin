@@ -303,7 +303,7 @@ public:
   void Reset() { m_next.reset(); }
   bool Due(Clock::time_point now, Clock::duration lifetime)
   {
-    if (m_next)
+    if (m_next && now < *m_next)
       return false;
     m_next = now + lifetime;
     return true;
