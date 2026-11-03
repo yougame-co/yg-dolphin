@@ -28,6 +28,8 @@ def main():
     p.add_argument('--plan', default='A,A,A,AL,B,C,C,D,E,GC,GD')
     p.add_argument('--origin', type=int, default=230)
     p.add_argument('--timeout', type=float, default=300)
+    p.add_argument('--fast-offer-off', action='store_true')
+    p.add_argument('--fight-hold-off', action='store_true')
     a = p.parse_args()
     a.out = a.out.resolve()
     a.out.mkdir(parents=True, exist_ok=True)
@@ -71,6 +73,10 @@ def main():
                 friend.wait('Drop-in: origin at frame', a.timeout)
                 friend.wait('orca state playing', a.timeout)
             extra = {'ORCA_ROOM': room}
+            if a.fast_offer_off:
+                extra['ORCA_TEST_JOIN_FAST_OFFER'] = 'off'
+            if a.fight_hold_off:
+                extra['ORCA_TEST_FIGHT_HOLD'] = 'off'
             if off:
                 extra['ORCA_TEST_FRESH'] = 'off'
             if target >= 18000:
