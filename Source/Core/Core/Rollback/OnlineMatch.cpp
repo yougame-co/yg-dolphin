@@ -1773,6 +1773,9 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   fight.doubles = match.doubles;
   fight.in_queue_room = in_queue_room || match.fresh_queue_armed;
   fight.let_in = match.fight_let_in;
+  fight.recovering = std::ranges::any_of(match.waiting, [](const auto& entry) {
+    return entry.second.recovering;
+  });
   const bool was_fight_holding = match.fight_holding;
   match.fight_holding = FightJoinHeld(fight);
   const bool hold = !match.waiting.empty() &&
@@ -5798,7 +5801,7 @@ std::optional<JoinCapture> ChooseJoinCapture(const Orca::Net::Session* session, 
 bool FightJoinHeld(const FightHoldInputs& in)
 {
   return in.enabled && in.fight && in.waiting && !in.joining && !in.session &&
-         !in.seated_or_plugging && !in.doubles && !in.in_queue_room && !in.let_in;
+         !in.seated_or_plugging && !in.doubles && !in.in_queue_room && !in.let_in && !in.recovering;
 }
 
 FreshStep DecideFreshStart(const FreshInputs& in)
