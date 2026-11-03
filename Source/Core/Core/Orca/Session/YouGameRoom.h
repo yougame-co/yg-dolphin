@@ -147,7 +147,7 @@ struct PeerEvent
   std::string reason;
   // Arrived: the joiner's queue identity from its hello (empty: none).
   std::vector<u8> queue;
-  // Hold: whether the host holds the join now.
+  // Hold: whether the host holds the join now; reason is "fight" for a solo Versus hold.
   bool holding = false;
   // Arrived: a retained friends-room player requests a current-match keyframe.
   bool recovering = false;
@@ -267,7 +267,7 @@ public:
   void DropPeer(int seat, const std::string& reason);
   // Host: whether to hold every join without a keyframe yet (its game is in a single-player mode).
   // Joiners hear it at once, every second while held, and once when it ends.
-  void HoldJoins(bool holding);
+  void HoldJoins(bool holding, bool fight = false);
   // A ticket for this room (`fresh`: a newly minted one, after the store refused the last) and the
   // keyframe store's URL (".../api/orca/keyframes/<room>"). Any thread; minting blocks on HTTP.
   bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);

@@ -183,6 +183,9 @@ struct Match
   std::vector<Orca::Net::KeyframeInfo> shared_keyframes;
   // Host: hold waiting friends while in a single-player mode (the module's Read().DropInHeld()).
   bool holding = false;
+  bool fight_holding = false;
+  // Let-in belongs to the current waiting friend only; an idle command never arms a later join.
+  bool fight_let_in = false;
   // Host: its room ended without this player leaving it. Reported once, then reopened with a
   // growing backoff; `home_code` is the last room that worked.
   bool room_lost = false;
@@ -223,6 +226,7 @@ struct Match
   Orca::Net::HostRoomWait host_room_wait;
   // The host holds this join while its game is in a single-player mode.
   bool host_holding = false;
+  bool host_hold_fight = false;
   Clock::time_point boot_time{}, offered_time{}, loaded_time{};
   double load_ms = 0;
   bool joined = false;
@@ -503,6 +507,12 @@ std::optional<int> ChosenDelay()
 }
 
 // ---- Test knobs (UX/Probe.h TestKnobsAllowed) ----
+// ORCA_TEST_FIGHT_HOLD=off: take a friend into a solo Versus fight immediately, as before.
+bool FightHoldOn()
+{
+  static const bool off = Orca::GetEnv("ORCA_TEST_FIGHT_HOLD") == "off";
+  return !(off && Orca::UX::TestKnobsAllowed());
+}
 // ORCA_TEST_JOIN_FAST_OFFER=off: show a settled friends tail before the offer gate, as before.
 bool JoinFastOfferOn()
 {
@@ -1744,20 +1754,48 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
       on_menus, static_cast<int>(match.waiting.size()),
       static_cast<int>(match.plugging.size()), recovering, Clock::now(),
       1 + static_cast<int>(match.co_seats.size()));
+  if (match.waiting.empty())
+    match.fight_let_in = false;
+  const bool let_in = Orca::Online::TakeLetIn();
+  if (let_in && match.fight_holding && !match.waiting.empty())
+  {
+    match.fight_let_in = true;
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: let-in ends the fight hold at frame {}", match.running + 1);
+  }
+  FightHoldInputs fight;
+  fight.enabled = FightHoldOn();
+  fight.fight = Orca::UX::Game().Read().FightInProgress() &&
+                !match.fresh && !match.fresh_pending;
+  fight.waiting = !match.waiting.empty();
+  fight.joining = match.joining;
+  fight.session = match.session != nullptr;
+  fight.seated_or_plugging = !match.seated.empty() || !match.plugging.empty();
+  fight.doubles = match.doubles;
+  fight.in_queue_room = in_queue_room || match.fresh_queue_armed;
+  fight.let_in = match.fight_let_in;
+  const bool was_fight_holding = match.fight_holding;
+  match.fight_holding = FightJoinHeld(fight);
   const bool hold = !match.waiting.empty() &&
-      (Orca::UX::Game().Read().DropInHeld() || !batch_ready);
+      (Orca::UX::Game().Read().DropInHeld() || !batch_ready || match.fight_holding);
   const bool notice_hold = hold || !match.menu_waiting.empty();
-  if (notice_hold != match.holding)
+  if (notice_hold != match.holding ||
+      (notice_hold && was_fight_holding != match.fight_holding))
   {
     match.holding = notice_hold;
     if (test_room)
-      test_room->HoldJoins(notice_hold);
+      test_room->HoldJoins(notice_hold, match.fight_holding);
     else
-      Orca::Online::HoldJoins(notice_hold);
+      Orca::Online::HoldJoins(notice_hold, match.fight_holding);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {} at frame {}",
-                   notice_hold ? "the join waits for the menus or its batch" :
-                          "the join goes on",
+                   match.fight_holding ? "the join waits for this match to end" :
+                   notice_hold ? "the join waits for the menus or its batch" : "the join goes on",
                    match.running + 1);
+    if (match.fight_holding)
+    {
+      const std::string& name = match.waiting.begin()->second.name;
+      Orca::UX::ShowToast(fmt::format("{} joins when this match ends",
+                                     name.empty() ? "Your friend" : name));
+    }
     if (notice_hold)
       Orca::Status::State("friend-holding");
     else if (!match.waiting.empty())
@@ -1790,7 +1828,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   start.history_time = std::chrono::duration<double>(
       static_cast<double>(ticks >= match.origin_ticks ? ticks - match.origin_ticks : 0) /
       system.GetSystemTimers().GetTicksPerSecond());
-  start.fresh_after = FreshFriendsAfter();
+  start.fresh_after = match.fight_let_in ? 0 : FreshFriendsAfter();
   switch (WarnBeforeResetJoin(DecideFreshStart(start), start.kind, start.queue_armed,
                              &match.fresh_join_warned_at, Clock::now()))
   {
@@ -2162,20 +2200,24 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Hold && !match.download)
       {
-        // The host is in a single-player mode: wait; the time limit restarts after.
-        if (event.holding != match.host_holding)
+        // Single-player and solo-fight holds share the unlimited wait and deadline restart.
+        const bool fight = event.reason == "fight";
+        if (event.holding != match.host_holding ||
+            (event.holding && fight != match.host_hold_fight))
         {
           match.host_holding = event.holding;
+          match.host_hold_fight = fight;
           NOTICE_LOG_FMT(ROLLBACK, "Drop-in: the host {}",
-                         event.holding ? "is in a single-player mode: the join waits" :
+                         event.holding ? (fight ? "is playing a match: the join waits" :
+                                                 "is in a single-player mode: the join waits") :
                                          "is back in the menus: the join goes on");
           if (event.holding)
           {
-            Orca::Status::State("friend-waiting");
+            Orca::Status::State(fight ? "friend-holding" : "friend-waiting");
             ShowJoinMessage(
-                fmt::format("{} is playing a single-player mode: you'll join when they're back in "
-                            "the menus",
-                            match.host_name.empty() ? "Your friend" : match.host_name),
+                fmt::format("{} is playing {}: you'll join when they're back in the menus",
+                            match.host_name.empty() ? "Your friend" : match.host_name,
+                            fight ? "a match" : "a single-player mode"),
                 static_cast<u32>(std::chrono::milliseconds(JOIN_LIMIT).count()));
           }
           else
@@ -2417,6 +2459,7 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   match.running = frame - 1;
   // The exit and a new seed are the first frame's typed events; FreshMove applies them at that
   // frame's hook, here and in every replay of it. Reset games have neither event.
+  match.fight_let_in = false;
   match.replay = FreshReplayStart(kind, frame, match.origin_hash, exit,
                                   kind == FreshKind::Menu ? NewHistorySeed() : 0);
   match.log.clear();
@@ -5754,7 +5797,8 @@ std::optional<JoinCapture> ChooseJoinCapture(const Orca::Net::Session* session, 
 
 bool FightJoinHeld(const FightHoldInputs& in)
 {
-  return false;
+  return in.enabled && in.fight && in.waiting && !in.joining && !in.session &&
+         !in.seated_or_plugging && !in.doubles && !in.in_queue_room && !in.let_in;
 }
 
 FreshStep DecideFreshStart(const FreshInputs& in)

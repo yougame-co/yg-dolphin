@@ -65,6 +65,7 @@ private:
 void Clear()
 {
   Orca::Online::TakePrepareJoin();
+  Orca::Online::TakeLetIn();
   Orca::Online::TakeJoinRequest();
   Orca::Online::TakeLeaveRequest();
   Rollback::OnlineMatch::EndPause();
@@ -145,4 +146,12 @@ TEST(OrcaPause, PausedTimeIsLeftOutOfTheStats)
   EXPECT_EQ(Rollback::OnlineMatch::TakePausedTime().count(), 0);
   Rollback::OnlineMatch::EndPause();
   EXPECT_EQ(Rollback::OnlineMatch::TakePausedTime().count(), 0);
+}
+
+TEST(OrcaFightHold, LetInIsAOneShotBoundaryRequest)
+{
+  Orca::Online::TakeLetIn();
+  Orca::Online::LetIn();
+  EXPECT_TRUE(Orca::Online::TakeLetIn());
+  EXPECT_FALSE(Orca::Online::TakeLetIn());
 }

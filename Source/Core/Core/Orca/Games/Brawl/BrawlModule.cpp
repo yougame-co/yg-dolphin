@@ -87,6 +87,7 @@ class BrawlMenuReads final : public Orca::Engine::MenuReads
 {
 public:
   bool DropInHeld() override { return UX::DropInHeld(); }
+  bool FightInProgress() override { return UX::FightInProgress(); }
   bool OnTheMenus() override { return UX::OnTheMenus(); }
   std::optional<OnlinePick> CssPick() override { return UX::CssPick(); }
   bool PickStands(OnlinePick pick) override { return UX::PickStands(pick); }

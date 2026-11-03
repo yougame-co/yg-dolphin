@@ -88,6 +88,8 @@ public:
   virtual ~MenuReads() = default;
   // The host's game is in a mode a friend can't drop into (single player, the Vault). Any thread.
   virtual bool DropInHeld() = 0;
+  // A Versus fight/results is in progress; only solo friends joins use this hold. Any thread.
+  virtual bool FightInProgress() { return false; }
   // The main menu or a character select: a former joiner moves to port 1 here.
   virtual bool OnTheMenus() = 0;
   // The Casual or Ranked pick the character select was opened for, if on one.

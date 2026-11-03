@@ -132,6 +132,8 @@ bool SequenceHoldsDropIn(std::string_view sequence);
 bool DropInHeld();
 // Versus fight/results latch: release only at a character select or menu. Pure.
 bool FightHoldsDropIn(std::string_view scene, std::string_view sequence, bool held);
+// Last first-run reading of the Versus fight/results latch. Any thread.
+bool FightInProgress();
 // Whether the game was in its Training mode (sqTraining) at its last first-run frame, for the
 // activity lines (Orca/Activity.h). Any thread.
 bool InTraining();
