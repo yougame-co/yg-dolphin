@@ -12,7 +12,7 @@
 // who picks first, 45 s turns, Start locks in, a token still in hand put down at its anchor, L and
 // R kept through the select's exit, the no-show. Pure functions of what a frame sees (SetView,
 // CssView, State) and the frame number. Engine-side competitive policy (Orca split, S2 commit 7,
-// Luis's decision 11); the Brawl module (Games/Brawl/CharOrder.h) reads them from memory, calls
+// decision 11); the Brawl module (Games/Brawl/CharOrder.h) reads them from memory, calls
 // these at the same positions as before and writes the state back.
 namespace Orca::UX::CharOrder
 {

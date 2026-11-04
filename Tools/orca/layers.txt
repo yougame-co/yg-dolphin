@@ -96,7 +96,7 @@ engine-sensitive  Tools/orca/mods/ruleset.schema.json
 engine-sensitive  Source/Core/Core/Orca/Session/**
 engine            Source/Core/Core/Orca/Session/Events.*  # engine-to-game callbacks, no parsing
 
-# Competitive policy machines, engine-side (S2 commit 7, Luis's decision 11): the queue's ready/
+# Competitive policy machines, engine-side (S2 commit 7, decision 11): the queue's ready/
 # timer/skip machine and the character order. Engine code a person reviews (their numbers become
 # ruleset data in S5).
 engine            Source/Core/Core/Orca/Policy/**         review

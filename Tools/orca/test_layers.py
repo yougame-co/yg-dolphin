@@ -253,7 +253,7 @@ class RealMapTests(unittest.TestCase):
             m = self.rules.classify(path)
             self.assertEqual((m.cls, m.review), ("game-logic", True), path)
         self.assertFalse(self.rules.classify("Source/Core/Core/Orca/Games/Brawl/NameTags.cpp").review)
-        # ...and engine-side, once S2 commit 7 moved the machines out (Luis's decision 11).
+        # ...and engine-side, once S2 commit 7 moved the machines out (decision 11).
         for path in ("Source/Core/Core/Orca/Policy/Queue.cpp", "Source/Core/Core/Orca/Policy/CharOrder.h"):
             m = self.rules.classify(path)
             self.assertEqual((m.cls, m.review), ("engine", True), path)

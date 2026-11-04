@@ -15,7 +15,7 @@
 // The queue's character select machine, Slippi-style (ORCA.md "The queue's character select"):
 // ready flags, the ready timer, the skip's hold, port 2's pick steered in with integer
 // steering, and the gate's masks and presses. Pure functions of what a frame sees (View, State)
-// and the frame number. Engine-side competitive policy (Orca split, S2 commit 7, Luis's decision
+// and the frame number. Engine-side competitive policy (Orca split, S2 commit 7, decision
 // 11): a person reviews a change here. Its timers are ruleset data (S5): the ruleset's queue
 // section, which the Brawl module puts in View. The Brawl module
 // (Games/Brawl/Queue.h) reads View and State from memory, calls these at the same positions as
