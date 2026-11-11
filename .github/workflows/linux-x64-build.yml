@@ -3,8 +3,10 @@
 # the YouGame repo (cost, blocked merges); this one builds the engine's Linux zip so a staging swap never
 # has to drop Linux when the Legion test handheld is asleep (10-24).
 #
-# No secrets: the zip embeds only the PUBLIC flat-bundle key (the staging key is public; the packaging script
-# refuses it outside a staging build). Signing stays with orca-lead's local tools (orca-add-build).
+# Two flavors: staging (the STAGING key, ORCA_STAGING_BUILD=1) and prod (the PRODUCTION key, no staging flag).
+# No secrets: the zip embeds only the PUBLIC flat-bundle key of its flavor (both keys are public; the packaging
+# script refuses the staging key outside a staging build, and the TEST key always). Signing stays with
+# orca-lead's local tools (orca-add-build).
 # No game files: the frame-for-frame check needs a Brawl disc image, which never goes to GitHub. It runs
 # afterwards on a Linux machine that has the disc (the Legion, or WSL2 on the PC), together with the in-app check.
 name: linux-x64 build (manual)
@@ -25,11 +27,11 @@ on:
         description: "YG Dolphin version, X.Y.Z"
         required: true
       flavor:
-        description: "Bundle-key flavor (prod is added when Linux launches on prod)"
+        description: "Bundle-key flavor: staging (STAGING key) or prod (PRODUCTION key)"
         required: true
         default: staging
         type: choice
-        options: [staging]
+        options: [staging, prod]
 
 permissions:
   contents: read
@@ -51,10 +53,12 @@ jobs:
           COMMIT: ${{ inputs.commit }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           VERSION: ${{ inputs.version }}
+          FLAVOR: ${{ inputs.flavor }}
         run: |
           [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be a full 40-hex sha"; exit 1; }
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "source_commit must be a full 40-hex sha"; exit 1; }
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be X.Y.Z"; exit 1; }
+          [[ "$FLAVOR" == staging || "$FLAVOR" == prod ]] || { echo "flavor must be staging or prod"; exit 1; }
 
       - name: Check out the release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, pinned 2026-10-24
@@ -88,7 +92,7 @@ jobs:
           key: ccache-linux-x64-${{ inputs.commit }}
           restore-keys: ccache-linux-x64-
 
-      - name: Build and package (Tools/orca-package-linux.sh, staging flavor)
+      - name: Build and package (Tools/orca-package-linux.sh, ${{ inputs.flavor }} flavor)
         env:
           CC: gcc-12
           CXX: g++-12
@@ -97,10 +101,13 @@ jobs:
           CCACHE_DIR: ~/.cache/ccache
           ORCA_VERSION: ${{ inputs.version }}
           ORCA_SOURCE_URL: https://github.com/yougame-co/orca-netplay
-          ORCA_STAGING_BUILD: "1"
+          # staging: "1"; prod: empty, and unset below (the script then refuses the STAGING key).
+          ORCA_STAGING_BUILD: ${{ inputs.flavor == 'staging' && '1' || '' }}
           ORCA_SOURCE_COMMIT: ${{ inputs.source_commit }}
-          ORCA_BUNDLE_PUBLIC_KEY: 8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab
+          # prod: the PRODUCTION key; staging: the STAGING key.
+          ORCA_BUNDLE_PUBLIC_KEY: ${{ inputs.flavor == 'prod' && '3b658bd504fde78f3ddd9bcb04a93a095df737fbbe657e83ba373f994cfcd87f' || '8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab' }}
         run: |
+          [ -n "$ORCA_STAGING_BUILD" ] || unset ORCA_STAGING_BUILD
           export CCACHE_DIR="$HOME/.cache/ccache"
           Tools/orca-package-linux.sh "$RUNNER_TEMP/build" "$RUNNER_TEMP/out"
           ccache -s | head -8 || true
