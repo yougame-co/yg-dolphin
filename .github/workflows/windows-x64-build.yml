@@ -7,6 +7,7 @@
 # in the non-interactive pc2 signing turn before any signing. Packaging, the D3D
 # shader cache and Authenticode signing stay on the PC (signing needs the certificate, which never comes here).
 #
+# Two flavors: staging (the STAGING key, ORCA_STAGING_BUILD=1) and prod (the PRODUCTION key, no staging flag).
 # No secrets: the program embeds only the PUBLIC flat-bundle key for the flavor. No game files: the frame-for-frame
 # check (a hashlog against the Mac kit) runs afterwards on the PC, which has the disc.
 name: windows-x64 build (manual)
@@ -27,11 +28,11 @@ on:
         description: "YG Dolphin version, X.Y.Z"
         required: true
       flavor:
-        description: "Bundle-key flavor (prod comes later)"
+        description: "Bundle-key flavor: staging (STAGING key) or prod (PRODUCTION key)"
         required: true
         default: staging
         type: choice
-        options: [staging]
+        options: [staging, prod]
 
 permissions:
   contents: read
@@ -53,10 +54,12 @@ jobs:
           COMMIT: ${{ inputs.commit }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           VERSION: ${{ inputs.version }}
+          FLAVOR: ${{ inputs.flavor }}
         run: |
           if ($env:COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw "commit must be a full 40-hex sha" }
           if ($env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw "source_commit must be a full 40-hex sha" }
           if ($env:VERSION -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw "version must be X.Y.Z" }
+          if ($env:FLAVOR -cne 'staging' -and $env:FLAVOR -cne 'prod') { throw "flavor must be staging or prod" }
 
       - name: Fetch the pinned shipping D3D compiler from this workflow commit
         env:
@@ -88,12 +91,14 @@ jobs:
           done
           test -z "$(git status --porcelain)" || { echo "tree not clean"; git status --short | head; exit 1; }
 
-      - name: Configure (the PC's switches, staging key pinned, TEST key off)
+      - name: Configure (the PC's switches, ${{ inputs.flavor }} key pinned, TEST key off)
         env:
           ORCA_SOURCE_COMMIT: ${{ inputs.source_commit }}
           ORCA_VERSION: ${{ inputs.version }}
-          ORCA_STAGING_BUILD: "1"
-          BUNDLE_KEY: 8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab
+          # staging: "1"; prod: empty, and removed in the check step (bundle-key-guard then refuses the STAGING key).
+          ORCA_STAGING_BUILD: ${{ inputs.flavor == 'staging' && '1' || '' }}
+          # prod: the PRODUCTION key; staging: the STAGING key.
+          BUNDLE_KEY: ${{ inputs.flavor == 'prod' && '3b658bd504fde78f3ddd9bcb04a93a095df737fbbe657e83ba373f994cfcd87f' || '8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab' }}
         run: |
           # Large MSVC test translation units (notably OrcaRoomTest) need extended object sections.
           # Scope the build flag to the unit-test directory; preserve /WX and all existing switches.
@@ -138,9 +143,11 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           VERSION: ${{ inputs.version }}
-          ORCA_STAGING_BUILD: "1"
-          ORCA_BUNDLE_PUBLIC_KEY: 8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab
+          FLAVOR: ${{ inputs.flavor }}
+          ORCA_STAGING_BUILD: ${{ inputs.flavor == 'staging' && '1' || '' }}
+          ORCA_BUNDLE_PUBLIC_KEY: ${{ inputs.flavor == 'prod' && '3b658bd504fde78f3ddd9bcb04a93a095df737fbbe657e83ba373f994cfcd87f' || '8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab' }}
         run: |
+          if (-not $env:ORCA_STAGING_BUILD) { Remove-Item Env:ORCA_STAGING_BUILD -ErrorAction SilentlyContinue }
           $b = "build\release\x64"
           $scm = Get-Content "$b\Source\Core\Common\scmrev.h" -Raw
           if ($scm -notmatch "SCM_REV_STR `"$env:SOURCE_COMMIT`"") { throw "scmrev.h does not carry the private source commit" }
@@ -150,8 +157,9 @@ jobs:
           $exe = "$b\Binaries\DolphinNoGUI.exe"
           python Tools\orca\bundle-key-guard.py $b $exe
           if ($LASTEXITCODE -ne 0) { throw "bundle-key-guard refused this build" }
-          if (-not (Select-String -Path $exe -SimpleMatch $env:ORCA_BUNDLE_PUBLIC_KEY -Quiet)) { throw "the program does not hold the staging bundle key" }
+          if (-not (Select-String -Path $exe -SimpleMatch $env:ORCA_BUNDLE_PUBLIC_KEY -Quiet)) { throw "the program does not hold the $env:FLAVOR bundle key" }
           if (Select-String -Path $exe -SimpleMatch "afb9463d5c16f0f617432d76f75f37a8c649e36d7c626088ba00b19dea115a43" -Quiet) { throw "the program holds the TEST key" }
+          if ($env:FLAVOR -ceq 'prod' -and (Select-String -Path $exe -SimpleMatch "8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab" -Quiet)) { throw "a prod program holds the STAGING key" }
           # scmrev.h above is the authority (the PC checks only it); the compiler may not keep all 40 hex digits in one piece.
           if (-not (Select-String -Path $exe -SimpleMatch $env:SOURCE_COMMIT -Quiet)) { "::warning::the program has no contiguous copy of the source commit (scmrev.h carries it)" }
           $vi = (Get-Item $exe).VersionInfo
