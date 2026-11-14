@@ -2876,6 +2876,10 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.101
+
+- The Tools menu no longer shows Dolphin's own NetPlay host and session browser. Online play is YouGame's queue and friend join.
+
 ### 0.3.100
 
 - Friends join sooner after a fresh start. During a solo Versus fight and its results, a friend waits until the host returns to the menus; returning friends and other room modes can still join straight away.
