@@ -2876,6 +2876,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.102
+
+- Updated Dolphin’s graphics-mod asset handling with an upstream fix.
+- The game list no longer shows Dolphin’s own NetPlay host entry. Online play uses YouGame’s queue and friend join.
+
 ### 0.3.101
 
 - The Tools menu no longer shows Dolphin's own NetPlay host and session browser. Online play is YouGame's queue and friend join.
