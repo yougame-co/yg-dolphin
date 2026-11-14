@@ -293,8 +293,11 @@ void MenuBar::AddToolsMenu()
 
   tools_menu->addSeparator();
 
-  tools_menu->addAction(tr("Start &NetPlay..."), this, &MenuBar::StartNetPlay);
-  tools_menu->addAction(tr("Browse &NetPlay Sessions...."), this, &MenuBar::BrowseNetPlay);
+  // Orca: online play goes through YouGame's own queue and friend join; the stock NetPlay host and
+  // browser would put a player outside it. Hidden, code kept (brawl-rollback #67333, 0.3.101).
+  tools_menu->addAction(tr("Start &NetPlay..."), this, &MenuBar::StartNetPlay)->setVisible(false);
+  tools_menu->addAction(tr("Browse &NetPlay Sessions...."), this, &MenuBar::BrowseNetPlay)
+      ->setVisible(false);
 
   tools_menu->addSeparator();
 
