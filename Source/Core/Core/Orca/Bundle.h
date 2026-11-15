@@ -15,28 +15,31 @@
 #include "Core/Orca/Mod.h"
 
 // Orca flat bundles: a game's data (its profile, patches, JIT seed and, for a launcher game, the
-// launcher and the SD image) as at most eight files in one folder, signed. They ride as a YouGame
+// launcher and the SD image) as at most eight files in one folder. They ride as a YouGame
 // listing's runtime files, which the app lays out in userData/orca/run/<slug>/, so Project+ and Brawl
 // can change without an Orca release or an app release.
 //
 //   mod.json   format 2 (Mod.h ParseManifest): the profile, the listing it is for, its serial, and
 //              the name of every other file
-//   mod.sig    "ed25519 <public key> <signature>\n", 64 and 128 lowercase hex digits
+//   mod.sig    "ed25519 <public key> <signature>\n", 64 and 128 lowercase hex digits; optional for
+//              the app's bundles (a listing), whose files YouGame's download checked, and checked
+//              whenever it is there
 //   ...        the files mod.json names, nothing else (hidden files such as the app's .copies.json
 //              aside)
 //
 // The signature is over FLAT_SIGNED_HEADER and one "<name>\t<sha256>\t<bytes>\n" line for mod.json
 // and every file it names but the SD image, sorted by name: mod.json pins the image by size and its
 // chunked SHA-256 (ChunkedSha256File, hashed in parallel: the card is 2 GB). Only a key this build
-// pins (TrustedKeys) may sign; a build that pins none trusts no bundle.
+// pins (TrustedKeys) may sign; a build that pins none trusts no signed bundle. An unsigned bundle
+// gets every other check.
 //
 // A bundle is hostile input: every read is bounded, every name checked, and anything wrong refuses
 // the whole bundle with a log line, and the session is refused (never the built-in game in its
 // place). No mod.json where Orca looks is legacy (Data/Sys/Orca). A session finds the folder itself
 // (FlatBundleDir), checks it once per process (ResolveBundle), and plays it in mod mode from the
 // bytes it verified (the launcher the boot runs, the patches, the JIT seed): its key is
-// "orca2|..." over the signed lines (the JIT seed's left out: host-only) and the SD image's hash,
-// so it never meets a legacy player.
+// "orca2|..." over the file lines (the JIT seed's left out: host-only; the same signed or not) and
+// the SD image's hash, so it never meets a legacy player.
 namespace Orca::Mod
 {
 inline constexpr std::string_view FLAT_SIGNED_HEADER = "orca-flat-bundle 1\n";
@@ -66,7 +69,7 @@ struct FlatBundle
   std::vector<std::pair<std::string, std::string>> patches;  // (name, text), mod.json's order
   std::string jitwarm;        // the JIT seed's bytes as verified; empty without one
   std::string sd_image_hash;  // the SD image's chunked SHA-256 as checked; empty without one
-  PublicKey signer{};
+  std::optional<PublicKey> signer;  // mod.sig's key; nullopt for an unsigned bundle
 };
 
 // What mod.sig signs.
@@ -82,9 +85,10 @@ std::string ChunkedSha256File(const std::string& path, u64 bytes);
 
 // The keys a bundle may be signed with: the one this build pins (CMake ORCA_BUNDLE_PUBLIC_KEY), and
 // the bundle-flat TEST key only in a build configured with ORCA_BUNDLE_TRUST_TEST_KEY (tests and
-// gates; release scripts refuse it). A build with neither trusts no key: flat bundles are off.
+// gates; release scripts refuse it). A build with neither trusts no key: signed flat bundles are
+// off (an unsigned one under the app still loads).
 std::span<const PublicKey> TrustedKeys();
-// Tests: trust exactly these keys (none: no bundle), until ResetTrustedKeysForTests.
+// Tests: trust exactly these keys (none: no signed bundle), until ResetTrustedKeysForTests.
 void TrustKeysForTests(std::span<const PublicKey> keys);
 void ResetTrustedKeysForTests();
 bool IsTestKey(const PublicKey& key);
@@ -100,9 +104,11 @@ struct BootLauncher
 };
 
 // Checks the folder `dir` as a flat bundle signed by one of `keys`: nullopt and why on anything
-// wrong. With `boot`, the bundle's launcher must be the one the boot runs, and the signed line for
-// it is over the boot's own bytes (never the file read a second time). `listing`, when not empty,
-// must be mod.json's. Hashes the SD image only once everything else, the signature included, holds.
+// wrong. With `boot`, the bundle's launcher must be the one the boot runs, and the line for it is
+// over the boot's own bytes (never the file read a second time). `listing`, when not empty, must be
+// mod.json's, and then mod.sig may be missing (the app's bundle, which YouGame's download checked):
+// every other check holds, and no key is needed. A mod.sig that is there is always checked. Hashes
+// the SD image only once everything else, the signature included, holds.
 std::optional<FlatBundle> LoadFlatBundle(const std::string& dir, std::span<const PublicKey> keys,
                                          std::string* error, const BootLauncher* boot = nullptr,
                                          std::string_view listing = {});
@@ -122,8 +128,8 @@ std::string FlatBundleDir(const std::string* executable_path);
 // read): a tree bundle (ORCA_MOD_DIR with a tree.json, mods phase 1, unchanged), a flat bundle that
 // passed LoadFlatBundle, none (legacy: no mod.json where Orca looked), or Refused: a mod.json that
 // didn't pass (whether Orca found it or ORCA_MOD_DIR named its folder; a build that trusts no key
-// refuses every one), or an ORCA_MOD_DIR that is neither a tree bundle nor a flat one, so the
-// session is refused (BootManager) rather than run legacy.
+// refuses every one but an unsigned bundle under the app), or an ORCA_MOD_DIR that is neither a
+// tree bundle nor a flat one, so the session is refused (BootManager) rather than run legacy.
 enum class BundleKind
 {
   None,

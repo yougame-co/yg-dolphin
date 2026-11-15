@@ -351,7 +351,8 @@ static std::optional<FlatBundle> LoadFlatBundleImpl(const std::string& dir_in,
     return fail("no folder");
   if (dir.back() != '/' && dir.back() != '\\')
     dir += '/';
-  if (!local && keys.empty())
+  // The app's own bundle (a listing) may come without mod.sig; anything else checks its key early.
+  if (!local && listing.empty() && keys.empty())
     return fail("this build trusts no bundle key");
 
   // The folder: regular files only (hidden ones aside: the app's .copies.json, a .DS_Store), no
@@ -388,8 +389,9 @@ static std::optional<FlatBundle> LoadFlatBundleImpl(const std::string& dir_in,
   if (!present.contains(std::string(FLAT_MANIFEST)))
     return fail("no mod.json");
 
-  // Signed bundles check mod.sig first, by a key this Orca trusts, before parsing mod.json.
-  // Local packs read unsigned mod.json by design.
+  // mod.sig, when there is one, is checked first, by a key this Orca trusts, before parsing
+  // mod.json. The app's bundles (a listing) may come without one: YouGame's download checked their
+  // files. Without a listing it is required. Local packs read unsigned mod.json by design.
   std::string why;
   std::optional<std::pair<PublicKey, Signature>> signature;
   if (local)
@@ -397,10 +399,15 @@ static std::optional<FlatBundle> LoadFlatBundleImpl(const std::string& dir_in,
     if (present.contains(std::string(FLAT_SIGNATURE)))
       return fail("--pack takes unsigned local packs; open signed community packs through YouGame");
   }
+  else if (!present.contains(std::string(FLAT_SIGNATURE)))
+  {
+    if (listing.empty())
+      return fail("mod.sig is missing");
+  }
   else
   {
-    if (!present.contains(std::string(FLAT_SIGNATURE)))
-      return fail("mod.sig is missing");
+    if (keys.empty())
+      return fail("this build trusts no bundle key");
     std::string sig_text;
     if (!ReadBounded(dir + std::string(FLAT_SIGNATURE), MAX_SIG_BYTES, &sig_text, &why))
       return fail("mod.sig " + why);
@@ -440,11 +447,11 @@ static std::optional<FlatBundle> LoadFlatBundleImpl(const std::string& dir_in,
                             manifest->launcher.empty() ? "none" : manifest->launcher));
   }
 
-  // Exactly the files mod.json names, mod.json and mod.sig.
+  // Exactly the files mod.json names, mod.json and mod.sig when the bundle is signed.
   const std::vector<std::string> named = manifest->FlatFiles();
   std::set<std::string> expected(named.begin(), named.end());
   expected.emplace(FLAT_MANIFEST);
-  if (!local)
+  if (signature)
     expected.emplace(FLAT_SIGNATURE);
   for (const std::string& name : present)
   {
@@ -490,13 +497,13 @@ static std::optional<FlatBundle> LoadFlatBundleImpl(const std::string& dir_in,
       bundle.jitwarm = std::move(contents);
   }
   std::ranges::sort(files, {}, &TreeFile::path);
-  if (!local && !VerifySignature(signature->first, signature->second, FlatSignedMessage(files)))
+  if (signature && !VerifySignature(signature->first, signature->second, FlatSignedMessage(files)))
   {
     return fail("mod.sig doesn't match the files (one changed since the bundle was signed, or the "
                 "signature is damaged)");
   }
 
-  // Signed, so these parse; checked anyway rather than run half of them.
+  // Signed or not, the patches must parse: checked rather than run half of them.
   for (const auto& [name, text] : bundle.patches)
   {
     std::string patch_error;
@@ -647,8 +654,13 @@ static void ResolveBundleWithJail(const std::string* executable_path,
     return refuse("this pack requires the YouGame app's sandbox; open it through YouGame");
   if (!SessionActive())
     return decide(BundleKind::None);
-  if (!local && TrustedKeys().empty())
+  // The app's bundle (YOUGAME_GAME set) may come without mod.sig, and needs no key then.
+  const std::string listing = GetEnv("YOUGAME_GAME");
+  if (!local && TrustedKeys().empty() &&
+      (listing.empty() || File::Exists(dir + std::string(FLAT_SIGNATURE))))
+  {
     return refuse("this build trusts no bundle key");
+  }
 
   const auto start = std::chrono::steady_clock::now();
   std::string why;
@@ -660,7 +672,7 @@ static void ResolveBundleWithJail(const std::string* executable_path,
     boot = BootLauncher{PathToFileName(*executable_path), launcher_bytes};
   std::optional<FlatBundle> bundle = local ?
       LoadFlatBundleImpl(dir, {}, &why, boot ? &*boot : nullptr, {}, true) :
-      LoadFlatBundle(dir, TrustedKeys(), &why, boot ? &*boot : nullptr, GetEnv("YOUGAME_GAME"));
+      LoadFlatBundle(dir, TrustedKeys(), &why, boot ? &*boot : nullptr, listing);
   if (bundle && !executable_path && !bundle->manifest.launcher.empty())
   {
     why = fmt::format("the bundle boots through its launcher ({}), and this boot is a disc's",
@@ -676,15 +688,19 @@ static void ResolveBundleWithJail(const std::string* executable_path,
     return decide(BundleKind::Flat);
   }
   NOTICE_LOG_FMT(BOOT,
-                 "Orca bundle: {} ({} for {}, serial {}, {} files, tree {}, SD {}), signed by "
-                 "{}{}, checked in {} ms",
+                 "Orca bundle: {} ({} for {}, serial {}, {} files, tree {}, SD {}), {}{}, checked "
+                 "in {} ms",
                  dir, bundle->manifest.title.empty() ? "untitled" : bundle->manifest.title,
                  bundle->manifest.listing, bundle->manifest.serial,
-                 bundle->tree.files.size() + (bundle->manifest.sd_image ? 2 : 1),
+                 bundle->tree.files.size() + (bundle->manifest.sd_image ? 1 : 0) +
+                     (bundle->signer ? 1 : 0),
                  bundle->tree.hash,
                  bundle->sd_image_hash.empty() ? "none" : bundle->sd_image_hash,
-                 KeyHex(bundle->signer),
-                 IsTestKey(bundle->signer) ? " (the TEST key: not for a release)" : "",
+                 bundle->signer ? "signed by " + KeyHex(*bundle->signer) :
+                                  std::string("unsigned (YouGame download)"),
+                 bundle->signer && IsTestKey(*bundle->signer) ?
+                     " (the TEST key: not for a release)" :
+                     "",
                  std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - start)
                      .count());

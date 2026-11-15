@@ -696,6 +696,21 @@ TEST(OrcaBundle, RefusesTamperedBundles)
           "doesn't match");
   refused("another key", [&](Flat& f) { f.Sign(stranger); }, "doesn't trust");
   refused("no signature", [&](Flat& f) { File::Delete(f.dir + "mod.sig"); }, "mod.sig is missing");
+  // Under the app (a listing) the same bundle without mod.sig loads (UnsignedAppBundle... below).
+  {
+    const std::string root = TempDir();
+    for (const bool pplus : {true, false})
+    {
+      Flat f = pplus ? MakePPlus(root + "p/", signer) : MakeBrawl(root + "b/", signer);
+      ASSERT_TRUE(File::Delete(f.dir + "mod.sig"));
+      std::string error;
+      EXPECT_TRUE(f.Load(signer, &error, nullptr, pplus ? "project-rollback" : "open-brawl"))
+          << error;
+      EXPECT_FALSE(f.Load(signer, &error));
+      EXPECT_EQ(error, "mod.sig is missing");
+    }
+    File::DeleteDirRecursively(root);
+  }
   refused("a malformed signature",
           [&](Flat& f) { File::WriteStringToFile(f.dir + "mod.sig", "signed, honest\n"); },
           "mod.sig is not");
@@ -806,6 +821,126 @@ TEST(OrcaBundle, RefusesTamperedBundles)
   EXPECT_FALSE(Orca::Mod::LoadFlatBundle(b.dir, {}, &error));
   EXPECT_NE(error.find("trusts no bundle key"), std::string::npos) << error;
   File::DeleteDirRecursively(root);
+}
+
+// The app's bundle (a listing) may come without mod.sig: YouGame's download checked its files. It
+// gets every other check, and the same tree hash (so the same key) as the signed bundle of the
+// same files. A mod.sig that is there is checked as ever, and without a listing it is required.
+TEST(OrcaBundle, UnsignedAppBundleLoadsAndSignedStaysStrict)
+{
+  const Signer signer(1), stranger(2);
+  const std::string root = TempDir();
+  const Common::ScopeGuard done([&] { File::DeleteDirRecursively(root); });
+  std::string error;
+
+  // Brawl and Project+ without mod.sig load under their listing, as the signed bundle does.
+  for (const bool pplus : {true, false})
+  {
+    SCOPED_TRACE(pplus);
+    const std::string listing = pplus ? "project-rollback" : "open-brawl";
+    Flat f = pplus ? MakePPlus(root + "pplus/", signer) : MakeBrawl(root + "brawl/", signer);
+    const auto signed_bundle = f.Load(signer, &error, nullptr, listing);
+    ASSERT_TRUE(signed_bundle) << error;
+    ASSERT_TRUE(signed_bundle->signer);
+    EXPECT_EQ(*signed_bundle->signer, signer.Key());
+    ASSERT_TRUE(File::Delete(f.dir + "mod.sig"));
+    const auto unsigned_bundle = f.Load(signer, &error, nullptr, listing);
+    ASSERT_TRUE(unsigned_bundle) << error;
+    EXPECT_FALSE(unsigned_bundle->signer);
+    EXPECT_EQ(unsigned_bundle->tree.hash, signed_bundle->tree.hash);
+    EXPECT_EQ(unsigned_bundle->tree.files.size(), signed_bundle->tree.files.size());
+    EXPECT_EQ(unsigned_bundle->sd_image_hash, signed_bundle->sd_image_hash);
+    EXPECT_EQ(unsigned_bundle->patches, signed_bundle->patches);
+    EXPECT_EQ(unsigned_bundle->jitwarm, signed_bundle->jitwarm);
+    EXPECT_TRUE(Orca::LoadFlatProfile(*unsigned_bundle, &error)) << error;
+    // A build that trusts no key loads it too, under the app only.
+    EXPECT_TRUE(Orca::Mod::LoadFlatBundle(f.dir, {}, &error, nullptr, listing)) << error;
+    EXPECT_FALSE(Orca::Mod::LoadFlatBundle(f.dir, {}, &error));
+    EXPECT_NE(error.find("trusts no bundle key"), std::string::npos) << error;
+    // Without a listing (a dev ORCA_MOD_DIR run) mod.sig is still required.
+    EXPECT_FALSE(f.Load(signer, &error));
+    EXPECT_EQ(error, "mod.sig is missing");
+  }
+
+  // Unsigned, every other check still refuses.
+  int n = 0;
+  const auto refused = [&](const std::string& what, const std::function<void(Flat&)>& tamper,
+                           const std::string& reason,
+                           const std::string& listing = "project-rollback") {
+    const std::string dir = TempDir();
+    Flat f = MakePPlus(dir + "b/", signer);
+    ASSERT_TRUE(File::Delete(f.dir + "mod.sig"));
+    tamper(f);
+    const auto bundle = f.Load(signer, &error, nullptr, listing);
+    EXPECT_FALSE(bundle) << what;
+    EXPECT_NE(error.find(reason), std::string::npos) << what << ": " << error;
+    File::DeleteDirRecursively(dir);
+    ++n;
+  };
+  refused("an extra file", [&](Flat& f) { f.Put("RSBE01.ini", "[Profile]\n"); }, "doesn't name it");
+  refused("a missing file", [&](Flat& f) { File::Delete(f.dir + "PPLUS32.jitwarm"); },
+          "PPLUS32.jitwarm is missing");
+  refused("another listing", [](Flat&) {}, "for listing project-rollback, and this is open-brawl",
+          "open-brawl");
+  refused("a retired serial",
+          [&](Flat& f) { f.Put("mod.json", With(f.files["mod.json"], "serial", "0")); },
+          "\"serial\"");
+  refused("an SD image byte",
+          [&](Flat& f) {
+            std::string card = f.files["sd.raw"];
+            card[40000] ^= 0x01;
+            ASSERT_TRUE(File::WriteStringToFile(f.dir + "sd.raw", card));
+          },
+          "not the SD image");
+  refused("an SD image of another size",
+          [&](Flat& f) { ASSERT_TRUE(File::WriteStringToFile(f.dir + "sd.raw", "short")); },
+          "bytes, not the");
+  refused("patches that don't parse",
+          [&](Flat& f) { f.Put("PPLUS32.patches", "this is not a patch\n"); }, "PPLUS32.patches:");
+  refused("a folder", [&](Flat& f) { File::CreateDir(f.dir + "Textures"); }, "not a file");
+#ifndef _WIN32  // (a symbolic link needs an elevated or developer-mode Windows)
+  refused("a link",
+          [&](Flat& f) {
+            File::Delete(f.dir + "PPLUS32.patches");
+            std::error_code ec;
+            std::filesystem::create_symlink(f.dir + "PPLUS32.jitwarm", f.dir + "PPLUS32.patches", ec);
+            ASSERT_FALSE(ec) << ec.message();
+          },
+          "is a link");
+#endif
+  // A mod.sig that is there is checked, under the app too: by a key the build doesn't trust, not
+  // over these files, malformed, or on a build that trusts no key.
+  refused("another key", [&](Flat& f) { f.Sign(stranger); }, "doesn't trust");
+  refused("a patches byte after signing",
+          [&](Flat& f) {
+            f.Sign(signer);
+            std::string bytes = f.files["PPLUS32.patches"];
+            bytes[3] ^= 0x01;
+            ASSERT_TRUE(File::WriteStringToFile(f.dir + "PPLUS32.patches", bytes));
+          },
+          "doesn't match");
+  refused("a malformed signature",
+          [&](Flat& f) { File::WriteStringToFile(f.dir + "mod.sig", "signed, honest\n"); },
+          "mod.sig is not");
+  EXPECT_GE(n, 11);
+  {
+    Flat f = MakeBrawl(root + "keyless/", signer);
+    EXPECT_FALSE(Orca::Mod::LoadFlatBundle(f.dir, {}, &error, nullptr, "open-brawl"));
+    EXPECT_NE(error.find("trusts no bundle key"), std::string::npos) << error;
+  }
+  // The launcher the boot runs, unsigned.
+  {
+    Flat p = MakePPlus(root + "boot/", signer);
+    ASSERT_TRUE(File::Delete(p.dir + "mod.sig"));
+    const std::string& dol = p.files["Project+ Netplay Launcher.dol"];
+    const std::vector<u8> bytes(dol.begin(), dol.end());
+    const Orca::Mod::BootLauncher same{"Project+ Netplay Launcher.dol", bytes};
+    EXPECT_TRUE(p.Load(signer, &error, &same, "project-rollback")) << error;
+    const Orca::Mod::BootLauncher other_name{"Other.dol", bytes};
+    EXPECT_FALSE(p.Load(signer, &error, &other_name, "project-rollback"));
+    EXPECT_NE(error.find("the boot runs Other.dol, not the bundle's launcher"), std::string::npos)
+        << error;
+  }
 }
 
 // A launcher as the boot reads it (BootParameters::GenerateFromFile's reader, whose GetBytes()
@@ -1420,6 +1555,25 @@ TEST(OrcaBundle, ResolvesOrRefuses)
   resolve(nullptr);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   EXPECT_NE(Orca::Mod::ResolvedError().find("trusts no bundle key"), std::string::npos);
+  // Unless it is the app's bundle without mod.sig (YOUGAME_GAME set): that plays, keyed or not.
+  ASSERT_TRUE(File::Delete(b.dir + "mod.sig"));
+  Orca::Mod::ResetResolvedBundle();
+  resolve(nullptr);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat) << Orca::Mod::ResolvedError();
+  ASSERT_NE(Orca::Mod::ResolvedFlat(), nullptr);
+  EXPECT_FALSE(Orca::Mod::ResolvedFlat()->signer);
+  Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+  Orca::Mod::ResetResolvedBundle();
+  resolve(nullptr);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat) << Orca::Mod::ResolvedError();
+  // A mod.sig that is there is checked, under the app too.
+  b.Sign(stranger);
+  Orca::Mod::ResetResolvedBundle();
+  resolve(nullptr);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+  EXPECT_NE(Orca::Mod::ResolvedError().find("doesn't trust"), std::string::npos)
+      << Orca::Mod::ResolvedError();
+  b.Sign(signer);
   Orca::Mod::TrustKeysForTests(std::span(&key, 1));
   // Without a mod.json in the folder that build is legacy, exactly as before bundles.
   {
@@ -1506,6 +1660,31 @@ TEST(OrcaBundle, ResolvesOrRefuses)
     resolve(&launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
     EXPECT_NE(Orca::Mod::ResolvedError().find("trusts no bundle key"), std::string::npos);
+    // Without mod.sig: plays under the app (YOUGAME_GAME set), keyed or not.
+    ASSERT_TRUE(File::Delete(p.dir + "mod.sig"));
+    Orca::Mod::ResetResolvedBundle();
+    resolve(&launcher, dol_bytes);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat) << Orca::Mod::ResolvedError();
+    Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+    Orca::Mod::ResetResolvedBundle();
+    resolve(&launcher, dol_bytes);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat) << Orca::Mod::ResolvedError();
+    // A dev run (no YOUGAME_GAME) still needs mod.sig, and a key.
+    {
+      const ScopedEnv no_game("YOUGAME_GAME", "");
+      Orca::Mod::ResetResolvedBundle();
+      resolve(&launcher, dol_bytes);
+      EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+      EXPECT_NE(Orca::Mod::ResolvedError().find("mod.sig is missing"), std::string::npos)
+          << Orca::Mod::ResolvedError();
+      Orca::Mod::TrustKeysForTests({});
+      Orca::Mod::ResetResolvedBundle();
+      resolve(&launcher, dol_bytes);
+      EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+      EXPECT_NE(Orca::Mod::ResolvedError().find("trusts no bundle key"), std::string::npos)
+          << Orca::Mod::ResolvedError();
+    }
+    p.Sign(signer);
     Orca::Mod::TrustKeysForTests(std::span(&key, 1));
   }
   {
@@ -1606,6 +1785,27 @@ TEST(OrcaBundle, FlatRunsRequireAJailAndLegacyRunsKeepTheirBehavior)
   Orca::Mod::ResetResolvedBundle();
   Orca::Mod::ResolveBundleForTests(nullptr, {}, true);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Flat);
+  // The app's bundle without mod.sig: the jail is required all the same, with a key trusted or
+  // none; jailed, it plays.
+  ASSERT_TRUE(File::Delete(pack.dir + "mod.sig"));
+  for (const bool keyed : {true, false})
+  {
+    SCOPED_TRACE(keyed);
+    if (keyed)
+      Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+    else
+      Orca::Mod::TrustKeysForTests({});
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+    refused();
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundleForTests(nullptr, {}, true);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Flat)
+        << Orca::Mod::ResolvedError();
+    ASSERT_NE(Orca::Mod::ResolvedFlat(), nullptr);
+    EXPECT_FALSE(Orca::Mod::ResolvedFlat()->signer);
+  }
+  Orca::Mod::TrustKeysForTests(std::span(&key, 1));
   // No mod.json remains legacy, including a launcher's own folder, without a jail.
   {
     const ScopedEnv legacy_game("YOUGAME_GAME", "legacy");
