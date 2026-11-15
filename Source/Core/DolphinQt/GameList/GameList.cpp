@@ -551,9 +551,10 @@ void GameList::ShowContextMenu(const QPoint&)
     menu->addAction(tr("New Tag..."), this, &GameList::NewTag);
     menu->addAction(tr("Remove Tag..."), this, &GameList::DeleteTag);
 
-    menu->addSeparator();
-
+    // Orca: online play goes through YouGame's own queue and friend join; the stock NetPlay host
+    // would put a player outside it. Hidden (with its separator), code kept, as in MenuBar (0.3.102).
     QAction* netplay_host = new QAction(tr("Host with NetPlay"), menu);
+    netplay_host->setVisible(false);
 
     connect(netplay_host, &QAction::triggered, [this, game] { emit NetPlayHost(*game); });
 
