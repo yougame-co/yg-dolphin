@@ -12,7 +12,7 @@
 name: linux-x64 build (manual)
 
 # The run's title carries its inputs; the signing side checks it through the API (verify-ci-artifact).
-run-name: "linux-x64 ${{ inputs.version }} commit=${{ inputs.commit }} source=${{ inputs.source_commit }} flavor=${{ inputs.flavor }}"
+run-name: "linux-x64 ${{ inputs.version }} commit=${{ inputs.commit }} source=${{ inputs.source_commit }} flavor=${{ inputs.flavor }}${{ inputs.cli_tool && ' dolphin-tool-only' || '' }}"
 
 on:
   workflow_dispatch:
@@ -32,6 +32,11 @@ on:
         default: staging
         type: choice
         options: [staging, prod]
+      cli_tool:
+        description: "Build ONLY dolphin-tool (for extracting a player's own disc); no engine or release zip"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -93,6 +98,7 @@ jobs:
           restore-keys: ccache-linux-x64-
 
       - name: Build and package (Tools/orca-package-linux.sh, ${{ inputs.flavor }} flavor)
+        if: ${{ !inputs.cli_tool }}
         env:
           CC: gcc-12
           CXX: g++-12
@@ -117,11 +123,64 @@ jobs:
           stat -c '%s bytes' "$Z"
 
       - name: Upload the zip and its sha256
+        if: ${{ !inputs.cli_tool }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, pinned 2026-10-24
         with:
           name: yg-dolphin-${{ inputs.version }}-${{ inputs.commit }}-linux-x64-${{ inputs.flavor }}
           path: |
             ${{ runner.temp }}/out/yg-dolphin-${{ inputs.version }}-linux-x64.zip
             ${{ runner.temp }}/out/SHA256SUMS
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Build dolphin-tool only (cli_tool; orca-package-linux.sh's switches, CLI tool on)
+        if: ${{ inputs.cli_tool }}
+        env:
+          CC: gcc-12
+          CXX: g++-12
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          ORCA_VERSION: ${{ inputs.version }}
+          ORCA_STAGING_BUILD: ${{ inputs.flavor == 'staging' && '1' || '' }}
+          ORCA_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          BUNDLE_KEY: ${{ inputs.flavor == 'prod' && '3b658bd504fde78f3ddd9bcb04a93a095df737fbbe657e83ba373f994cfcd87f' || '8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab' }}
+        run: |
+          [ -n "$ORCA_STAGING_BUILD" ] || unset ORCA_STAGING_BUILD
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          ROOT="$PWD"; B="$RUNNER_TEMP/build"
+          cmake -S "$ROOT" -B "$B" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_QT=OFF -DENABLE_NOGUI=ON -DORCA_VERSION="$ORCA_VERSION" \
+            -DORCA_BUILD_DISC_TOOLS=ON \
+            -DUSE_SYSTEM_LIBS=OFF -DENCODE_FRAMEDUMPS=OFF -DENABLE_LLVM=OFF \
+            -DENABLE_ANALYTICS=OFF -DENABLE_AUTOUPDATE=OFF -DUSE_DISCORD_PRESENCE=OFF \
+            -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF -DENABLE_VULKAN=ON \
+            -DENABLE_CLI_TOOL=ON -DENABLE_TESTS=OFF -DUSE_SANITIZERS=OFF \
+            -DORCA_BUNDLE_TRUST_TEST_KEY=OFF -DORCA_BUNDLE_PUBLIC_KEY="$BUNDLE_KEY" \
+            -DENABLE_ALSA=OFF -DENABLE_PULSEAUDIO=OFF -DENABLE_BLUEZ=OFF -DENABLE_EVDEV=OFF \
+            -DENABLE_HWDB=OFF -DCMAKE_DISABLE_FIND_PACKAGE_LIBUDEV=ON -DUSE_SYSTEM_ICONV=ON \
+            -DCMAKE_C_FLAGS="-ffile-prefix-map=$ROOT=." -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$ROOT=." \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" >/dev/null
+          cmake --build "$B" --target dolphin-tool --parallel 4
+          grep -q "SCM_REV_STR \"$ORCA_SOURCE_COMMIT\"" "$B/Source/Core/Common/scmrev.h"
+          EXE=$(find "$B/Binaries" -maxdepth 2 -type f -name dolphin-tool | head -1); test -n "$EXE"
+          T="$RUNNER_TEMP/dolphin-tool"; O="$RUNNER_TEMP/tool-out"; mkdir -p "$T" "$O"
+          cp "$EXE" "$T/dolphin-tool"; strip "$T/dolphin-tool"
+          cp COPYING "$T/COPYING.txt"; cp -R LICENSES "$T/LICENSES"
+          "$T/dolphin-tool" --help 2>&1 | head -15 || true
+          "$T/dolphin-tool" extract --help 2>&1 | head -30 || true
+          readelf -d "$T/dolphin-tool" | grep NEEDED || true
+          (cd "$T" && find . -type f | sed 's#^\./##' | LC_ALL=C sort | xargs sha256sum) > "$O/TOOL-SHA256SUMS"
+          { echo '```text'; cat "$O/TOOL-SHA256SUMS"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          Z="$O/yg-dolphin-${ORCA_VERSION}-linux-x64-dolphin-tool.zip"
+          (cd "$T" && zip -qr -X "$Z" .)
+          (cd "$O" && sha256sum "$(basename "$Z")" | tee SHA256SUMS)
+
+      - name: Upload dolphin-tool and its sha256 manifests (cli_tool)
+        if: ${{ inputs.cli_tool }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, pinned 2026-10-24
+        with:
+          name: yg-dolphin-${{ inputs.version }}-${{ inputs.commit }}-linux-x64-dolphin-tool
+          path: ${{ runner.temp }}/tool-out/
           retention-days: 14
           if-no-files-found: error
