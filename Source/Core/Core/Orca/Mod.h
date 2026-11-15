@@ -28,9 +28,9 @@ class CPUThreadGuard;
 //   orca/patches/<name>.patches, orca/textures/..., orca/jitwarm
 //
 // A flat bundle (mod.json format 2, Core/Orca/Bundle.h) is the same game data as at most eight files
-// in one folder, signed, which a session finds by itself: a game update that rides as a listing's
-// runtime files. Without ORCA_MOD_DIR or a flat bundle nothing here runs and Orca is exactly what it
-// was (legacy profiles).
+// in one folder (signed, or unsigned when the YouGame app delivered it), which a session finds by
+// itself: a game update that rides as a listing's runtime files. Without ORCA_MOD_DIR or a flat
+// bundle nothing here runs and Orca is exactly what it was (legacy profiles).
 namespace Orca::Mod
 {
 // The script API version this engine implements; mod.json's engine.api must not be above it.
@@ -264,7 +264,7 @@ struct ModInfo
   // The SD image's hash, set at boot: a built card's XXH3-128 (32 hex digits), a flat bundle's
   // chunked SHA-256 as verified (64); empty without a card.
   std::string sd_image_hash;
-  // A flat bundle (format 2): its tree lists the signed files by name (the hash leaves the JIT seed
+  // A flat bundle (format 2): its tree lists its files by name (the hash leaves the JIT seed
   // out, as a tree bundle's does), and its patches and JIT seed are kept as they were verified.
   bool flat = false;
   std::vector<std::pair<std::string, std::string>> flat_patches;  // (name, text), applied in order

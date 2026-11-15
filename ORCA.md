@@ -427,7 +427,7 @@ reads needs a builtin whose guards hold, never a ruleset ([Online menu](#online-
 
 ### Flat bundles
 
-A flat bundle is a game's data as at most eight files in one folder, signed, so it can ride as a
+A flat bundle is a game's data as at most eight files in one folder, so it can ride as a
 YouGame listing's runtime files: the app lays those out in `userData/orca/run/<slug>/` beside
 `userData/orca/user/` (the `-u` folder), and a Project+ or Brawl change becomes a file update instead
 of an Orca release (`Core/Orca/Bundle.h`).
@@ -435,7 +435,7 @@ of an Orca release (`Core/Orca/Bundle.h`).
 | File | What |
 |---|---|
 | `mod.json` | format 2: as format 1, plus `listing` (the slug it is for) and `serial`, optional `pplusGuards` for P+ forks and `rankedRules` for results-only builds, with `sdImage` `{file, bytes, sha256}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
-| `mod.sig` | `ed25519 <public key> <signature>`, lowercase hex, one line. |
+| `mod.sig` | `ed25519 <public key> <signature>`, lowercase hex, one line. Optional for a bundle the app delivers (`YOUGAME_GAME` set): its files came over YouGame's HTTPS download, which checks them against the site's listed hashes. Checked whenever it is there. |
 | the rest | exactly the files `mod.json` names: a launcher, the SD image, up to four `.patches`, a JIT seed. |
 
 - **Where Orca looks**, once per process at boot, before any game setting is read
@@ -450,24 +450,29 @@ of an Orca release (`Core/Orca/Bundle.h`).
   checked on the bytes the boot read, and the patches and JIT seed are used as they were verified,
   so nothing is read again after the check. Verified with `Externals/ed25519`.
 - **Keys.** Only a key the build pins may sign: CMake `-DORCA_BUNDLE_PUBLIC_KEY=<64 hex digits>`. A
-  build without one trusts no key, and every flat bundle is refused. `-DORCA_BUNDLE_TRUST_TEST_KEY=ON`
-  adds the bundle-flat TEST key for tests and gates only; `orca-package-macos.sh` turns it off and
-  fails if the executable holds it. `OrcaBundle.PinnedKey` checks the build trusts exactly what
-  CMake was given.
+  build without one trusts no key, and every signed flat bundle is refused. Signing is optional
+  (2026-11): under the app (`YOUGAME_GAME` set) a bundle without `mod.sig` loads with every other
+  check, on any build, keyed or not. A `mod.sig` that is there must still be by a trusted key and
+  match the files; a bad one refuses the bundle. Without `YOUGAME_GAME` (a bare `ORCA_MOD_DIR` run)
+  `mod.sig` is still required. `-DORCA_BUNDLE_TRUST_TEST_KEY=ON` adds the bundle-flat TEST key for
+  tests and gates only; `orca-package-macos.sh` turns it off and fails if the executable holds it.
+  `OrcaBundle.PinnedKey` checks the build trusts exactly what CMake was given.
 - **Listing and serial.** Under the app (`YOUGAME_GAME` set), a bundle for another listing is
   refused. `MIN_FLAT_SERIAL` (`Bundle.h`) refuses older bundles: a release raises it to retire a
   signed bundle, which can't otherwise be taken back.
 - **Hostile input.** The folder must hold exactly the named files (hidden files such as the app's
   `.copies.json` aside), at most eight, no folders or links; names are the app's runtime file names
-  (no `/`, no `..`, no device names); `mod.sig` is read first and must be by a trusted key before
-  `mod.json` is parsed; every read is bounded as in a tree bundle (`mod.sig` 512 bytes); the small
-  files are hashed and the signature checked before the card is hashed. Anything wrong refuses the
-  whole bundle with an `Orca bundle: <folder> refused: <why>. The session is refused.` line, and the
-  session ends with `orca error profile YG Baiji refused this game's pack: <why>` (no folder path),
-  whether Orca found the bundle by itself or `ORCA_MOD_DIR` named it: a refused pack never plays the
-  built-in game in its place.
+  (no `/`, no `..`, no device names); `mod.sig`, when there is one, is read first and must be by a
+  trusted key before `mod.json` is parsed; every read is bounded as in a tree bundle (`mod.sig` 512
+  bytes); the small files are hashed and any signature checked before the card is hashed. An
+  unsigned bundle gets the same checks but the signature, and the same tree hash and key as the
+  signed one. It still needs the app's sandbox. Anything wrong refuses the whole bundle with an
+  `Orca bundle: <folder> refused: <why>. The session is refused.` line, and the session ends with
+  `orca error profile YG Baiji refused this game's pack: <why>` (no folder path), whether Orca found
+  the bundle by itself or `ORCA_MOD_DIR` named it: a refused pack never plays the built-in game in
+  its place.
 - **Mod mode** then runs as for a tree bundle (builtins, guards, caps). Textures stay the engine's.
-  The key is `orca2|...|tree=<hash of the signed lines but the JIT seed's>|sd=<the card's pin>|...
+  The key is `orca2|...|tree=<hash of the file lines but the JIT seed's>|sd=<the card's pin>|...
   |sys=<the Sys game INIs>|...`: a bundle player never meets a legacy one, a JIT seed change keeps
   the pool, anything that reaches the game moves it.
 - **Signing.** Sign only a bundle that played on two Orcas: a builtin whose guards never hold gets no
@@ -2875,6 +2880,10 @@ STUN and TURN are internet traffic and work in every mode.
 ## Changes by release
 
 What each release changed for players, in plain words.
+
+### 0.3.103
+
+- Unsigned app-delivered flat packs: a YouGame download (YOUGAME_GAME set) may come without mod.sig; a present mod.sig is still checked as before, and flat packs still need the OS jail.
 
 ### 0.3.102
 
