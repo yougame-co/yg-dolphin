@@ -92,7 +92,10 @@ void ForEachUniversalSetting(F&& f)
   f(Config::MAIN_FPRF, false);
   f(Config::MAIN_FLOAT_EXCEPTIONS, false);
   f(Config::MAIN_DIVIDE_BY_ZERO_EXCEPTIONS, false);
-  f(Config::MAIN_DISABLE_ICACHE, false);
+  // Diag experiment: no instruction-cache emulation. The JIT then compiles straight from RAM, so
+  // what it compiles cannot depend on which lines each player's cache happened to fill (rollback
+  // keeps JIT blocks, so the two players' fill histories differ).
+  f(Config::MAIN_DISABLE_ICACHE, true);
   f(Config::MAIN_ACCURATE_CPU_CACHE, false);
   f(Config::MAIN_JIT_FOLLOW_BRANCH, Config::MAIN_JIT_FOLLOW_BRANCH.GetDefaultValue());
   f(Config::MAIN_SYNC_ON_SKIP_IDLE, Config::MAIN_SYNC_ON_SKIP_IDLE.GetDefaultValue());
