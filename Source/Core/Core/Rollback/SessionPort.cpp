@@ -211,7 +211,9 @@ std::string Detail(const std::string& name, const u8* data, std::size_t size)
   std::string out;
   // The DVD section carries a pending read's request and data: whole, so the two sides' bytes can
   // be compared.
-  const std::size_t whole = name == "DVDInterface" || name == "IOS::HLE" ? 256 * 1024 : 4096;
+  // PowerPC whole too: its icache data and reservation bytes differ between the two sides.
+  const std::size_t whole =
+      name == "DVDInterface" || name == "IOS::HLE" || name == "PowerPC" ? 256 * 1024 : 4096;
   if (size <= whole)
   {
     out.reserve(size * 2);
