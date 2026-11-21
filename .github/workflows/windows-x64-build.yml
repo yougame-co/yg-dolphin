@@ -215,6 +215,15 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      - name: Upload the engine's PDBs (Option B prototype branch only, to read crash stacks)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, pinned 2026-10-24
+        with:
+          name: yg-dolphin-${{ inputs.version }}-${{ inputs.commit }}-windows-x64-${{ inputs.flavor }}-pdb
+          path: |
+            build/release/x64/pdb/DolphinNoGUI.pdb
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Stage and hash the isolated unit-test binaries
         env:
           VERSION: ${{ inputs.version }}
