@@ -80,6 +80,8 @@ bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>
 void Drop(u64 id);
 // RamChecksum (Rollback.h) of RAM as it was at snapshot `id`, rebuilt from live RAM and the logs.
 std::optional<u64> Checksum(u64 id);
+// DIAGNOSTIC (YG_DESYNC_MAP): XXH3 of each `bucket`-byte block of MEM1 then MEM2 as at snapshot `id`.
+std::optional<std::vector<u64>> BucketHashes(u64 id, std::size_t bucket);
 
 // Called first by the fault handlers. True if `address` is a protected page of tracked RAM; the
 // page is then saved and made writable so the faulting write can be retried.

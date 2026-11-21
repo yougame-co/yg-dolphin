@@ -487,6 +487,28 @@ std::optional<u64> SnapshotRing::RamChecksum(s64 frame) const
   return Rollback::RamChecksum(slot->mem1, slot->mem2);
 }
 
+std::optional<std::vector<u64>> SnapshotRing::RamBucketHashes(s64 frame, std::size_t bucket) const
+{
+  const Slot* slot = Find(frame);
+  if (!slot || slot->state_size == 0 || bucket == 0)
+    return std::nullopt;
+  std::optional<std::vector<u64>> out;
+  if (slot->cow_id != 0)
+  {
+    out = Cow::BucketHashes(slot->cow_id, bucket);
+  }
+  else
+  {
+    out.emplace();
+    for (const std::vector<u8>* mem : {&slot->mem1, &slot->mem2})
+      for (std::size_t at = 0; at < mem->size(); at += bucket)
+        out->push_back(XXH3_64bits(mem->data() + at, std::min(bucket, mem->size() - at)));
+  }
+  if (out)
+    out->push_back(XXH3_64bits(slot->state.data(), slot->state_size));
+  return out;
+}
+
 std::span<const u8> SnapshotRing::LastState() const
 {
   const Slot& slot = m_slots[m_last];

@@ -484,6 +484,36 @@ std::optional<u64> Checksum(u64 id)
   return hash;
 }
 
+std::optional<std::vector<u64>> BucketHashes(u64 id, std::size_t bucket)
+{
+  Tracker& t = T();
+  std::lock_guard lock(t.lock);
+  if (!t.log || !t.log->Has(id) || bucket == 0 || bucket % t.page_size != 0)
+    return std::nullopt;
+  std::vector<const u8*> pre_images(t.log->PageCount(), nullptr);
+  t.log->ForEachPreImage(id, [&](std::size_t page, const u8* data) { pre_images[page] = data; });
+  std::vector<u64> out;
+  XXH3_state_t* const state = XXH3_createState();
+  const std::size_t per = bucket / t.page_size;
+  for (std::size_t a = 0; a < t.areas.size(); ++a)
+  {
+    const std::size_t first = t.area_first_page[a];
+    const std::size_t count = t.areas[a].size / t.page_size;
+    for (std::size_t i = 0; i < count; ++i)
+    {
+      if (i % per == 0)
+        XXH3_64bits_reset(state);
+      const u8* const pre_image = pre_images[first + i];
+      XXH3_64bits_update(state, pre_image ? pre_image : t.areas[a].alias + i * t.page_size,
+                         t.page_size);
+      if (i % per == per - 1 || i == count - 1)
+        out.push_back(XXH3_64bits_digest(state));
+    }
+  }
+  XXH3_freeState(state);
+  return out;
+}
+
 bool HandleFault(uintptr_t address)
 {
   if (!s_armed.load(std::memory_order_acquire))
