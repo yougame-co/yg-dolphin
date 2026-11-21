@@ -332,11 +332,11 @@ void RingPort::DumpDesyncMaps(int frame, const char* why)
       constexpr std::size_t CHUNK = 3600;
       for (const auto& [name, hex] : it->second)
       {
-        const std::size_t parts = std::max<std::size_t>(1, (hex.size() + CHUNK - 1) / CHUNK);
-        for (std::size_t p = 0; p < parts; ++p)
+        const std::size_t raw_parts = std::max<std::size_t>(1, (hex.size() + CHUNK - 1) / CHUNK);
+        for (std::size_t rp = 0; rp < raw_parts; ++rp)
         {
-          NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} raw {} {}/{} {}", f, name, p, parts,
-                         hex.substr(p * CHUNK, CHUNK));
+          NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} raw {} {}/{} {}", f, name, rp, raw_parts,
+                         hex.substr(rp * CHUNK, CHUNK));
         }
       }
     }
