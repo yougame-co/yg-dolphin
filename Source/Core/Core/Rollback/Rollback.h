@@ -82,6 +82,8 @@ public:
 
   // The non-RAM state from the most recent Save, for hashing and diagnostics.
   std::span<const u8> LastState() const;
+  // The non-RAM state of `frame`'s snapshot (empty if not in the ring), for diagnostics.
+  std::span<const u8> StateAt(s64 frame) const;
 
   // Keyframes for mid-game joins. Capture writes what Save would into `image`; call it from the
   // frame-boundary hook. `stop_journal` stops the NAND journal the capture

@@ -15,6 +15,7 @@
 
 #include <xxh3.h>
 
+#include "Common/ChunkFile.h"
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/Orca/Session/PadCodec.h"
@@ -31,6 +32,14 @@ RingPort* s_active = nullptr;
 
 // How long a time-sync wait holds this machine: one NTSC (60 Hz) frame.
 constexpr std::chrono::microseconds FRAME_PERIOD{16'667};
+}  // namespace
+
+namespace
+{
+bool DesyncMapOn();
+// Diag (YG_DESYNC_MAP=1): where each savestate section ends (DoMarker) in each saved frame's
+// non-RAM state, so a checksum frame's state can be hashed section by section.
+std::map<int, std::vector<std::pair<std::string, std::size_t>>> s_marks;
 }  // namespace
 
 RingPort::RingPort(Core::System& system, int max_rollback, bool unthrottled)
@@ -68,7 +77,30 @@ bool RingPort::Save(int frame)
   if (m_saved_since_run == frame)
     return true;
   const auto start = std::chrono::steady_clock::now();
+  std::vector<std::pair<std::string, const u8*>> marks;
+  if (DesyncMapOn())
+    PointerWrap::s_marker_log = &marks;
   const bool allocated = m_ring.Save(m_system, frame);
+  PointerWrap::s_marker_log = nullptr;
+  if (DesyncMapOn() && !marks.empty())
+  {
+    // A save that had to grow its buffer ran twice: keep the last pass's markers.
+    std::size_t from = 0;
+    for (std::size_t i = 1; i < marks.size(); ++i)
+      if (marks[i].first == marks[0].first)
+        from = i;
+    const auto state = m_ring.LastState();
+    auto& out = s_marks[frame];
+    out.clear();
+    for (std::size_t i = from; i < marks.size(); ++i)
+    {
+      const u8* p = marks[i].second;
+      if (p >= state.data() && p <= state.data() + state.size())
+        out.emplace_back(marks[i].first, static_cast<std::size_t>(p - state.data()));
+    }
+    while (s_marks.size() > 64)
+      s_marks.erase(s_marks.begin());
+  }
   double ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   if (Diag::SnapTime())
@@ -161,6 +193,8 @@ constexpr std::size_t MAP_BUCKET = 64 * 1024;
 constexpr std::size_t MAP_KEEP = 32;
 // Only the CPU thread checksums and checks checksums.
 std::map<int, std::vector<u64>> s_maps;
+// Per-section hashes (top 32 bits) of each kept checksum frame's non-RAM state.
+std::map<int, std::vector<std::pair<std::string, u32>>> s_sections;
 bool s_maps_logged = false;
 }  // namespace
 
@@ -176,12 +210,35 @@ std::optional<u64> RingPort::SnapshotChecksum(int frame)
   s_maps[frame] = std::move(*map);
   while (s_maps.size() > MAP_KEEP)
     s_maps.erase(s_maps.begin());
+  if (const auto it = s_marks.find(frame); it != s_marks.end())
+  {
+    const auto state = m_ring.StateAt(frame);
+    std::vector<std::pair<std::string, u32>> sections;
+    std::size_t prev = 0;
+    for (const auto& [name, end] : it->second)
+    {
+      if (end < prev || end > state.size())
+        break;
+      std::string key = name;
+      std::replace(key.begin(), key.end(), ' ', '_');
+      sections.emplace_back(std::move(key),
+                            static_cast<u32>(XXH3_64bits(state.data() + prev, end - prev) >> 32));
+      prev = end;
+    }
+    if (prev <= state.size())
+      sections.emplace_back("(tail)", static_cast<u32>(XXH3_64bits(state.data() + prev, state.size() - prev) >> 32));
+    s_sections[frame] = std::move(sections);
+    while (s_sections.size() > MAP_KEEP)
+      s_sections.erase(s_sections.begin());
+  }
   return hash;
 }
 
 void RingPort::ResetDesyncMaps()
 {
   s_maps.clear();
+  s_marks.clear();
+  s_sections.clear();
   s_maps_logged = false;
 }
 
@@ -212,6 +269,20 @@ void RingPort::DumpDesyncMaps(int frame, const char* why)
         line += fmt::format("{:08x}", static_cast<u32>(map[i] >> 32));
       NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} ram={:016x} state={:016x} part {}/{} {}", f, ram,
                      map.back(), p, parts, line);
+    }
+    if (const auto it = s_sections.find(f); it != s_sections.end())
+    {
+      constexpr std::size_t SEC_PER_LINE = 40;
+      const auto& sections = it->second;
+      const std::size_t sec_parts = (sections.size() + SEC_PER_LINE - 1) / SEC_PER_LINE;
+      for (std::size_t p = 0; p < sec_parts; ++p)
+      {
+        std::string line;
+        for (std::size_t i = p * SEC_PER_LINE; i < std::min(sections.size(), (p + 1) * SEC_PER_LINE);
+             ++i)
+          line += fmt::format(" {}={:08x}", sections[i].first, sections[i].second);
+        NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} sec {}/{}{}", f, p, sec_parts, line);
+      }
     }
   }
 }

@@ -509,6 +509,14 @@ std::optional<std::vector<u64>> SnapshotRing::RamBucketHashes(s64 frame, std::si
   return out;
 }
 
+std::span<const u8> SnapshotRing::StateAt(s64 frame) const
+{
+  const Slot* slot = Find(frame);
+  if (!slot || slot->state_size == 0)
+    return {};
+  return {slot->state.data(), slot->state_size};
+}
+
 std::span<const u8> SnapshotRing::LastState() const
 {
   const Slot& slot = m_slots[m_last];
