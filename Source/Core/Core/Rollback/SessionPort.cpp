@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -38,6 +39,7 @@ RingPort::RingPort(Core::System& system, int max_rollback, bool unthrottled)
 {
   // Until the session sets them, every port reads as connected with nothing pressed.
   m_pads.fill(Orca::Net::DecodePad(Orca::Net::Pad{}));
+  ResetDesyncMaps();
   s_active = this;
   if (m_unthrottled)
     Core::SetIsThrottlerTempDisabled(true);
@@ -45,6 +47,8 @@ RingPort::RingPort(Core::System& system, int max_rollback, bool unthrottled)
 
 RingPort::~RingPort()
 {
+  // Diag: the side whose own check never failed logs its maps here, so both sides can be compared.
+  DumpDesyncMaps(std::numeric_limits<int>::max(), "end");
   if (s_active == this)
     s_active = nullptr;
   m_ring.Reset(m_system);
@@ -154,9 +158,10 @@ bool DesyncMapOn()
   return s_on;
 }
 constexpr std::size_t MAP_BUCKET = 64 * 1024;
-constexpr std::size_t MAP_KEEP = 4;
+constexpr std::size_t MAP_KEEP = 32;
 // Only the CPU thread checksums and checks checksums.
 std::map<int, std::vector<u64>> s_maps;
+bool s_maps_logged = false;
 }  // namespace
 
 std::optional<u64> RingPort::SnapshotChecksum(int frame)
@@ -174,10 +179,24 @@ std::optional<u64> RingPort::SnapshotChecksum(int frame)
   return hash;
 }
 
+void RingPort::ResetDesyncMaps()
+{
+  s_maps.clear();
+  s_maps_logged = false;
+}
+
 void RingPort::OnDesync(int frame)
 {
-  if (!DesyncMapOn())
+  DumpDesyncMaps(frame, "desync");
+}
+
+void RingPort::DumpDesyncMaps(int frame, const char* why)
+{
+  if (!DesyncMapOn() || s_maps_logged || s_maps.empty())
     return;
+  s_maps_logged = true;
+  NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP dump ({}) maps={} first={} last={}", why, s_maps.size(),
+                 s_maps.begin()->first, s_maps.rbegin()->first);
   constexpr std::size_t PER_LINE = 64;
   for (const auto& [f, map] : s_maps)
   {
