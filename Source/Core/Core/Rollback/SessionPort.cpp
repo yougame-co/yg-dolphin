@@ -195,6 +195,31 @@ constexpr std::size_t MAP_KEEP = 32;
 std::map<int, std::vector<u64>> s_maps;
 // Per-section hashes (top 32 bits) of each kept checksum frame's non-RAM state.
 std::map<int, std::vector<std::pair<std::string, u32>>> s_sections;
+// Section sizes, and the bytes (hex; 64-byte block hashes when large) of the I/O and CPU sections
+// that differ between machines, per kept checksum frame.
+std::map<int, std::vector<std::size_t>> s_section_sizes;
+std::map<int, std::vector<std::pair<std::string, std::string>>> s_details;
+bool DetailSection(const std::string& name)
+{
+  return name == "DVDInterface" || name == "IOS::HLE" || name == "ExpansionInterface" ||
+         name == "PowerPC" || name == "AudioInterface" || name == "DSP" ||
+         name == "CoreTimingEvents" || name == "CoreTiming" || name == "IOS";
+}
+std::string Detail(const u8* data, std::size_t size)
+{
+  std::string out;
+  if (size <= 4096)
+  {
+    out.reserve(size * 2);
+    for (std::size_t i = 0; i < size; ++i)
+      out += fmt::format("{:02x}", data[i]);
+    return out;
+  }
+  out = "h64:";
+  for (std::size_t at = 0; at < size; at += 64)
+    out += fmt::format("{:08x}", static_cast<u32>(XXH3_64bits(data + at, std::min<std::size_t>(64, size - at)) >> 32));
+  return out;
+}
 bool s_maps_logged = false;
 }  // namespace
 
@@ -214,11 +239,16 @@ std::optional<u64> RingPort::SnapshotChecksum(int frame)
   {
     const auto state = m_ring.StateAt(frame);
     std::vector<std::pair<std::string, u32>> sections;
+    std::vector<std::size_t> sizes;
+    std::vector<std::pair<std::string, std::string>> details;
     std::size_t prev = 0;
     for (const auto& [name, end] : it->second)
     {
       if (end < prev || end > state.size())
         break;
+      sizes.push_back(end - prev);
+      if (DetailSection(name))
+        details.emplace_back(name, Detail(state.data() + prev, end - prev));
       std::string key = name;
       std::replace(key.begin(), key.end(), ' ', '_');
       sections.emplace_back(std::move(key),
@@ -230,6 +260,12 @@ std::optional<u64> RingPort::SnapshotChecksum(int frame)
     s_sections[frame] = std::move(sections);
     while (s_sections.size() > MAP_KEEP)
       s_sections.erase(s_sections.begin());
+    s_section_sizes[frame] = std::move(sizes);
+    s_details[frame] = std::move(details);
+    while (s_section_sizes.size() > MAP_KEEP)
+      s_section_sizes.erase(s_section_sizes.begin());
+    while (s_details.size() > MAP_KEEP)
+      s_details.erase(s_details.begin());
   }
   return hash;
 }
@@ -239,6 +275,8 @@ void RingPort::ResetDesyncMaps()
   s_maps.clear();
   s_marks.clear();
   s_sections.clear();
+  s_section_sizes.clear();
+  s_details.clear();
   s_maps_logged = false;
 }
 
@@ -280,8 +318,26 @@ void RingPort::DumpDesyncMaps(int frame, const char* why)
         std::string line;
         for (std::size_t i = p * SEC_PER_LINE; i < std::min(sections.size(), (p + 1) * SEC_PER_LINE);
              ++i)
-          line += fmt::format(" {}={:08x}", sections[i].first, sections[i].second);
+        {
+          const auto sz = s_section_sizes.find(f);
+          const std::size_t size =
+              sz != s_section_sizes.end() && i < sz->second.size() ? sz->second[i] : 0;
+          line += fmt::format(" {}={:08x}:{}", sections[i].first, sections[i].second, size);
+        }
         NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} sec {}/{}{}", f, p, sec_parts, line);
+      }
+    }
+    if (const auto it = s_details.find(f); it != s_details.end())
+    {
+      constexpr std::size_t CHUNK = 3600;
+      for (const auto& [name, hex] : it->second)
+      {
+        const std::size_t parts = std::max<std::size_t>(1, (hex.size() + CHUNK - 1) / CHUNK);
+        for (std::size_t p = 0; p < parts; ++p)
+        {
+          NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} raw {} {}/{} {}", f, name, p, parts,
+                         hex.substr(p * CHUNK, CHUNK));
+        }
       }
     }
   }
