@@ -82,6 +82,8 @@ void Drop(u64 id);
 std::optional<u64> Checksum(u64 id);
 // DIAGNOSTIC (YG_DESYNC_MAP): XXH3 of each `bucket`-byte block of MEM1 then MEM2 as at snapshot `id`.
 std::optional<std::vector<u64>> BucketHashes(u64 id, std::size_t bucket);
+// DIAGNOSTIC (YG_DESYNC_MAP): `size` bytes at `offset` into MEM1 then MEM2 as at snapshot `id`.
+std::optional<std::vector<u8>> Bytes(u64 id, std::size_t offset, std::size_t size);
 
 // Called first by the fault handlers. True if `address` is a protected page of tracked RAM; the
 // page is then saved and made writable so the faulting write can be retried.

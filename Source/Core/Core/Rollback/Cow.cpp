@@ -514,6 +514,45 @@ std::optional<std::vector<u64>> BucketHashes(u64 id, std::size_t bucket)
   return out;
 }
 
+std::optional<std::vector<u8>> Bytes(u64 id, std::size_t offset, std::size_t size)
+{
+  Tracker& t = T();
+  std::lock_guard lock(t.lock);
+  if (!t.log || !t.log->Has(id) || t.page_size == 0)
+    return std::nullopt;
+  std::vector<const u8*> pre_images(t.log->PageCount(), nullptr);
+  t.log->ForEachPreImage(id, [&](std::size_t page, const u8* data) { pre_images[page] = data; });
+  std::vector<u8> out;
+  out.reserve(size);
+  std::size_t area_start = 0;
+  for (std::size_t a = 0; a < t.areas.size() && out.size() < size; ++a)
+  {
+    const std::size_t area_size = t.areas[a].size;
+    const std::size_t want = offset + out.size();
+    if (want >= area_start + area_size)
+    {
+      area_start += area_size;
+      continue;
+    }
+    std::size_t in_area = want - area_start;
+    while (in_area < area_size && out.size() < size)
+    {
+      const std::size_t page = in_area / t.page_size;
+      const std::size_t in_page = in_area % t.page_size;
+      const std::size_t n = std::min({t.page_size - in_page, area_size - in_area, size - out.size()});
+      const u8* const pre_image = pre_images[t.area_first_page[a] + page];
+      const u8* const src =
+          (pre_image ? pre_image : t.areas[a].alias + page * t.page_size) + in_page;
+      out.insert(out.end(), src, src + n);
+      in_area += n;
+    }
+    area_start += area_size;
+  }
+  if (out.size() != size)
+    return std::nullopt;
+  return out;
+}
+
 bool HandleFault(uintptr_t address)
 {
   if (!s_armed.load(std::memory_order_acquire))

@@ -509,6 +509,33 @@ std::optional<std::vector<u64>> SnapshotRing::RamBucketHashes(s64 frame, std::si
   return out;
 }
 
+std::optional<std::vector<u8>> SnapshotRing::RamBytes(s64 frame, std::size_t offset,
+                                                      std::size_t size) const
+{
+  const Slot* slot = Find(frame);
+  if (!slot || slot->state_size == 0)
+    return std::nullopt;
+  if (slot->cow_id != 0)
+    return Cow::Bytes(slot->cow_id, offset, size);
+  std::vector<u8> out;
+  out.reserve(size);
+  std::size_t start = 0;
+  for (const std::vector<u8>* mem : {&slot->mem1, &slot->mem2})
+  {
+    const std::size_t want = offset + out.size();
+    if (out.size() < size && want < start + mem->size())
+    {
+      const std::size_t at = want - start;
+      const std::size_t n = std::min(size - out.size(), mem->size() - at);
+      out.insert(out.end(), mem->data() + at, mem->data() + at + n);
+    }
+    start += mem->size();
+  }
+  if (out.size() != size)
+    return std::nullopt;
+  return out;
+}
+
 std::span<const u8> SnapshotRing::StateAt(s64 frame) const
 {
   const Slot* slot = Find(frame);

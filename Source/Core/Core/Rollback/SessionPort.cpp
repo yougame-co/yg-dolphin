@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <map>
@@ -223,6 +224,27 @@ std::string Detail(const std::string& name, const u8* data, std::size_t size)
     out += fmt::format("{:08x}", static_cast<u32>(XXH3_64bits(data + at, std::min<std::size_t>(64, size - at)) >> 32));
   return out;
 }
+// The RAM bytes of the watched 64 KiB blocks (MEM1 then MEM2; YG_DESYNC_WATCH=first-last, default
+// 676-677 = MEM2 0x11240000..0x1125ffff, where both mapped P+ desyncs differ) per kept frame.
+std::map<int, std::vector<u8>> s_watch;
+std::pair<std::size_t, std::size_t> WatchBlocks()
+{
+  static const std::pair<std::size_t, std::size_t> s_blocks = [] {
+    std::size_t first = 676, last = 677;
+    if (const char* v = std::getenv("YG_DESYNC_WATCH"))
+    {
+      unsigned a = 0, b = 0;
+      if (std::sscanf(v, "%u-%u", &a, &b) == 2 && a <= b && b - a < 16)
+      {
+        first = a;
+        last = b;
+      }
+    }
+    return std::pair{first, last};
+  }();
+  return s_blocks;
+}
+constexpr std::size_t WATCH_DUMP_FRAMES = 3;
 bool s_maps_logged = false;
 }  // namespace
 
@@ -236,6 +258,13 @@ std::optional<u64> RingPort::SnapshotChecksum(int frame)
   // RAM blocks only (the last entry is the non-RAM state hash, kept for the log, not compared).
   const u64 hash = XXH3_64bits(map->data(), (map->size() - 1) * sizeof(u64));
   s_maps[frame] = std::move(*map);
+  {
+    const auto [first, last] = WatchBlocks();
+    if (auto bytes = m_ring.RamBytes(frame, first * MAP_BUCKET, (last - first + 1) * MAP_BUCKET))
+      s_watch[frame] = std::move(*bytes);
+    while (s_watch.size() > MAP_KEEP)
+      s_watch.erase(s_watch.begin());
+  }
   while (s_maps.size() > MAP_KEEP)
     s_maps.erase(s_maps.begin());
   if (const auto it = s_marks.find(frame); it != s_marks.end())
@@ -280,6 +309,7 @@ void RingPort::ResetDesyncMaps()
   s_sections.clear();
   s_section_sizes.clear();
   s_details.clear();
+  s_watch.clear();
   s_maps_logged = false;
 }
 
@@ -342,6 +372,29 @@ void RingPort::DumpDesyncMaps(int frame, const char* why)
                          hex.substr(rp * CHUNK, CHUNK));
         }
       }
+    }
+  }
+  // The watched blocks' bytes at the last few kept frames at or before `frame`.
+  std::vector<int> watch_frames;
+  for (auto it = s_watch.rbegin(); it != s_watch.rend() && watch_frames.size() < WATCH_DUMP_FRAMES;
+       ++it)
+  {
+    if (it->first <= frame)
+      watch_frames.push_back(it->first);
+  }
+  const auto [first, last] = WatchBlocks();
+  for (const int f : watch_frames)
+  {
+    const auto& bytes = s_watch[f];
+    constexpr std::size_t CHUNK = 1800;  // bytes per line (3600 hex)
+    const std::size_t parts = (bytes.size() + CHUNK - 1) / CHUNK;
+    for (std::size_t p = 0; p < parts; ++p)
+    {
+      std::string hex;
+      hex.reserve(CHUNK * 2);
+      for (std::size_t i = p * CHUNK; i < std::min(bytes.size(), (p + 1) * CHUNK); ++i)
+        hex += fmt::format("{:02x}", bytes[i]);
+      NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} watch {}-{} {}/{} {}", f, first, last, p, parts, hex);
     }
   }
 }

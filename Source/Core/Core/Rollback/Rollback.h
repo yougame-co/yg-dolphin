@@ -84,6 +84,8 @@ public:
   std::span<const u8> LastState() const;
   // The non-RAM state of `frame`'s snapshot (empty if not in the ring), for diagnostics.
   std::span<const u8> StateAt(s64 frame) const;
+  // DIAGNOSTIC: `size` bytes at `offset` into MEM1 then MEM2 as saved for `frame`.
+  std::optional<std::vector<u8>> RamBytes(s64 frame, std::size_t offset, std::size_t size) const;
 
   // Keyframes for mid-game joins. Capture writes what Save would into `image`; call it from the
   // frame-boundary hook. `stop_journal` stops the NAND journal the capture
