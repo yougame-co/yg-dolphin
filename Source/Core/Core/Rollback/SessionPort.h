@@ -44,6 +44,7 @@ public:
   void SetPads(int frame, const Orca::Net::Pads& pads) override;
   void SetResimulating(bool resimulating) override;
   std::optional<u64> SnapshotChecksum(int frame) override;
+  void OnDesync(int frame) override;
   void ResetPacing() override;
   double SaveMs() const override { return m_save_ms; }
 

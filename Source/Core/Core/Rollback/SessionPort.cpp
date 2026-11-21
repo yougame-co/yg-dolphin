@@ -6,9 +6,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
-#include <string>
+#include <map>
 #include <optional>
+#include <string>
+#include <vector>
 #include <thread>
+
+#include <xxh3.h>
 
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
@@ -134,35 +138,63 @@ void RingPort::SetResimulating(bool resimulating)
   }
 }
 
-std::optional<u64> RingPort::SnapshotChecksum(int frame)
+namespace
 {
-  std::optional<u64> hash = m_ring.RamChecksum(frame);
-  // DIAGNOSTIC build only (P+ desync study): YG_DESYNC_MAP=1 logs 64 KiB block hashes of the
-  // checksummed RAM (MEM1 then MEM2) and the snapshot's non-RAM state hash at every checksum, so
-  // the two machines' logs show where they first differ.
-  static const bool s_map = [] {
+// DIAGNOSTIC build only (P+ desync study). YG_DESYNC_MAP=1: the session checksum is built from 64 KiB
+// block hashes of the checksummed RAM (MEM1 then MEM2) in the same single pass as the normal one, the
+// last few maps stay in memory, and nothing is logged until a desync, so the timing of a normal run
+// is unchanged. On a desync both machines log their maps (and the non-RAM state hash) for the frames
+// they kept; the logs show the first block that differs.
+bool DesyncMapOn()
+{
+  static const bool s_on = [] {
     const char* v = std::getenv("YG_DESYNC_MAP");
     return v && v[0] == '1';
   }();
-  if (hash && s_map)
+  return s_on;
+}
+constexpr std::size_t MAP_BUCKET = 64 * 1024;
+constexpr std::size_t MAP_KEEP = 4;
+// Only the CPU thread checksums and checks checksums.
+std::map<int, std::vector<u64>> s_maps;
+}  // namespace
+
+std::optional<u64> RingPort::SnapshotChecksum(int frame)
+{
+  if (!DesyncMapOn())
+    return m_ring.RamChecksum(frame);
+  auto map = m_ring.RamBucketHashes(frame, MAP_BUCKET);
+  if (!map || map->empty())
+    return std::nullopt;
+  // RAM blocks only (the last entry is the non-RAM state hash, kept for the log, not compared).
+  const u64 hash = XXH3_64bits(map->data(), (map->size() - 1) * sizeof(u64));
+  s_maps[frame] = std::move(*map);
+  while (s_maps.size() > MAP_KEEP)
+    s_maps.erase(s_maps.begin());
+  return hash;
+}
+
+void RingPort::OnDesync(int frame)
+{
+  if (!DesyncMapOn())
+    return;
+  constexpr std::size_t PER_LINE = 64;
+  for (const auto& [f, map] : s_maps)
   {
-    constexpr std::size_t BUCKET = 64 * 1024;
-    if (const auto map = m_ring.RamBucketHashes(frame, BUCKET))
+    if (f > frame)
+      continue;
+    const u64 ram = XXH3_64bits(map.data(), (map.size() - 1) * sizeof(u64));
+    const std::size_t blocks = map.size() - 1;
+    const std::size_t parts = (blocks + PER_LINE - 1) / PER_LINE;
+    for (std::size_t p = 0; p < parts; ++p)
     {
-      constexpr std::size_t PER_LINE = 64;
-      const std::size_t blocks = map->size() - 1;
-      const std::size_t parts = (blocks + PER_LINE - 1) / PER_LINE;
-      for (std::size_t p = 0; p < parts; ++p)
-      {
-        std::string line;
-        for (std::size_t i = p * PER_LINE; i < std::min(blocks, (p + 1) * PER_LINE); ++i)
-          line += fmt::format("{:08x}", static_cast<u32>((*map)[i] >> 32));
-        NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} ram={:016x} state={:016x} part {}/{} {}", frame,
-                       *hash, map->back(), p, parts, line);
-      }
+      std::string line;
+      for (std::size_t i = p * PER_LINE; i < std::min(blocks, (p + 1) * PER_LINE); ++i)
+        line += fmt::format("{:08x}", static_cast<u32>(map[i] >> 32));
+      NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} ram={:016x} state={:016x} part {}/{} {}", f, ram,
+                     map.back(), p, parts, line);
     }
   }
-  return hash;
 }
 
 void RingPort::ResetPacing()

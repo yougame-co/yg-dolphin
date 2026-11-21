@@ -2265,6 +2265,7 @@ void Session::CheckChecksums()
     }
     if (mine->second != it->second)
     {
+      m_game.OnDesync(it->first.first);
       Fail(fmt::format("Desync at frame {}: {:016x} here, {:016x} there", it->first.first, mine->second,
                        it->second));
       return;

@@ -79,6 +79,9 @@ public:
   // A hash of the saved state at the start of `frame`, for desync detection (nullopt if not saved).
   // Only asked every Config::checksum_every frames; it may be computed at Save time.
   virtual std::optional<u64> SnapshotChecksum(int frame) = 0;
+  // DIAGNOSTIC builds only: called once when the checksum of `frame` differs from a peer's, before
+  // the session fails, so a port can log what it kept about the frames around it.
+  virtual void OnDesync(int frame) {}
   // After a stall: restart frame pacing from now, so the emulator doesn't race to make up the time.
   virtual void ResetPacing() = 0;
   // What one Save costs on this machine, smoothed, in ms (0: not measured). Picks
