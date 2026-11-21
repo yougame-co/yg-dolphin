@@ -205,10 +205,13 @@ bool DetailSection(const std::string& name)
          name == "PowerPC" || name == "AudioInterface" || name == "DSP" ||
          name == "CoreTimingEvents" || name == "CoreTiming" || name == "IOS";
 }
-std::string Detail(const u8* data, std::size_t size)
+std::string Detail(const std::string& name, const u8* data, std::size_t size)
 {
   std::string out;
-  if (size <= 4096)
+  // The DVD section carries a pending read's request and data: whole, so the two sides' bytes can
+  // be compared.
+  const std::size_t whole = name == "DVDInterface" || name == "IOS::HLE" ? 256 * 1024 : 4096;
+  if (size <= whole)
   {
     out.reserve(size * 2);
     for (std::size_t i = 0; i < size; ++i)
@@ -248,7 +251,7 @@ std::optional<u64> RingPort::SnapshotChecksum(int frame)
         break;
       sizes.push_back(end - prev);
       if (DetailSection(name))
-        details.emplace_back(name, Detail(state.data() + prev, end - prev));
+        details.emplace_back(name, Detail(name, state.data() + prev, end - prev));
       std::string key = name;
       std::replace(key.begin(), key.end(), ' ', '_');
       sections.emplace_back(std::move(key),
