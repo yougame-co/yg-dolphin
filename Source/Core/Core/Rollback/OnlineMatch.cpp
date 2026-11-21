@@ -547,6 +547,12 @@ bool OptionBOn()
   static const bool off = Orca::GetEnv("ORCA_OPTION_B") == "off";
   return !off;
 }
+// Option B is for casual queue rooms only: ranked keeps its own pick flow (the character order).
+bool OptionBRoom()
+{
+  return OptionBOn() && Orca::Online::RoomQueue() == "casual";
+}
+void ClearB(Match& match);
 // Option B: frames of Start presses on the room's select, and of the stage select and load, before
 // the run gives up and shows (the casual stage pick alone is 15 s).
 constexpr int B_GO_LIMIT = 2400;
@@ -798,6 +804,7 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
       (Orca::Online::RoomEnded() || Orca::Online::Code() != fresh.room))
   {
     EndFresh(match, "the room is gone");
+    ClearB(match);
     return local;
   }
   if (fresh.phase == Phase::Hold && Orca::UX::Game().Header().HeaderInPlace())
@@ -846,6 +853,7 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
   {
     if (!match.b_seat)
     {
+      ClearB(match);
       EndFresh(match, "Option B: the opponent left before the match");
       return local;
     }
@@ -863,7 +871,8 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
       }
       if (t >= B_GO_LIMIT)
       {
-        EndFresh(match, "Option B: the room's select never went on to the stage select");
+        ClearB(match);
+      EndFresh(match, "Option B: the room's select never went on to the stage select");
         return local;
       }
       return BStartPad(t);
@@ -880,6 +889,7 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
     }
     if (t >= B_LOAD_LIMIT)
     {
+      ClearB(match);
       EndFresh(match, "Option B: no match began after the room's select");
       return local;
     }
@@ -1109,6 +1119,14 @@ void DeleteStored(Match& match, const Orca::Net::KeyframeInfo& info)
     match.store->Delete(info.id);
 }
 
+// Option B's opponent is no longer plugged into this run (its start was given up, or the room is
+// left): the next take-in is an ordinary drop-in, and the joiner's replay shows its port out.
+void ClearB(Match& match)
+{
+  match.b_seat.reset();
+  match.b_from = -1;
+}
+
 // The fresh start's hold or steer is over (a tail always runs to its end: StepTail).
 void EndFresh(Match& match, const char* why)
 {
@@ -1138,6 +1156,7 @@ void ResetDropIn(Match& match)
   match.fresh_join_warned_at.reset();
   match.fresh_queue_armed = false;
   EndFresh(match, "the room is left");
+  ClearB(match);
   if (match.keyframe)
     DeleteStored(match, *match.keyframe);
   match.keyframe.reset();
@@ -1991,7 +2010,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   start.fresh_after = match.fight_let_in ? 0 : FreshFriendsAfter();
   // Option B: a queue room's host stays on its own select until its opponent's hello (its pick) is
   // in, then runs the match's start with both picks.
-  if (OptionBOn() && start.queue_armed && match.waiting.empty())
+  if (OptionBRoom() && start.queue_armed && match.waiting.empty())
     return;
   switch (WarnBeforeResetJoin(DecideFreshStart(start), start.kind, start.queue_armed,
                              &match.fresh_join_warned_at, Clock::now()))
@@ -2083,6 +2102,13 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
         {
           BWaitForKeyframe(system, match);
           usable = match.keyframe && match.keyframe_generation == generation;
+          if (!usable)
+          {
+            WARN_LOG_FMT(ROLLBACK, "Option B: no keyframe of the match's first frame: port {} is "
+                                   "taken in as an ordinary drop-in instead",
+                         *match.b_seat + 1);
+            ClearB(match);
+          }
         }
       }
       else
@@ -2663,7 +2689,7 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   fresh.exit = exit;
   fresh.queue = InQueueRoom();
   fresh.room = Orca::Online::Code();
-  fresh.b = OptionBOn() && fresh.queue && kind == FreshKind::Menu && match.waiting.size() == 1 &&
+  fresh.b = OptionBRoom() && fresh.queue && kind == FreshKind::Menu && match.waiting.size() == 1 &&
             match.co_seats.empty() && !match.doubles;
   match.b_from = -1;
   if (fresh.b)
@@ -2826,7 +2852,7 @@ void FinishReplay(Match& match)
   plan[match.host_seat] = {0, Orca::Net::NEVER, 0};
   // Option B: the host's run plugged this player's port in before the match's first frame (its pick
   // steered in from its own select's), so it is live from the session's first frame.
-  if (OptionBOn())
+  if (OptionBRoom())
   {
     int b_from = -1;
     for (int f = frame - 1; f >= match.replay.first_frame; --f)
