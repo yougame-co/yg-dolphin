@@ -17,8 +17,10 @@
 #include <xxh3.h>
 
 #include "Common/ChunkFile.h"
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
+#include "Core/HW/Memmap.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Rollback/Diag.h"
@@ -247,6 +249,17 @@ std::pair<std::size_t, std::size_t> WatchBlocks()
   return s_blocks;
 }
 constexpr std::size_t WATCH_DUMP_FRAMES = 3;
+// YG_DESYNC_RAMDIR=<dir>: the whole RAM (MEM1 then MEM2) of the last WATCH_DUMP_FRAMES checksum
+// frames, written there as ram-f<frame>.bin on a dump, so the two sides can be diffed byte for byte.
+const char* RamDumpDir()
+{
+  static const char* s_dir = [] {
+    const char* v = std::getenv("YG_DESYNC_RAMDIR");
+    return v && v[0] ? v : nullptr;
+  }();
+  return s_dir;
+}
+std::map<int, std::vector<u8>> s_ram;
 bool s_maps_logged = false;
 }  // namespace
 
@@ -266,6 +279,18 @@ std::optional<u64> RingPort::SnapshotChecksum(int frame)
       s_watch[frame] = std::move(*bytes);
     while (s_watch.size() > MAP_KEEP)
       s_watch.erase(s_watch.begin());
+  }
+  if (RamDumpDir())
+  {
+    auto& memory = m_system.GetMemory();
+    const std::size_t total = std::size_t{memory.GetRamSize()} +
+                              (memory.GetEXRAM() ? std::size_t{memory.GetExRamSize()} : 0);
+    if (auto bytes = m_ring.RamBytes(frame, 0, total))
+    {
+      s_ram[frame] = std::move(*bytes);
+      while (s_ram.size() > WATCH_DUMP_FRAMES)
+        s_ram.erase(s_ram.begin());
+    }
   }
   while (s_maps.size() > MAP_KEEP)
     s_maps.erase(s_maps.begin());
@@ -312,6 +337,7 @@ void RingPort::ResetDesyncMaps()
   s_section_sizes.clear();
   s_details.clear();
   s_watch.clear();
+  s_ram.clear();
   s_maps_logged = false;
 }
 
@@ -397,6 +423,19 @@ void RingPort::DumpDesyncMaps(int frame, const char* why)
       for (std::size_t i = p * CHUNK; i < std::min(bytes.size(), (p + 1) * CHUNK); ++i)
         hex += fmt::format("{:02x}", bytes[i]);
       NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} watch {}-{} {}/{} {}", f, first, last, p, parts, hex);
+    }
+  }
+  if (const char* dir = RamDumpDir())
+  {
+    for (const auto& [f, bytes] : s_ram)
+    {
+      if (f > frame)
+        continue;
+      const std::string path = fmt::format("{}/ram-f{}.bin", dir, f);
+      File::IOFile file(path, "wb");
+      const bool ok = file.WriteBytes(bytes.data(), bytes.size());
+      NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP ramdump f={} {} bytes {} {}", f, bytes.size(),
+                     ok ? "written" : "NOT written", path);
     }
   }
 }
