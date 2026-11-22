@@ -6,6 +6,8 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <chrono>
+#include <memory>
 
 #include "AudioCommon/SurroundDecoder.h"
 #include "AudioCommon/WaveFile.h"
@@ -14,6 +16,7 @@
 #include "Common/Inline.h"
 
 class PointerWrap;
+class OrcaMixerWavTap;
 
 class Mixer final
 {
@@ -132,6 +135,35 @@ private:
     void SetVolume(u32 lvolume, u32 rvolume);
     std::pair<s32, s32> GetVolume() const;
 
+    // Orca diag: what this stream's queue did since the last call (the counters restart).
+    // Underruns and skips are the Dequeue paths below; repeated and dropped samples are at the
+    // stream's input rate (one granule advances GRANULE_OVERLAP of them).
+    static constexpr std::size_t ORCA_NO_FILL = ~std::size_t(0);
+    static constexpr std::size_t ORCA_GRANULE_HOP = GRANULE_OVERLAP;
+    struct OrcaFifoStats
+    {
+      u64 underruns = 0;
+      u64 repeated_samples = 0;
+      u64 skips = 0;
+      u64 dropped_samples = 0;
+      u64 full_drops = 0;
+      u64 pushed_samples = 0;
+      u64 resim_dropped_samples = 0;
+      std::size_t fill_granules = 0;
+      std::size_t min_fill_granules = ORCA_NO_FILL;
+      std::size_t target_granules = 0;
+    };
+    OrcaFifoStats OrcaTakeStats();
+    void OrcaCountPushed(std::size_t num_samples)
+    {
+      m_orca_pushed.fetch_add(num_samples, std::memory_order_relaxed);
+      m_orca_ever_pushed.store(true, std::memory_order_relaxed);
+    }
+    void OrcaCountResimDropped(std::size_t num_samples)
+    {
+      m_orca_resim_dropped.fetch_add(num_samples, std::memory_order_relaxed);
+    }
+
   private:
     Mixer* m_mixer;
 
@@ -161,9 +193,24 @@ private:
     std::atomic<s32> m_RVolume{256};
 
     StereoPair m_quantization_error;
+
+    // Orca diag counters. Dequeue (audio thread) writes the queue ones, the push side (CPU
+    // thread) the others; OrcaTakeStats (CPU thread) reads and clears them.
+    std::atomic<u64> m_orca_underruns{0};
+    std::atomic<u64> m_orca_repeated{0};
+    std::atomic<u64> m_orca_skips{0};
+    std::atomic<u64> m_orca_dropped{0};
+    std::atomic<u64> m_orca_full_drops{0};
+    std::atomic<u64> m_orca_pushed{0};
+    std::atomic<u64> m_orca_resim_dropped{0};
+    std::atomic<std::size_t> m_orca_min_fill{ORCA_NO_FILL};
+    std::atomic<bool> m_orca_ever_pushed{false};
   };
 
   void RefreshConfig();
+
+  // Orca diag: every 30 s of wall time, one "Orca mixer:" line on the ROLLBACK log (CPU thread).
+  void OrcaMaybeLogStats();
 
   MixerFifo m_dma_mixer{this, FIXED_SAMPLE_RATE_DIVIDEND / 32000};
   MixerFifo m_streaming_mixer{this, FIXED_SAMPLE_RATE_DIVIDEND / 48000};
@@ -202,4 +249,12 @@ private:
   std::array<bool, 4> m_config_wiimote_output_enabled{};
 
   Config::ConfigChangedCallbackID m_config_changed_callback_id;
+
+  // Orca diag. ORCA_MIXER_WAV=<path>: Mix's output, as handed to the backend, also goes to a WAV.
+  std::unique_ptr<OrcaMixerWavTap> m_orca_wav_tap;
+  std::atomic<u64> m_orca_out_frames{0};
+  u32 m_orca_push_calls = 0;
+  bool m_orca_log_started = false;
+  std::chrono::steady_clock::time_point m_orca_log_start;
+  std::chrono::steady_clock::time_point m_orca_window_start;
 };

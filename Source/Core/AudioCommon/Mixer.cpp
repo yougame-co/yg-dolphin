@@ -4,21 +4,194 @@
 #include "AudioCommon/Mixer.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 #include <span>
+#include <string>
+#include <thread>
+#include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
+#include <fmt/format.h>
 
 #include "AudioCommon/Enums.h"
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 #include "Common/Swap.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/BroadcastSink.h"
+#include "Core/Orca/Profile.h"
 #include "Core/Rollback/Rollback.h"
 #include "Core/System.h"
+#include "VideoCommon/PerformanceMetrics.h"
+
+// Orca diag. ORCA_MIXER_WAV=<path> ("%p" becomes the process id): a 16-bit stereo WAV of
+// Mixer::Mix's output, after resampling and gap filling, before the backend's own volume or mute.
+// The audio thread only appends to a buffer; a writer thread saves it every 250 ms and rewrites
+// the header sizes each time, so a killed process still leaves a playable file.
+class OrcaMixerWavTap final
+{
+public:
+  explicit OrcaMixerWavTap(std::string path) : m_path(std::move(path)) {}
+  ~OrcaMixerWavTap()
+  {
+    {
+      std::lock_guard lock(m_mutex);
+      m_stop = true;
+    }
+    m_wake.notify_one();
+    if (m_writer.joinable())
+      m_writer.join();
+  }
+  OrcaMixerWavTap(const OrcaMixerWavTap&) = delete;
+  OrcaMixerWavTap& operator=(const OrcaMixerWavTap&) = delete;
+
+  static std::unique_ptr<OrcaMixerWavTap> FromEnv()
+  {
+    std::string path = Orca::GetEnv("ORCA_MIXER_WAV");
+    if (path.empty())
+      return nullptr;
+#ifdef _WIN32
+    const long long pid = _getpid();
+#else
+    const long long pid = getpid();
+#endif
+    for (std::size_t at = path.find("%p"); at != std::string::npos; at = path.find("%p", at))
+      path.replace(at, 2, std::to_string(pid));
+    // A second Mixer in the same process (another boot) gets its own file.
+    static std::atomic<int> s_orca_wav_count{0};
+    const int index = s_orca_wav_count.fetch_add(1);
+    if (index > 0)
+      path += fmt::format(".{}.wav", index + 1);
+    return std::make_unique<OrcaMixerWavTap>(std::move(path));
+  }
+
+  // Audio thread. Host-endian interleaved left/right, as Mix writes them.
+  void Add(const s16* samples, std::size_t num_frames, u32 sample_rate)
+  {
+    if (m_failed || sample_rate == 0)
+      return;
+    if (!m_started)
+    {
+      m_started = true;
+      m_sample_rate = sample_rate;
+      m_writer = std::thread([this] { WriterLoop(); });
+    }
+    if (sample_rate != m_sample_rate)
+      return;
+    std::lock_guard lock(m_mutex);
+    // Ten seconds behind means the disk stalled; drop rather than grow without bound.
+    if (m_pending.size() + num_frames * 2 > std::size_t(m_sample_rate) * 2 * 10)
+    {
+      m_lost_frames += num_frames;
+      return;
+    }
+    m_pending.insert(m_pending.end(), samples, samples + num_frames * 2);
+  }
+
+private:
+  void WriterLoop()
+  {
+    File::IOFile file(m_path, "wb");
+    if (!file)
+    {
+      ERROR_LOG_FMT(ROLLBACK, "Orca mixer: ORCA_MIXER_WAV couldn't open {}", m_path);
+      m_failed = true;
+      return;
+    }
+    NOTICE_LOG_FMT(ROLLBACK, "Orca mixer: writing the mixer output ({} Hz stereo s16) to {}",
+                   m_sample_rate, m_path);
+    u64 data_bytes = 0;
+    WriteHeader(file, 0);
+    std::vector<s16> chunk;
+    bool stop = false;
+    u64 lost_logged = 0;
+    while (!stop)
+    {
+      {
+        std::unique_lock lock(m_mutex);
+        m_wake.wait_for(lock, std::chrono::milliseconds(250), [this] { return m_stop; });
+        stop = m_stop;
+        chunk.swap(m_pending);
+      }
+      if (!chunk.empty())
+      {
+        // WAV data is little-endian.
+        if constexpr (std::endian::native == std::endian::big)
+        {
+          for (s16& sample : chunk)
+            sample = static_cast<s16>(Common::swap16(static_cast<u16>(sample)));
+        }
+        file.WriteArray(chunk.data(), chunk.size());
+        data_bytes += chunk.size() * sizeof(s16);
+        chunk.clear();
+        WriteHeader(file, data_bytes);
+        file.Seek(0, File::SeekOrigin::End);
+        file.Flush();
+      }
+      std::size_t lost;
+      {
+        std::lock_guard lock(m_mutex);
+        lost = m_lost_frames;
+      }
+      if (lost != lost_logged)
+      {
+        WARN_LOG_FMT(ROLLBACK, "Orca mixer: the WAV tap fell behind and lost {} frames", lost);
+        lost_logged = lost;
+      }
+    }
+  }
+
+  void WriteHeader(File::IOFile& file, u64 data_bytes)
+  {
+    const u32 data_size = static_cast<u32>(std::min<u64>(data_bytes, 0xFFFFFFFFull - 36));
+    const auto u32le = [](u8* out, u32 value) {
+      for (int i = 0; i < 4; ++i)
+        out[i] = static_cast<u8>(value >> (8 * i));
+    };
+    std::array<u8, 44> header{};
+    std::memcpy(&header[0], "RIFF", 4);
+    u32le(&header[4], 36 + data_size);
+    std::memcpy(&header[8], "WAVEfmt ", 8);
+    u32le(&header[16], 16);
+    header[20] = 1;  // PCM
+    header[22] = 2;  // channels
+    u32le(&header[24], m_sample_rate);
+    u32le(&header[28], m_sample_rate * 4);
+    header[32] = 4;   // block align
+    header[34] = 16;  // bits per sample
+    std::memcpy(&header[36], "data", 4);
+    u32le(&header[40], data_size);
+    file.Seek(0, File::SeekOrigin::Begin);
+    file.WriteArray(header.data(), header.size());
+  }
+
+  const std::string m_path;
+  // Audio thread only, apart from m_sample_rate, which is set before the writer starts.
+  bool m_started = false;
+  u32 m_sample_rate = 0;
+  std::atomic<bool> m_failed{false};
+  std::thread m_writer;
+
+  std::mutex m_mutex;
+  std::condition_variable m_wake;
+  std::vector<s16> m_pending;
+  std::size_t m_lost_frames = 0;
+  bool m_stop = false;
+};
 
 static u32 DPL2QualityToFrameBlockSize(AudioCommon::DPL2Quality quality)
 {
@@ -42,6 +215,7 @@ Mixer::Mixer(u32 BackendSampleRate)
 {
   m_config_changed_callback_id = Config::AddConfigChangedCallback([this] { RefreshConfig(); });
   RefreshConfig();
+  m_orca_wav_tap = OrcaMixerWavTap::FromEnv();
 
   INFO_LOG_FMT(AUDIO_INTERFACE, "Mixer is initialized");
 }
@@ -184,6 +358,10 @@ std::size_t Mixer::Mix(s16* samples, std::size_t num_samples)
   if (Broadcast::Active())
     Broadcast::Audio(samples, num_samples, m_output_sample_rate);
 
+  m_orca_out_frames.fetch_add(num_samples, std::memory_order_relaxed);
+  if (m_orca_wav_tap)
+    m_orca_wav_tap->Add(samples, num_samples, m_output_sample_rate);
+
   return num_samples;
 }
 
@@ -220,9 +398,14 @@ std::size_t Mixer::MixSurround(float* samples, std::size_t num_samples)
 
 void Mixer::PushSamples(const s16* samples, std::size_t num_samples)
 {
+  OrcaMaybeLogStats();
   // Orca rollback: frames re-run after a load already played their sound the first time.
   if (Rollback::IsResimulating())
+  {
+    m_dma_mixer.OrcaCountResimDropped(num_samples);
     return;
+  }
+  m_dma_mixer.OrcaCountPushed(num_samples);
   if (IsOutputSampleRateValid())
   {
     // Big-endian RL-orderered stereo samples.
@@ -247,7 +430,11 @@ void Mixer::PushSamples(const s16* samples, std::size_t num_samples)
 void Mixer::PushStreamingSamples(const s16* samples, std::size_t num_samples)
 {
   if (Rollback::IsResimulating())
+  {
+    m_streaming_mixer.OrcaCountResimDropped(num_samples);
     return;
+  }
+  m_streaming_mixer.OrcaCountPushed(num_samples);
   if (IsOutputSampleRateValid())
   {
     // Big-endian RL-orderered stereo samples.
@@ -272,11 +459,16 @@ void Mixer::PushStreamingSamples(const s16* samples, std::size_t num_samples)
 void Mixer::PushWiimoteSpeakerSamples(std::size_t wiimote_index, const s16* samples,
                                       std::size_t num_samples, u32 sample_rate_divisor)
 {
-  if (!IsOutputSampleRateValid() || wiimote_index >= m_wiimote_speaker_mixers.size() ||
-      Rollback::IsResimulating())
+  if (wiimote_index >= m_wiimote_speaker_mixers.size())
+    return;
+  if (Rollback::IsResimulating())
   {
+    m_wiimote_speaker_mixers[wiimote_index].OrcaCountResimDropped(num_samples);
     return;
   }
+  m_wiimote_speaker_mixers[wiimote_index].OrcaCountPushed(num_samples);
+  if (!IsOutputSampleRateValid())
+    return;
 
   // WiimoteEmu produces host-endian mono samples.
 
@@ -546,6 +738,7 @@ void Mixer::MixerFifo::Enqueue()
   const std::size_t next_head = (head + 1) & GRANULE_QUEUE_MASK;
   if (next_head == m_queue_tail.load(std::memory_order_acquire))
   {
+    m_orca_full_drops.fetch_add(1, std::memory_order_relaxed);
     WARN_LOG_FMT(AUDIO,
                  "Granule Queue has completely filled and audio samples are being dropped. "
                  "This should not happen unless the audio backend has stopped requesting audio.");
@@ -569,12 +762,20 @@ bool Mixer::MixerFifo::Dequeue(Granule* granule)
   const std::size_t head = m_queue_head.load(std::memory_order_acquire);
   std::size_t tail = m_queue_tail.load(std::memory_order_acquire);
 
+  // Orca diag: the queue's length in granules before this call, and its low point.
+  const std::size_t orca_fill = (head - tail) & GRANULE_QUEUE_MASK;
+  if (orca_fill < m_orca_min_fill.load(std::memory_order_relaxed))
+    m_orca_min_fill.store(orca_fill, std::memory_order_relaxed);
+  const bool orca_counting = m_orca_ever_pushed.load(std::memory_order_relaxed);
+
   // Checks to see if the queue has gotten too long.
   if (granule_queue_size < ((head - tail) & GRANULE_QUEUE_MASK))
   {
     // Jump the playhead to half the queue size behind the head.
     const std::size_t gap = (granule_queue_size >> 1) + 1;
     tail = (head - gap) & GRANULE_QUEUE_MASK;
+    m_orca_skips.fetch_add(1, std::memory_order_relaxed);
+    m_orca_dropped.fetch_add((orca_fill - gap) * GRANULE_OVERLAP, std::memory_order_relaxed);
   }
 
   // Checks to see if the queue is empty.
@@ -583,12 +784,17 @@ bool Mixer::MixerFifo::Dequeue(Granule* granule)
   {
     // Only fill gaps when running to prevent stutter on pause.
     const bool is_running = Core::GetState(Core::System::GetInstance()) == Core::State::Running;
+    if (orca_counting && is_running)
+      m_orca_underruns.fetch_add(1, std::memory_order_relaxed);
     if (m_mixer->m_config_fill_audio_gaps && is_running)
     {
       // Jump the playhead to half the queue size behind the head.
       // This provides smoother audio playback than suddenly stopping.
       const std::size_t gap = std::max<std::size_t>(2, granule_queue_size >> 1) - 1;
       next_tail = (head - gap) & GRANULE_QUEUE_MASK;
+      // Orca diag: the granules from head - gap up to the head play again.
+      if (orca_counting)
+        m_orca_repeated.fetch_add(gap * GRANULE_OVERLAP, std::memory_order_relaxed);
 
       bool looping = m_queue_looping.load(std::memory_order_relaxed);
       m_queue_fading.store(looping, std::memory_order_relaxed);
@@ -607,4 +813,118 @@ bool Mixer::MixerFifo::Dequeue(Granule* granule)
   m_queue_tail.store(next_tail, std::memory_order_release);
 
   return m_queue_fading.load(std::memory_order_relaxed);
+}
+
+Mixer::MixerFifo::OrcaFifoStats Mixer::MixerFifo::OrcaTakeStats()
+{
+  OrcaFifoStats stats;
+  stats.underruns = m_orca_underruns.exchange(0, std::memory_order_relaxed);
+  stats.repeated_samples = m_orca_repeated.exchange(0, std::memory_order_relaxed);
+  stats.skips = m_orca_skips.exchange(0, std::memory_order_relaxed);
+  stats.dropped_samples = m_orca_dropped.exchange(0, std::memory_order_relaxed);
+  stats.full_drops = m_orca_full_drops.exchange(0, std::memory_order_relaxed);
+  stats.pushed_samples = m_orca_pushed.exchange(0, std::memory_order_relaxed);
+  stats.resim_dropped_samples = m_orca_resim_dropped.exchange(0, std::memory_order_relaxed);
+  stats.min_fill_granules = m_orca_min_fill.exchange(ORCA_NO_FILL, std::memory_order_relaxed);
+  stats.fill_granules = (m_queue_head.load(std::memory_order_acquire) -
+                         m_queue_tail.load(std::memory_order_acquire)) &
+                        GRANULE_QUEUE_MASK;
+  stats.target_granules = m_granule_queue_size.load(std::memory_order_relaxed);
+  return stats;
+}
+
+namespace
+{
+// One stream's part of the "Orca mixer:" line. Fill is in granules (each advances
+// ORCA_GRANULE_HOP input samples) and in milliseconds at the stream's input rate.
+std::string OrcaFormatFifoStats(const char* name, double window_s, double input_rate,
+                                std::size_t granule_hop, u64 underruns, u64 repeated, u64 skips,
+                                u64 dropped, u64 full_drops, u64 pushed, u64 resim_dropped,
+                                std::size_t fill, std::size_t min_fill, std::size_t target,
+                                std::size_t no_fill)
+{
+  const auto to_ms = [&](std::size_t granules) {
+    return input_rate > 0 ? granules * granule_hop * 1000.0 / input_rate : 0.0;
+  };
+  const std::string min_text =
+      min_fill == no_fill ? std::string("-") :
+                            fmt::format("{}({:.0f}ms)", min_fill, to_ms(min_fill));
+  return fmt::format("{}: in_hz={:.0f} fill={}({:.0f}ms) min={} target={}({:.0f}ms) under={} "
+                     "repeat_samples={} skip={} drop_samples={} full={} resim_drop_samples={}",
+                     name, window_s > 0 ? pushed / window_s : 0.0, fill, to_ms(fill), min_text,
+                     target, to_ms(target), underruns, repeated, skips, dropped, full_drops,
+                     resim_dropped);
+}
+}  // namespace
+
+void Mixer::OrcaMaybeLogStats()
+{
+  // PushSamples runs about 4000 times a second; look at the clock every 256th call.
+  if ((++m_orca_push_calls & 0xFF) != 0)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (!m_orca_log_started)
+  {
+    m_orca_log_started = true;
+    m_orca_log_start = now;
+    m_orca_window_start = now;
+    return;
+  }
+  if (now - m_orca_window_start < std::chrono::seconds(30))
+    return;
+  const double window_s = std::chrono::duration<double>(now - m_orca_window_start).count();
+  const double since_s = std::chrono::duration<double>(now - m_orca_log_start).count();
+  m_orca_window_start = now;
+
+  const auto rate_of = [](const MixerFifo& fifo) {
+    const u32 divisor = fifo.GetInputSampleRateDivisor();
+    return divisor ? double(fifo.GetInputSampleRateDividend()) / divisor : 0.0;
+  };
+  const auto part = [&](const char* name, MixerFifo& fifo) {
+    const MixerFifo::OrcaFifoStats s = fifo.OrcaTakeStats();
+    return OrcaFormatFifoStats(name, window_s, rate_of(fifo), MixerFifo::ORCA_GRANULE_HOP,
+                               s.underruns, s.repeated_samples, s.skips, s.dropped_samples,
+                               s.full_drops, s.pushed_samples, s.resim_dropped_samples,
+                               s.fill_granules, s.min_fill_granules, s.target_granules,
+                               MixerFifo::ORCA_NO_FILL);
+  };
+  const std::string dma = part("dma", m_dma_mixer);
+  const std::string dtk = part("dtk", m_streaming_mixer);
+
+  // The four Wii-mote speakers summed; fill is the fullest one's, min the emptiest one's.
+  MixerFifo::OrcaFifoStats wiimote;
+  wiimote.min_fill_granules = MixerFifo::ORCA_NO_FILL;
+  double wiimote_rate = 0.0;
+  for (auto& fifo : m_wiimote_speaker_mixers)
+  {
+    const MixerFifo::OrcaFifoStats s = fifo.OrcaTakeStats();
+    wiimote.underruns += s.underruns;
+    wiimote.repeated_samples += s.repeated_samples;
+    wiimote.skips += s.skips;
+    wiimote.dropped_samples += s.dropped_samples;
+    wiimote.full_drops += s.full_drops;
+    wiimote.pushed_samples += s.pushed_samples;
+    wiimote.resim_dropped_samples += s.resim_dropped_samples;
+    if (s.fill_granules >= wiimote.fill_granules)
+    {
+      wiimote.fill_granules = s.fill_granules;
+      wiimote.target_granules = s.target_granules;
+      wiimote_rate = rate_of(fifo);
+    }
+    wiimote.min_fill_granules = std::min(wiimote.min_fill_granules, s.min_fill_granules);
+  }
+  const std::string wiimote_text = OrcaFormatFifoStats(
+      "wiimote", window_s, wiimote_rate, MixerFifo::ORCA_GRANULE_HOP, wiimote.underruns,
+      wiimote.repeated_samples, wiimote.skips, wiimote.dropped_samples, wiimote.full_drops,
+      wiimote.pushed_samples, wiimote.resim_dropped_samples, wiimote.fill_granules,
+      wiimote.min_fill_granules, wiimote.target_granules, MixerFifo::ORCA_NO_FILL);
+
+  const u64 out_frames = m_orca_out_frames.exchange(0, std::memory_order_relaxed);
+  const PerformanceMetrics& perf = Core::System::GetInstance().GetPerfMetrics();
+  NOTICE_LOG_FMT(ROLLBACK,
+                 "Orca mixer: t={:.0f}s window={:.1f}s fps={:.2f} vps={:.2f} speed={:.1f}% "
+                 "backend_hz={} out_hz={:.0f} fill_gaps={} buffer_ms={} wav={} | {} | {} | {}",
+                 since_s, window_s, perf.GetFPS(), perf.GetVPS(), perf.GetSpeed() * 100.0,
+                 m_output_sample_rate, out_frames / window_s, m_config_fill_audio_gaps ? 1 : 0,
+                 m_config_audio_buffer_ms, m_orca_wav_tap ? 1 : 0, dma, dtk, wiimote_text);
 }
