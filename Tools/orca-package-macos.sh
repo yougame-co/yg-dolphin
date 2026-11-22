@@ -147,8 +147,21 @@ fi
 # no LGPL code is bundled), no frame-dump encoder and none of the frontends' extras. Configured on
 # every run so an older cache can't slip other settings in, and the bundle is rebuilt from nothing
 # so files deleted from Sys don't linger in it.
+# Compiler cache (velocity plan #19, 11-12): each version builds in a new checkout, so without a
+# shared cache every kit compiled all of Dolphin again. ccache hands back the compiler's own output
+# for the same input, so the bundle is unchanged. CCACHE_BASEDIR (with the prefix maps above) lets a
+# new checkout hit what an old one compiled. ORCA_CCACHE=0 builds without it.
+CCACHE_OPT=-DENABLE_CCACHE=OFF
+if [ "${ORCA_CCACHE:-1}" != 0 ] && command -v ccache >/dev/null; then
+  export CCACHE_DIR="${CCACHE_DIR:-/Volumes/YGWorktrees/ccache}" CCACHE_BASEDIR="$ROOT"
+  CCACHE_OPT=-DENABLE_CCACHE=ON
+fi
+# Compile jobs: 2 under the old machine rule; heavy-slot.sh now keeps the machine-wide limit, so run
+# kit builds through it. ORCA_BUILD_JOBS overrides.
+JOBS="${ORCA_BUILD_JOBS:-6}"
 rm -rf "$BUILT" "$BUILD_DIR/stage"
 cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
+  "$CCACHE_OPT" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
@@ -163,7 +176,7 @@ cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DCMAKE_OBJC_FLAGS="$PREFIX_MAP" -DCMAKE_OBJCXX_FLAGS="$PREFIX_MAP" >/dev/null
 grep -q '^ORCA_BUNDLE_TRUST_TEST_KEY:BOOL=OFF$' "$BUILD_DIR/CMakeCache.txt" ||
   fail "CMake's cache still trusts the bundle-flat TEST key"
-cmake --build "$BUILD_DIR" --target dolphin-nogui orca-disc-tool --parallel 2
+cmake --build "$BUILD_DIR" --target dolphin-nogui orca-disc-tool --parallel "$JOBS"
 
 if [ "$RELEASE" = 1 ]; then
   # The source must not have moved under the build.
