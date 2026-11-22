@@ -142,8 +142,8 @@ u32 PhysicalOf(const Tracker& t, std::size_t page)
 // ring of notes (save/load/forget, snapshot/restore/drop/remap, DVD reads). Both share one sequence
 // so they can be merged. At a desync the side logs the events of the pages where its own composed
 // snapshot differs from the live RAM copied at save time (TracePageEvents), and the last notes.
-constexpr std::size_t TRACE_MAX = 4000;
-constexpr std::size_t EVENT_MAX = std::size_t{1} << 22;
+constexpr std::size_t COW_NOTES_MAX = 4000;
+constexpr std::size_t COW_EVENT_RING = std::size_t{1} << 22;
 struct PageEvent
 {
   u64 seq;
@@ -163,7 +163,7 @@ void TraceLine(std::string line)
 {
   const u64 seq = s_seq.fetch_add(1, std::memory_order_relaxed);
   std::lock_guard lock(s_trace_lock);
-  if (s_trace.size() >= TRACE_MAX)
+  if (s_trace.size() >= COW_NOTES_MAX)
     s_trace.pop_front();
   s_trace.emplace_back(seq, std::move(line));
 }
@@ -171,13 +171,13 @@ void TraceLine(std::string line)
 void Ev(const Tracker& t, char kind, std::size_t page, std::size_t view, std::size_t aux)
 {
   if (s_events.empty())
-    s_events.resize(EVENT_MAX);
+    s_events.resize(COW_EVENT_RING);
   const u64 id = t.log ? t.log->NextId() - 1 : 0;
   s_events[s_events_next] =
       PageEvent{s_seq.fetch_add(1, std::memory_order_relaxed), static_cast<u32>(id),
                 static_cast<u32>(page), static_cast<u16>(std::min<std::size_t>(aux, 0xffff)), kind,
                 static_cast<u8>(view)};
-  if (++s_events_next == EVENT_MAX)
+  if (++s_events_next == COW_EVENT_RING)
   {
     s_events_next = 0;
     s_events_wrapped = true;
@@ -761,19 +761,19 @@ std::vector<std::string> TracePageEvents(const std::vector<u32>& physical_pages,
     }
   }
   std::sort(pages.begin(), pages.end());
-  const std::size_t count = s_events_wrapped ? EVENT_MAX : s_events_next;
+  const std::size_t count = s_events_wrapped ? COW_EVENT_RING : s_events_next;
   const std::size_t first = s_events_wrapped ? s_events_next : 0;
   std::vector<const PageEvent*> hits;
   for (std::size_t i = 0; i < count; ++i)
   {
-    const PageEvent& e = s_events[(first + i) % EVENT_MAX];
+    const PageEvent& e = s_events[(first + i) % COW_EVENT_RING];
     if (std::binary_search(pages.begin(), pages.end(), e.page))
       hits.push_back(&e);
   }
   // The newest events matter most: keep the last max_lines.
   const std::size_t skip = hits.size() > max_lines ? hits.size() - max_lines : 0;
   out.push_back(fmt::format("events {} of {} for {} pages (ring {} of {})", hits.size() - skip,
-                            hits.size(), pages.size(), count, EVENT_MAX));
+                            hits.size(), pages.size(), count, COW_EVENT_RING));
   for (std::size_t i = skip; i < hits.size(); ++i)
   {
     const PageEvent& e = *hits[i];
