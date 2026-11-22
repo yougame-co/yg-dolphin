@@ -196,7 +196,10 @@ SnapshotRing::~SnapshotRing()
 void SnapshotRing::Forget(Slot* slot)
 {
   if (slot->cow_id != 0)
+  {
+    Cow::TraceNote(fmt::format("forget f={} id={}", slot->frame, slot->cow_id));
     Cow::Drop(slot->cow_id);
+  }
   slot->cow_id = 0;
   slot->frame = -1;
 }
@@ -300,6 +303,7 @@ bool SnapshotRing::Save(Core::System& system, s64 frame)
   // tracking stopped, so fall back to a full copy.
   if (cow)
     slot->cow_id = Cow::Snapshot();
+  Cow::TraceNote(fmt::format("save f={} id={}", frame, slot->cow_id));
   if (slot->cow_id != 0)
   {
     if (Diag::SnapTime())
@@ -355,6 +359,7 @@ bool SnapshotRing::LoadSlot(Core::System& system, s64 frame, bool redisplay)
   const auto start = std::chrono::steady_clock::now();
   auto& memory = system.GetMemory();
   std::unordered_set<u32> changed_pages;
+  Cow::TraceNote(fmt::format("load f={} id={}", frame, slot->cow_id));
   if (slot->cow_id != 0)
   {
     // The undo logs of this snapshot and every newer one list exactly the pages written since.

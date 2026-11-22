@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include <xxh3.h>
+
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
@@ -24,6 +26,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/IOS/ES/Formats.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/System.h"
 
 #include "DiscIO/Enums.h"
@@ -284,6 +287,14 @@ void DVDThread::FinishRead(u64 id, s64 cycles_late)
     {
       auto& memory = m_system.GetMemory();
       memory.CopyToEmu(request.output_address, buffer.data(), request.length);
+      // DIAGNOSTIC v11: DVD reads into the traced window (Rollback/Cow.h TraceNote).
+      if (request.output_address < 0x10A60000u && request.output_address + request.length > 0x10A00000u)
+      {
+        Rollback::Cow::TraceNote(fmt::format(
+            "dvd out={:08x} len={:x} dvd={:x} late={} data={:016x}", request.output_address,
+            request.length, request.dvd_offset, cycles_late,
+            XXH3_64bits(buffer.data(), buffer.size())));
+      }
     }
 
     interrupt = DVD::DIInterruptType::TCINT;

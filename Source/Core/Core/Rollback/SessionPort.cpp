@@ -11,6 +11,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <thread>
 
@@ -21,6 +22,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/HW/Memmap.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Rollback/Diag.h"
@@ -438,6 +440,14 @@ void RingPort::DumpDesyncMaps(int frame, const char* why)
                      ok ? "written" : "NOT written", path);
     }
   }
+  // DIAGNOSTIC v11: the copy-on-write and DVD trace of MEM2 0x10A00000-0x10A60000, oldest first.
+  // Only at a desync: clean runs must stay inside the harness's output cap.
+  const std::vector<std::string> trace = Cow::TraceTake();
+  if (std::string_view(why) != "desync")
+    return;
+  NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP cowtrace {} lines", trace.size());
+  for (std::size_t i = 0; i < trace.size(); ++i)
+    NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP cow {} {}", i, trace[i]);
 }
 
 void RingPort::ResetPacing()

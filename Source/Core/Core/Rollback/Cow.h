@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -84,6 +85,11 @@ std::optional<u64> Checksum(u64 id);
 std::optional<std::vector<u64>> BucketHashes(u64 id, std::size_t bucket);
 // DIAGNOSTIC (YG_DESYNC_MAP): `size` bytes at `offset` into MEM1 then MEM2 as at snapshot `id`.
 std::optional<std::vector<u8>> Bytes(u64 id, std::size_t offset, std::size_t size);
+
+// DIAGNOSTIC v11: adds a line to the copy-on-write trace (MEM2 0x10A00000-0x10A60000), and takes
+// the trace's last lines (logged at a desync).
+void TraceNote(const std::string& line);
+std::vector<std::string> TraceTake();
 
 // Called first by the fault handlers. True if `address` is a protected page of tracked RAM; the
 // page is then saved and made writable so the faulting write can be retried.

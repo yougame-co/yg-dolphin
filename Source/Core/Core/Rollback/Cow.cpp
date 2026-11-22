@@ -7,8 +7,12 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <thread>
 
 #include <xxh3.h>
 
@@ -134,6 +138,72 @@ u32 PhysicalOf(const Tracker& t, std::size_t page)
          static_cast<u32>((page - t.area_first_page[area]) * t.page_size);
 }
 
+// DIAGNOSTIC v11: a trace of copy-on-write events for pages in a physical window (MEM2 0x10A00000-
+// 0x10A60000, where every captured P+ desync has its differing RAM), kept in a ring of the last
+// TRACE_MAX lines and logged at a desync (TraceTake). Caller holds t.lock or TraceLock.
+constexpr u32 TRACE_LO = 0x10A00000u;
+constexpr u32 TRACE_HI = 0x10A60000u;
+constexpr std::size_t TRACE_MAX = 8000;
+std::mutex s_trace_lock;
+std::deque<std::string> s_trace;
+std::vector<u64> s_trace_live;  // per traced page: last logged live hash
+unsigned TraceTid()
+{
+  return static_cast<unsigned>(std::hash<std::thread::id>{}(std::this_thread::get_id()) & 0xffff);
+}
+void TraceLine(std::string line)
+{
+  std::lock_guard lock(s_trace_lock);
+  if (s_trace.size() >= TRACE_MAX)
+    s_trace.pop_front();
+  s_trace.push_back(std::move(line));
+}
+bool Traced(const Tracker& t, std::size_t page)
+{
+  if (t.areas.empty())
+    return false;
+  const u32 physical = PhysicalOf(t, page);
+  return physical >= TRACE_LO && physical < TRACE_HI;
+}
+// Hashes of the page's first 128 bytes and of the whole page, from the never-protected alias.
+std::string TraceHashes(const Tracker& t, std::size_t page)
+{
+  const u8* const p = AliasOf(t, page);
+  return fmt::format("h80={:016x} hp={:016x}", XXH3_64bits(p, 128), XXH3_64bits(p, t.page_size));
+}
+void Trace(const Tracker& t, std::size_t page, const std::string& what)
+{
+  if (!Traced(t, page))
+    return;
+  TraceLine(fmt::format("{} p={:08x} {} tid={:04x}", what, PhysicalOf(t, page), TraceHashes(t, page),
+                        TraceTid()));
+}
+// At each snapshot or restore: every traced page whose live bytes changed since last logged.
+void TraceLive(const Tracker& t, const char* when)
+{
+  if (t.areas.empty())
+    return;
+  const std::size_t total = t.open_in.size();
+  if (s_trace_live.size() != total)
+    s_trace_live.assign(total, 0);
+  for (std::size_t a = 0; a < t.areas.size(); ++a)
+  {
+    const u32 lo = std::max(t.areas[a].physical_address, TRACE_LO);
+    const u32 hi = std::min(t.areas[a].physical_address + t.areas[a].size, TRACE_HI);
+    for (u32 physical = lo; physical < hi; physical += static_cast<u32>(t.page_size))
+    {
+    const std::size_t page =
+        t.area_first_page[a] + (physical - t.areas[a].physical_address) / t.page_size;
+    const u64 h = XXH3_64bits(AliasOf(t, page), t.page_size);
+    if (h == s_trace_live[page])
+      continue;
+    s_trace_live[page] = h;
+    Trace(t, page, fmt::format("live@{} open={:x} heat={} rec={}", when, t.open_in[page],
+                               t.heat[page], t.log && t.log->LoggedInNewest(page) ? 1 : 0));
+    }
+  }
+}
+
 // Clips the writeable views to the tracked areas, as page ranges. False if one is not
 // page-aligned or there are too many.
 bool BuildViews(const Tracker& t, const std::vector<View>& views, std::vector<ViewInfo>* out)
@@ -233,6 +303,9 @@ void SettleOpenPages(Tracker& t, bool measure)
       t.heat[page] =
           changed ? HEAT_WHILE_CHANGING : static_cast<u8>(t.heat[page] > 0 ? t.heat[page] - 1 : 0);
     }
+    if (Traced(t, page))
+      Trace(t, page, fmt::format("settle {} heat={} fr={}", t.heat[page] > 0 ? "hot" : "cold",
+                                 t.heat[page], t.fault_recorded[page]));
     t.fault_recorded[page] = 0;
     (t.heat[page] > 0 ? hot : cold).push_back(page);
   }
@@ -246,7 +319,9 @@ void CopyHotPages(Tracker& t)
 {
   for (const u32 page : t.open_pages)
   {
-    if (t.log->Record(page, AliasOf(t, page)))
+    const bool recorded = t.log->Record(page, AliasOf(t, page));
+    Trace(t, page, fmt::format("hot rec={} heat={}", recorded ? 1 : 0, t.heat[page]));
+    if (recorded)
       ++t.counters.pages_copied;
   }
 }
@@ -258,7 +333,9 @@ bool OpenPage(Tracker& t, std::size_t v, std::size_t page)
   const u64 bit = u64{1} << v;
   if (t.open_in[page] & bit)
     return false;
-  if (t.log->Record(page, AliasOf(t, page)))
+  const bool recorded = t.log->Record(page, AliasOf(t, page));
+  Trace(t, page, fmt::format("open v={} rec={}", v, recorded ? 1 : 0));
+  if (recorded)
   {
     ++t.counters.pages_recorded;
     t.fault_recorded[page] = 1;
@@ -399,8 +476,10 @@ u64 Snapshot()
   if (!t.log)
     return 0;
   t.log->Reserve(t.open_pages.size() + RESERVE_PAGES);
+  TraceLive(t, "snap");
   SettleOpenPages(t, true);
   const u64 id = t.log->Open();
+  TraceLine(fmt::format("snapshot id={}", id));
   CopyHotPages(t);
   return id;
 }
@@ -418,8 +497,13 @@ bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>
   std::lock_guard lock(t.lock);
   if (!t.log || !t.log->Has(id))
     return false;
+  TraceLine(fmt::format("restore id={} newest={}", id, t.log->Newest()));
+  TraceLive(t, "prerestore");
   // Writes go through the private mapping, so protection does not matter here.
   t.log->ForEachPreImage(id, [&](std::size_t page, const u8* pre_image) {
+    if (Traced(t, page))
+      Trace(t, page, fmt::format("restore pre80={:016x} prep={:016x}", XXH3_64bits(pre_image, 128),
+                                 XXH3_64bits(pre_image, t.page_size)));
     u8* const live = AliasOf(t, page);
     const u32 physical = PhysicalOf(t, page);
     for (std::size_t offset = 0; offset < t.page_size; offset += RESTORE_BLOCK)
@@ -434,6 +518,7 @@ bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>
   // `id`'s log is now empty: save the hot pages into it and re-protect the rest.
   SettleOpenPages(t, false);
   CopyHotPages(t);
+  TraceLive(t, "restored");
   return true;
 }
 
@@ -442,7 +527,10 @@ void Drop(u64 id)
   Tracker& t = T();
   std::lock_guard lock(t.lock);
   if (t.log)
+  {
+    TraceLine(fmt::format("drop id={}", id));
     t.log->Drop(id);
+  }
 }
 
 std::optional<u64> Checksum(u64 id)
@@ -573,6 +661,10 @@ bool HandleFault(uintptr_t address)
     const std::size_t index = offset / t.page_size;
     const std::size_t in_page = offset % t.page_size;
     const std::size_t last = static_cast<std::size_t>(view.end - view.base) / t.page_size - 1;
+    if (Traced(t, view.first_page + index))
+      TraceLine(fmt::format("fault p={:08x} v={} off={:03x} open={:x} tid={:04x}",
+                            PhysicalOf(t, view.first_page + index), v, in_page,
+                            t.open_in[view.first_page + index], TraceTid()));
     // A store straddling two pages may report an address in either one (arm64 allows that), so if
     // this page is already writable, try a protected neighbour within one access.
     if (OpenPage(t, v, view.first_page + index) ||
@@ -610,7 +702,10 @@ void PrepareHostWrite(const void* ptr, std::size_t size)
     const std::size_t first = static_cast<std::size_t>(start - view.base) / t.page_size;
     const std::size_t last = static_cast<std::size_t>(end - 1 - view.base) / t.page_size;
     for (std::size_t page = first; page <= last; ++page)
+    {
+      Trace(t, view.first_page + page, fmt::format("prep size={}", size));
       OpenPage(t, v, view.first_page + page);
+    }
     return;
   }
 }
@@ -634,6 +729,7 @@ void OnMappingsChanged(Core::System& system)
   if (built && std::equal(rebuilt.begin(), rebuilt.end(), t.views.begin(), t.views.end(), same))
     return;
   ++t.counters.remaps;
+  TraceLine(fmt::format("remap views={}", rebuilt.size()));
   // New views start writable, so protect everything again. Pages already in the newest log just
   // fault once more to reopen.
   t.views = std::move(rebuilt);
@@ -657,6 +753,19 @@ void StopTracking()
   std::lock_guard lock(t.lock);
   UnprotectAll(t);
   ResetLocked(t);
+}
+
+void TraceNote(const std::string& line)
+{
+  TraceLine(line);
+}
+
+std::vector<std::string> TraceTake()
+{
+  std::lock_guard lock(s_trace_lock);
+  std::vector<std::string> out(s_trace.begin(), s_trace.end());
+  s_trace.clear();
+  return out;
 }
 
 Counters GetCounters()
