@@ -287,14 +287,11 @@ void DVDThread::FinishRead(u64 id, s64 cycles_late)
     {
       auto& memory = m_system.GetMemory();
       memory.CopyToEmu(request.output_address, buffer.data(), request.length);
-      // DIAGNOSTIC v11: DVD reads into the traced window (Rollback/Cow.h TraceNote).
-      if (request.output_address < 0x10A60000u && request.output_address + request.length > 0x10A00000u)
-      {
-        Rollback::Cow::TraceNote(fmt::format(
-            "dvd out={:08x} len={:x} dvd={:x} late={} data={:016x}", request.output_address,
-            request.length, request.dvd_offset, cycles_late,
-            XXH3_64bits(buffer.data(), buffer.size())));
-      }
+      // DIAGNOSTIC v12: every DVD read into RAM (Rollback/Cow.h TraceNote).
+      Rollback::Cow::TraceNote(fmt::format(
+          "dvd out={:08x} len={:x} dvd={:x} late={} data={:016x}", request.output_address,
+          request.length, request.dvd_offset, cycles_late,
+          XXH3_64bits(buffer.data(), buffer.size())));
     }
 
     interrupt = DVD::DIInterruptType::TCINT;
