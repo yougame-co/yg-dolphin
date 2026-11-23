@@ -2881,6 +2881,10 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.104
+
+- Audio only: the music no longer stutters when a casual match starts or a friend leaves.
+
 ### 0.3.103
 
 - Unsigned app-delivered flat packs: a YouGame download (YOUGAME_GAME set) may come without mod.sig; a present mod.sig is still checked as before, and flat packs still need the OS jail.

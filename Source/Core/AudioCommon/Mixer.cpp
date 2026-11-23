@@ -590,8 +590,12 @@ bool Mixer::MixerFifo::Dequeue(Granule* granule)
       const std::size_t gap = std::max<std::size_t>(2, granule_queue_size >> 1) - 1;
       next_tail = (head - gap) & GRANULE_QUEUE_MASK;
 
+      // Orca: while frames re-run after a load (a rollback or a drop-in catch-up), their sound is
+      // dropped on purpose, so the queue stays empty until the re-run ends. Looping the last
+      // granules at full volume for that long is heard as the music stuttering; fade them out at
+      // once instead, and let the next real granule fade back in.
       bool looping = m_queue_looping.load(std::memory_order_relaxed);
-      m_queue_fading.store(looping, std::memory_order_relaxed);
+      m_queue_fading.store(looping || Rollback::IsResimulating(), std::memory_order_relaxed);
       m_queue_looping.store(true, std::memory_order_relaxed);
     }
     else
