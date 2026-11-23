@@ -150,6 +150,20 @@ Session::Session(const Config& config, Game& game, Transport& transport)
   }
   m_frame = std::max(m_config.start_frame, 0);
   m_log_base = m_frame;
+  // A remote seat the plan already has in, live from a later frame (Option B: a queue opponent that
+  // ran every frame before it on its own machine): the host owes it no history before live_from,
+  // as AdmitSeat would set it. Left at -1, the first send would read the log before its base.
+  if (m_config.plan)
+  {
+    for (int seat = 0; seat < m_config.seats; ++seat)
+    {
+      const int live_from = m_plan[seat].live_from;
+      if (IsLocal(seat) || live_from == NEVER || live_from <= 0)
+        continue;
+      m_acked[seat] = std::max(m_acked[seat], live_from - 1);
+      m_history_sent[seat] = m_history_acked[seat] = std::max(live_from, m_log_base) - 1;
+    }
+  }
   m_window_start = m_frame;
   m_sync_start = m_frame;
   m_last_checksum_frame = m_frame - m_frame % m_config.checksum_every;

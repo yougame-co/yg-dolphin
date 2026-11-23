@@ -3749,6 +3749,54 @@ TEST(OrcaDropIn, FriendBackInTheSameSeatAfterADrop)
   }
 }
 
+// Option B: the queue opponent is in the host's plan from the session's first frame, plugged since
+// its own pick and live from that frame. Its machine ran every earlier frame itself, so the host
+// sends it no history; the first send once read the log before its base (a Windows crash).
+TEST(OrcaDropIn, OptionBOpponentInThePlanGetsNoHistory)
+{
+  struct Inject final : Transport
+  {
+    void Send(const Packet& packet) override { sent.push_back(packet); }
+    std::vector<Packet> Receive() override { return std::exchange(queue, {}); }
+    bool Connected() const override { return true; }
+    std::vector<Packet> queue;
+    std::vector<Packet> sent;
+  };
+  // The session's own log starts empty at the match's first frame (as on the PC), or holds the run.
+  for (const bool with_log : {false, true})
+  {
+    SCOPED_TRACE(with_log ? "with the run's log" : "empty log");
+    FakeGame solo;
+    std::vector<Pads> log = PlaySolo(&solo, 0, 300);
+    Inject net;
+    FakeGame game;
+    game.m_state = solo.m_state;
+    game.m_history = solo.m_history;
+    game.m_ran_pads = solo.m_ran_pads;
+    Config config = DropInConfig(0, 300);
+    (*config.plan)[1] = {120, NEVER, 300};
+    Session host(config, game, net);
+    if (with_log)
+      host.SetLog(0, log);
+    else
+      host.SetLog(300, {});
+    int completed = 299;
+    for (int i = 0; i < 6; ++i)
+    {
+      const Step step = host.OnBoundary(completed, Pad{});
+      ASSERT_TRUE(host.Error().empty()) << host.Error();
+      if (step.kind == StepKind::Run)
+        completed = game.Run();
+    }
+    ASSERT_FALSE(net.sent.empty());
+    for (const Packet& packet : net.sent)
+    {
+      EXPECT_TRUE(packet.history.empty())
+          << "history for seat " << packet.history_seat << " from frame " << packet.history_first;
+    }
+  }
+}
+
 // Session::RequireValues: a newcomer plugs in only once every player, itself included, has
 // acknowledged the port values it plugs in with.
 TEST(OrcaDropIn, PlugInWaitsForEveryPlayerToHoldThePortValues)
