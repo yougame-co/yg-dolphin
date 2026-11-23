@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
@@ -89,6 +90,7 @@ private:
   Hasher m_hasher;
   std::atomic<bool> m_stop{false};
   bool m_cache_hit = true;
+  std::chrono::steady_clock::time_point m_started;
   mutable std::mutex m_mutex;
   std::condition_variable m_done;
   bool m_finished = false;

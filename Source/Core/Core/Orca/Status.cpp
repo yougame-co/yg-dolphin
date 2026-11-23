@@ -223,6 +223,9 @@ std::string OfferedCaps()
     caps += " qdoubles rdoubles";
   if (s_shortcuts_available)
     caps += fmt::format(" {}", SHORTCUTS_CAP);
+  // Last: the page may take plain Escape to leave full screen (Status.h ESCFREE_CAP).
+  if (SessionActive())
+    caps += fmt::format(" {}", ESCFREE_CAP);
   return caps;
 }
 

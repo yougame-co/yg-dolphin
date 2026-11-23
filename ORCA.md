@@ -2881,6 +2881,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.105
+
+- Faster start: on a computer that has started the game before, the first seconds no longer run slowly while the game files are checked; the check now runs at low priority behind the game (online play still waits for it).
+- Escape leaves full screen: the game tells the YouGame page that it never uses a plain Escape, so the page can let Escape take the game out of full screen.
+
 ### 0.3.104
 
 - Audio only: the music no longer stutters when a casual match starts or a friend leaves.

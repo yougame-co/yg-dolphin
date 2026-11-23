@@ -121,12 +121,19 @@ inline constexpr const char* HOSTUI_CAP = "hostui";
 // enables this only after installing all its key/focus handlers; headless and Qt do not offer it.
 inline constexpr const char* SHORTCUTS_CAP = "shortcuts";
 void SetShortcutsAvailable(bool available);
+// "escfree": informational, offered in every session. Orca's game never takes plain Escape (an
+// embedded window only relays it as "key escape"), so the page may use it to leave full screen.
+// Spelled without a hyphen: the page's native caps grammar is [a-z]{1,16}, and a hyphenated word
+// drops its whole line. Appended last, after optional "shortcuts", so every older word keeps its
+// place and an app that reads fewer words (24 before desktop's ORCA_CAPS_MAX of 32) drops it
+// first, keeping Escape as game input.
+inline constexpr const char* ESCFREE_CAP = "escfree";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
 // the pick caps where supported, then "talk", "rumble", "replay" in product playback,
 // "broadcast" in product playback on builds with the sink, then "record" and "hostui" in every
 // mode, followed by "coseats" unless ORCA_COSEATS=0, then "qdoubles" and "rdoubles". A frontend
-// with the own-window shortcut handlers appends "shortcuts" last, preserving older readers' cap
-// order. rdoubles is the ranked doubles result contract.
+// with the own-window shortcut handlers appends "shortcuts", preserving older readers' cap
+// order, and every session ends with "escfree". rdoubles is the ranked doubles result contract.
 // qdoubles means this
 // engine plays casual queue doubles rooms; it does not offer a Doubles menu pick. It remains
 // available with co-seats off for one seat per computer. Co-seats need the app's explicit agreement
