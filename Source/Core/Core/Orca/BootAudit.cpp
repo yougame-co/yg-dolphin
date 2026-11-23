@@ -11,7 +11,12 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <sys/resource.h>
 #include <sys/stat.h>
+#endif
+#ifdef __linux__
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 #include <fmt/format.h>
@@ -20,7 +25,10 @@
 #include "Common/CommonFuncs.h"
 #include "Common/FileUtil.h"
 #include "Common/IniFile.h"
+#include "Common/Logging/Log.h"
+#include "Common/Logging/LogManager.h"
 #include "Common/StringUtil.h"
+#include "Common/Thread.h"
 #include "Common/Version.h"
 #include "Core/Core.h"
 #include "Core/Orca/Profile.h"
@@ -210,8 +218,35 @@ Audit::~Audit()
   m_worker.join();
 }
 
+namespace
+{
+// A cache hit boots at once and hashes behind the running game, so this read must not take CPU or
+// disk time from emulation (players heard the music stutter while a 1.2 GB SD image was read).
+// Online still waits for the result. A miss is waited on before boot and keeps normal priority.
+void EnterBackgroundMode()
+{
+#if defined(_WIN32)
+  // Lowers this thread's CPU, I/O and memory priority together.
+  SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+#elif defined(__APPLE__)
+  // Darwin background band: lowest CPU priority and throttled disk I/O, for this thread only.
+  setpriority(PRIO_DARWIN_THREAD, 0, PRIO_DARWIN_BG);
+#elif defined(__linux__)
+  const auto tid = static_cast<int>(syscall(SYS_gettid));
+  setpriority(PRIO_PROCESS, static_cast<id_t>(tid), 19);
+  // IOPRIO_CLASS_IDLE for this thread (IOPRIO_WHO_PROCESS takes a thread id).
+  constexpr int IOPRIO_WHO_PROCESS = 1, IOPRIO_CLASS_IDLE = 3, IOPRIO_CLASS_SHIFT = 13;
+  syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, tid, IOPRIO_CLASS_IDLE << IOPRIO_CLASS_SHIFT);
+#endif
+}
+}  // namespace
+
 void Audit::Run()
 {
+  Common::SetCurrentThreadName("Orca boot audit");
+  if (m_cache_hit)
+    EnterBackgroundMode();
+  m_started = std::chrono::steady_clock::now();
   for (std::size_t i = 0; i < m_files.size(); ++i)
   {
     if (m_stop.load(std::memory_order_relaxed))
@@ -284,6 +319,18 @@ void Audit::Complete(bool passed, std::string error, std::optional<std::size_t> 
       failure = std::exchange(m_failure, {});
   }
   m_done.notify_all();
+  // Like BootPhase, this line reaches the normal listeners even with BOOT off.
+  if (auto* const logs = Common::Log::LogManager::GetInstance())
+  {
+    const std::string line = fmt::format(
+        "orca boot audit {} in {} ms ({})", passed ? "passed" : "did not pass",
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                              m_started)
+            .count(),
+        m_cache_hit ? "cache hit, background" : "cache miss, before boot");
+    logs->LogWithFullPath(Common::Log::LogLevel::LNOTICE, Common::Log::LogType::BOOT,
+                          "Orca/BootAudit.cpp", 0, line.c_str());
+  }
   if (failure)
     failure();
 }
