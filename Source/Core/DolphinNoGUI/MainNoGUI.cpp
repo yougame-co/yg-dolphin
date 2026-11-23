@@ -50,6 +50,7 @@
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/DiscReport.h"
 #include "Core/Orca/DiscVerify.h"
+#include "Core/Orca/FrameLog.h"
 #include "Core/Orca/Launch.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Perf.h"
@@ -808,6 +809,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   }
 
   bool booted = false;
+  // Test only: ORCA_TEST_FRAMELOG, with the test mark (Orca/FrameLog.h).
+  Orca::FrameLog::Start();
   Orca::BootThrottle::Begin();
   Orca::Status::SetFirstFrameListener(EndBootLogs);
   Orca::BootMemory::Run([&] {

@@ -18,6 +18,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/Host.h"
+#include "Core/Orca/FrameLog.h"
 #include "Core/Orca/GpuDiagnostics.h"
 #include "Core/Orca/Perf.h"
 #include "Core/System.h"
@@ -1174,6 +1175,9 @@ void Presenter::Present(PresentInfo* present_info, bool window_requested)
 
     if (!m_test_framebuffer)
     {
+      // Test only (ORCA_TEST_FRAMELOG): when the present call is made.
+      if (Orca::FrameLog::On())
+        Orca::FrameLog::NotePresent(backbuffer_bound && m_xfb_entry && present_info);
       gpu_start = Clock::now();
       g_gfx->PresentBackbuffer();
       if (time_gpu)

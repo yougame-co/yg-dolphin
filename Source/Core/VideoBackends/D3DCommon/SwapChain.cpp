@@ -13,6 +13,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 
+#include "Core/Orca/FrameLog.h"
 #include "VideoBackends/D3DCommon/DeviceLost.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -26,6 +27,57 @@ static bool IsTearingSupported(IDXGIFactory2* dxgi_factory)
   return SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow_tearing,
                                                  sizeof(allow_tearing))) &&
          allow_tearing != 0;
+}
+
+// Orca, test only (ORCA_TEST_FRAMELOG, Orca/FrameLog.h): the present count DXGI gave the present
+// just made, and when the last present it showed reached the screen. The composition mode comes
+// from IDXGISwapChainMedia where the swap chain has it.
+static Orca::FrameLog::Mode FrameLogMode(DXGI_FRAME_PRESENTATION_MODE mode)
+{
+  switch (mode)
+  {
+  case DXGI_FRAME_PRESENTATION_MODE_COMPOSED:
+    return Orca::FrameLog::Mode::Composed;
+  case DXGI_FRAME_PRESENTATION_MODE_OVERLAY:
+    return Orca::FrameLog::Mode::Overlay;
+  case DXGI_FRAME_PRESENTATION_MODE_NONE:
+    return Orca::FrameLog::Mode::None;
+  case DXGI_FRAME_PRESENTATION_MODE_COMPOSITION_FAILURE:
+    return Orca::FrameLog::Mode::Failure;
+  }
+  return Orca::FrameLog::Mode::Unknown;
+}
+
+static void NoteFrameLog(IDXGISwapChain* swap_chain)
+{
+  UINT count = 0;
+  if (SUCCEEDED(swap_chain->GetLastPresentCount(&count)))
+    Orca::FrameLog::NotePresentId(count);
+  Microsoft::WRL::ComPtr<IDXGISwapChainMedia> media;
+  if (SUCCEEDED(swap_chain->QueryInterface(IID_PPV_ARGS(&media))))
+  {
+    DXGI_FRAME_STATISTICS_MEDIA stats{};
+    if (SUCCEEDED(media->GetFrameStatisticsMedia(&stats)))
+    {
+      if (stats.PresentCount != 0 && stats.SyncQPCTime.QuadPart > 0)
+      {
+        Orca::FrameLog::NoteDisplayed(stats.PresentCount, true,
+                                      static_cast<u64>(stats.SyncQPCTime.QuadPart),
+                                      stats.PresentRefreshCount, stats.SyncRefreshCount,
+                                      FrameLogMode(stats.CompositionMode));
+      }
+      return;
+    }
+  }
+  DXGI_FRAME_STATISTICS stats{};
+  if (SUCCEEDED(swap_chain->GetFrameStatistics(&stats)) && stats.PresentCount != 0 &&
+      stats.SyncQPCTime.QuadPart > 0)
+  {
+    Orca::FrameLog::NoteDisplayed(stats.PresentCount, true,
+                                  static_cast<u64>(stats.SyncQPCTime.QuadPart),
+                                  stats.PresentRefreshCount, stats.SyncRefreshCount,
+                                  Orca::FrameLog::Mode::Unknown);
+  }
 }
 
 static bool GetFullscreenState(IDXGISwapChain* swap_chain)
@@ -397,6 +449,8 @@ bool SwapChain::Present()
     return false;
   }
 
+  if (Orca::FrameLog::On())
+    NoteFrameLog(m_swap_chain.Get());
   return true;
 }
 

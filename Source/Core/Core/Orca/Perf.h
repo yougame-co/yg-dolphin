@@ -269,6 +269,9 @@ struct Boundary
   bool held = false;
   int held_frames = 0;
   int peers = 0;
+  // The session frame that just ended (the match's running frame), for the test-only frame timing
+  // log (Orca/FrameLog.h).
+  int frame = -1;
   // The session's re-run frames so far (restarts with each session).
   u64 rerun_total = 0;
   // Time the player has paused the game, in total.

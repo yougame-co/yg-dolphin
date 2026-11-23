@@ -138,6 +138,7 @@ with the same value meet):
 | `ORCA_TEST_LEAVE_AT` | A joined friend leaves at this frame. |
 | `ORCA_TEST_COMMANDS` | `1`: take the embed protocol's stdin commands without embedding, plus test commands: `test-drop-room`, `test-direct off\|on\|in\|out\|rebuild`, `test-shot <name>`. |
 | `ORCA_TEST_DROP_SILENT` | `1`: `test-drop-room` drops the room connection the way a network failure does: no close, the socket stays open and unread, and the server only notices when the player's next connection replaces it. |
+| `ORCA_TEST_FRAMELOG` | With `ORCA_TEST_COMMANDS=1` in a session: a per-frame timing CSV at this path ([Frame timing log](#frame-timing-log)). |
 | `ORCA_TEST_PRESENT` | Headless only: `WxH` presents into an offscreen image with the OSD and overlay, so screenshots show what a player sees. |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides. |
 | `ORCA_TEST_FULL_SNAPSHOTS` | `1`: snapshots copy all of RAM instead of copy-on-write. |
@@ -1557,6 +1558,19 @@ shortens the windows (and starts the lines without the app's `ready`), `ORCA_PER
 switch off, and `ORCA_TEST_SLOW=<ms>[,<ms_on_performance>]` makes a slow machine: each forward frame
 spins the CPU thread that long (the second value while the picture is Performance's), so the switch
 fires and helps.
+
+### Frame timing log
+
+Test only (diag builds for latency tests): `ORCA_TEST_FRAMELOG=<path>`, read only with the same test
+mark (`ORCA_TEST_COMMANDS=1` in a session), writes a CSV line per forward frame (`Orca/FrameLog.h`):
+the frame, when the lead seat's pad was read for it (`src` `d` Dolphin's own: keyboard, GameCube
+adapter, SDL; `a` the app's stream; `s` a script), when the present call for the picture issued
+while it ran was made, and when that picture reached the screen where the backend says
+(D3D11/D3D12: DXGI frame statistics through the present count, `dq` `x` exact or `e` from the
+refresh count, plus DXGI's composition mode; Metal: the drawable's `presentedTime`, no mode; OpenGL
+and Vulkan: none). Each time is the raw clock (`_t`: QPC, mach ticks; the header gives the rate) and
+Unix epoch ms (`_ms`). Off, each hook is one branch; on, a lock-free ring and a writer thread keep
+the disk off the CPU thread.
 
 Observation only: wall-clock time and drawing settings never reach emulation, the replay, the
 checksums or the compatibility key.

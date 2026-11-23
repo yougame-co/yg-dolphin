@@ -20,6 +20,7 @@
 #include "Common/Version.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Orca/FrameLog.h"
 #include "Core/Orca/JitWarm.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
@@ -938,6 +939,9 @@ void QueueGfx(const GfxChange& change)
 
 void OnBoundary(const Boundary& boundary)
 {
+  // Test only (ORCA_TEST_FRAMELOG): each forward frame's end, for the frame timing log.
+  if (FrameLog::On() && boundary.first_run)
+    FrameLog::NoteBoundary(boundary.frame, boundary.excluded);
   if (boundary.first_run)
     ApplyQueuedGfx();
   if (!s_ready.load(std::memory_order_relaxed))

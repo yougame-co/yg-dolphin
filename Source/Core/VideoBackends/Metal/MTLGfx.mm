@@ -5,6 +5,8 @@
 
 #include "Common/Logging/Log.h"
 
+#include "Core/Orca/FrameLog.h"
+
 #include "VideoBackends/Metal/MTLBoundingBox.h"
 #include "VideoBackends/Metal/MTLObjectCache.h"
 #include "VideoBackends/Metal/MTLPipeline.h"
@@ -680,6 +682,17 @@ void Metal::Gfx::PresentBackbuffer()
     g_state_tracker->EndRenderPass();
     if (m_drawable)
     {
+      // Orca, test only (ORCA_TEST_FRAMELOG, Orca/FrameLog.h): when this drawable reached the
+      // screen (presentedTime, host seconds; 0 when it never did).
+      if (Orca::FrameLog::On())
+      {
+        const u64 key = Orca::FrameLog::LastPresent();
+        [m_drawable addPresentedHandler:^(id<MTLDrawable> drawable) {
+          Orca::FrameLog::NoteDisplayed(
+              key, false, Orca::FrameLog::TicksFromHostSeconds(drawable.presentedTime), 0, 0,
+              Orca::FrameLog::Mode::Unknown);
+        }];
+      }
       // PresentDrawable refuses to allow Dolphin to present faster than the display's refresh rate
       // when windowed (or fullscreen with vsync enabled, but that's more understandable).
       // On the other hand, it helps Xcode's GPU captures start and stop on frame boundaries

@@ -30,6 +30,7 @@
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
 #include "Core/Orca/Activity.h"
+#include "Core/Orca/FrameLog.h"
 #include "Core/Orca/JitWarm.h"
 #include "Core/Orca/Perf.h"
 #include "Core/Orca/Profile.h"
@@ -640,6 +641,9 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       // app's controllers they read from its stream themselves.
       if (const auto scripted = Harness::InputOverride(local_seat))
       {
+        // Test only (ORCA_TEST_FRAMELOG): when the lead seat's pad was read for a new frame.
+        if (Orca::FrameLog::On() && lead && !IsResimulating())
+          Orca::FrameLog::NotePoll('s');
         if (!IsResimulating())
           Orca::Activity::NoteLocalPad(
               Orca::Activity::PAD_SCRIPT | static_cast<u32>(local_seat), *scripted);
@@ -647,13 +651,19 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       }
       const bool live = ControlReference::GetInputGate();
       if (const auto from_app = Orca::Events::LocalPad(ordinal, !IsResimulating()))
+      {
+        if (Orca::FrameLog::On() && lead && !IsResimulating())
+          Orca::FrameLog::NotePoll('a');
         return Orca::Net::EncodePad(filter(
             *from_app, first_run, live || InputCommon::VirtualPadOnly()));
+      }
       if (!lead)
         return Orca::Net::EncodePad(Orca::UX::NeutralPad());
       g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
       g_controller_interface.UpdateInput();
       const GCPadStatus pad = Pad::GetStatus(0);
+      if (Orca::FrameLog::On() && !IsResimulating())
+        Orca::FrameLog::NotePoll('d');
       if (!IsResimulating())
         Orca::Activity::NoteLocalPad(Orca::Activity::PAD_DOLPHIN, pad);
       return Orca::Net::EncodePad(filter(pad, first_run, live));

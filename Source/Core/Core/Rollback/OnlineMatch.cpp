@@ -3610,6 +3610,7 @@ void PerfBoundary(const Match& match)
   boundary.hidden = !Orca::UX::HostVisible();
   boundary.held = LastFrameHeldMs() > 0;
   boundary.held_frames = LastFrameHeldFrames();
+  boundary.frame = match.running;
   if (match.session)
   {
     for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
