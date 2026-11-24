@@ -1253,6 +1253,8 @@ struct YouGameRoom::Impl
     bool announced = false;
     bool drop_in_host = false;
     bool sent_packet = false;
+    // When its last inputs came over the room relay (the direct link's are in direct_inputs).
+    std::optional<Clock::time_point> relay_input;
     // A joiner's own controls from its hello ("ct"; empty: none).
     std::vector<u8> controls;
     // A joiner's queue identity from its hello ("qi"; empty: none).
@@ -1401,6 +1403,8 @@ struct YouGameRoom::Impl
   std::string last_published;  // I/O thread only
   bool mirror_closed = false;  // under s_mirror_mutex: the emptied room went out
   std::atomic<bool> leave_requested{false};
+  // Its host left the room, so this game leaves it too (and plays on alone).
+  std::atomic<bool> host_left{false};
   std::atomic<bool> test_drop{false};
   std::vector<picojson::object> page_commands;  // guarded by bridge_mutex
 
@@ -1697,6 +1701,12 @@ struct YouGameRoom::Impl
       EndRecovery(why);
   }
 
+  // Why this game left the room: its player, or its host left first (it then plays on alone).
+  std::string LeaveWhy() const
+  {
+    return host_left ? "The other player left the room" : "You left the room";
+  }
+
   // `app_code`: the app's error code for this end (Orca::Status); empty for a normal leave.
   void End(std::string why, std::string app_code = "network")
   {
@@ -1866,7 +1876,7 @@ struct YouGameRoom::Impl
       }
       if (!response && !answer)
       {
-        End(stop ? "You left the room" : "YouGame did not respond", stop ? "" : "network");
+        End(stop ? LeaveWhy() : "YouGame did not respond", stop ? "" : "network");
         return false;
       }
       picojson::value json;
@@ -2314,6 +2324,15 @@ struct YouGameRoom::Impl
     std::lock_guard lock(mutex);
     const auto input = direct_inputs.find(id);
     return input == direct_inputs.end() ? std::nullopt : std::optional(input->second);
+  }
+
+  // The latest input this peer sent over either path.
+  std::optional<Clock::time_point> LastInput(const std::string& id, const Peer& peer)
+  {
+    const auto direct_input = LastDirectInput(id);
+    if (!direct_input || (peer.relay_input && *peer.relay_input > *direct_input))
+      return peer.relay_input;
+    return direct_input;
   }
 
   bool InputHoldAlive(const std::string& id, Clock::time_point now) const
@@ -2950,7 +2969,7 @@ struct YouGameRoom::Impl
       return;
     if (stop)
     {
-      End("You left the room", "");
+      End(LeaveWhy(), "");
       return;
     }
     std::string room;
@@ -3015,7 +3034,7 @@ struct YouGameRoom::Impl
       PublishRoomRecovery();
       if (leave_requested)
       {
-        End("You left the room", "");
+        End(LeaveWhy(), "");
         break;
       }
       if (blackout && blackout_opened && !blackout_started &&
@@ -3270,7 +3289,7 @@ struct YouGameRoom::Impl
   // `cancelled`.
   bool PostMirror(Common::HttpRequest& http, const std::string& body, bool last = false,
                   std::chrono::milliseconds timeout = std::chrono::seconds(5),
-                  const std::function<bool()>& cancelled = {})
+                  const std::function<bool()>& cancelled = {}, std::string* why = nullptr)
   {
     std::lock_guard lock(s_mirror_mutex);
     if (generation < s_mirror_newest || mirror_closed)
@@ -3284,16 +3303,33 @@ struct YouGameRoom::Impl
         return false;
       const auto reply =
           Orca::Bridge::Request(std::move(request.get<picojson::object>()), timeout, cancelled);
-      return reply && reply->count("ok") && reply->at("ok").evaluate_as_boolean();
+      if (reply && reply->count("ok") && reply->at("ok").evaluate_as_boolean())
+        return true;
+      if (why && !reply)
+        *why = fmt::format("no answer in {} ms", timeout.count());
+      else if (why)
+      {
+        const auto error = reply->find("error");
+        *why = error != reply->end() && error->second.is<std::string>() ?
+                   fmt::format("it said \"{}\"", error->second.get<std::string>().substr(0, 120)) :
+                   std::string("it said no");
+      }
+      return false;
     }
     const auto response = http.Post(
         bridge_url + "/sdk", body,
         {{"Authorization", "Bearer " + bridge_token}, {"Content-Type", "application/json"}},
         Common::HttpRequest::AllowedReturnCodes::All);
     picojson::value reply;
-    return response && http.GetLastResponseCode() == 200 &&
-           Json::ParseJson(std::string(response->begin(), response->end()), &reply) &&
-           reply.is<picojson::object>() && reply.get("ok").evaluate_as_boolean();
+    if (response && http.GetLastResponseCode() == 200 &&
+        Json::ParseJson(std::string(response->begin(), response->end()), &reply) &&
+        reply.is<picojson::object>() && reply.get("ok").evaluate_as_boolean())
+    {
+      return true;
+    }
+    if (why)
+      *why = fmt::format("HTTP {}", http.GetLastResponseCode());
+    return false;
   }
 
   void SendPageCommands()
@@ -3417,11 +3453,14 @@ struct YouGameRoom::Impl
       }
       if (!body || bridge_done)
         continue;
+      std::string why;
+      // A room that ends while an update waits cancels it: its emptied room goes out next
+      // (PublishEnded), so only a refused or unanswered update is worth a warning.
       if (!PostMirror(http, *body, false, std::chrono::seconds(5),
-                      [this] { return bridge_done.load(); }))
+                      [this] { return bridge_done.load(); }, &why) &&
+          !bridge_done)
       {
-        WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room update (HTTP {})",
-                     http.GetLastResponseCode());
+        WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room update ({})", why);
       }
     }
   }
@@ -4925,6 +4964,32 @@ struct YouGameRoom::Impl
           input_holds.erase(hold);
         }
       }
+      // The host's game closed (a quit, a killed or crashed process): no reconnect is coming, so
+      // the joiner hears it left now and its match ends on screen.
+      if (loss == RoomLoss::None && joining && peer.drop_in_host &&
+          peer.presence.HostGone(now, LastInput(id, peer), peer.local_room_away))
+      {
+        const int slot = peer.slot;
+        const std::string name = peer.name;
+        PeerRoomPresence presence = peer.presence;
+        const bool local_room_away = peer.local_room_away;
+        presence.suspended = true;
+        {
+          std::lock_guard lock(mutex);
+          input_holds.erase(id);
+          host_away_until.reset();
+          host_hold_until.reset();
+        }
+        host_left = true;
+        RoomNotice(fmt::format("room-away peer {} ended host-gone", slot + 1));
+        ResetPeer(peers.find(id), "host-gone");
+        peer.slot = slot;
+        peer.name = name;
+        peer.drop_in_host = true;
+        peer.presence = presence;
+        peer.local_room_away = local_room_away;
+        continue;
+      }
       if (loss == RoomLoss::None || peer.presence.suspended)
         continue;
       // Friends alone can wait for a fresh drop-in; queue expiry leaves the match cleanly.
@@ -5709,6 +5774,7 @@ struct YouGameRoom::Impl
               RoomNotice(fmt::format("room-leave peer {} ended real-leave", p->second.slot + 1));
               if (p->second.drop_in_host)
               {
+                host_left = true;
                 std::lock_guard lock(mutex);
                 host_away_until.reset();
                 host_hold_until.reset();
@@ -6234,6 +6300,8 @@ struct YouGameRoom::Impl
         return;
     }
     peer.sent_packet = true;
+    if (!packet.pads.empty())
+      peer.relay_input = Now();
     if (!joining)
       peer.resume_requested = false;
     if (peer.linked)
@@ -6287,6 +6355,9 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
       break;
     case RoomTestStep::Kind::FlushHeld:
       room.FlushHeld();
+      break;
+    case RoomTestStep::Kind::LeaveRoom:
+      room.End(room.LeaveWhy(), "");
       break;
     case RoomTestStep::Kind::PageEvent:
       room.OnPageEvent(step.text);
@@ -7161,11 +7232,16 @@ bool YouGameRoom::Connected() const
   return GetState() == RoomState::Waiting;
 }
 
+void YouGameRoom::LeaveNow()
+{
+  m_impl->leave_requested = true;
+}
+
 void YouGameRoom::Leave()
 {
   m_impl->stop = true;
   if (m_impl->thread.joinable())
     m_impl->thread.join();
-  m_impl->End("You left the room", "");
+  m_impl->End(m_impl->LeaveWhy(), "");
 }
 }  // namespace Orca::Net

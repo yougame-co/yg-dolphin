@@ -2881,6 +2881,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.106
+
+- When a friend's game you joined closes, your game notices within a few seconds instead of holding the match for up to 90 seconds, and tells you on screen that you're playing on your own.
+- Quitting leaves the room right away, so the friend you played with isn't left waiting.
+
 ### 0.3.105
 
 - Faster start: on a computer that has started the game before, the first seconds no longer run slowly while the game files are checked; the check now runs at low priority behind the game (online play still waits for it).
