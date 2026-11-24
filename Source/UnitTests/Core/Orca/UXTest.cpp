@@ -3743,6 +3743,36 @@ TEST(OrcaUXChat, RefusesControlCharactersNewlinesAndBadEncodings)
   EXPECT_TRUE(Parse("chat a %F4%8F%BF%BF"));  // U+10FFFF, the last code point, is fine
 }
 
+TEST(OrcaUXOverlay, ANoticeOutlastsAToastAndUpdateKeepsIt)
+{
+  OverlayModel m;
+  m.AddToast(HostLeftNotice("ada"), 0, OverlayModel::NOTICE_MS);
+  m.AddToast("ada left", 0);
+  auto v = m.View(10, Stats::Off);
+  ASSERT_EQ(v.toasts.size(), 2u);
+  // The draw thread's Update drops the toast at 3 s and keeps the notice, which was added first.
+  LinkView link;
+  m.Update(link, 5000);
+  v = m.View(5000, Stats::Off);
+  ASSERT_EQ(v.toasts.size(), 1u);
+  EXPECT_EQ(v.toasts[0].text, "ada left. You're playing on your own.");
+  EXPECT_FLOAT_EQ(v.toasts[0].alpha, 1);
+  EXPECT_NEAR(m.View(7750, Stats::Off).toasts[0].alpha, 0.5f, 1e-4);
+  m.Update(link, 8001);
+  EXPECT_TRUE(m.View(8001, Stats::Off).toasts.empty());
+}
+
+TEST(OrcaUXOverlay, HostLeftNoticeNamesTheHostWhenHeard)
+{
+  EXPECT_EQ(HostLeftNotice("ada"), "ada left. You're playing on your own.");
+  EXPECT_EQ(HostLeftNotice(""), "Your opponent left. You're playing on your own.");
+  EXPECT_EQ(HostLeftNotice("your friend"), "Your opponent left. You're playing on your own.");
+  EXPECT_EQ(HostAwayNotice("ada"),
+            "ada lost the connection. You're playing on your own until they're back.");
+  EXPECT_EQ(HostAwayNotice(""),
+            "Your opponent lost the connection. You're playing on your own until they're back.");
+}
+
 TEST(OrcaUXOverlay, ChatLinesStayEightSecondsTheNewestThree)
 {
   OverlayModel m;

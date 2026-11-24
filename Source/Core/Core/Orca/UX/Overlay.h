@@ -79,6 +79,8 @@ public:
 
   // A chat line shows this long, fading like a toast. Only the newest CHAT_KEEP show.
   static constexpr double CHAT_MS = 8000;
+  // A notice the player must not miss (the other player left) stays as long as a chat line.
+  static constexpr double NOTICE_MS = CHAT_MS;
   static constexpr std::size_t CHAT_KEEP = 3;
 
   struct Toast
@@ -109,8 +111,8 @@ public:
 
   // Called when the port list changes. Any thread. An unchanged list shows nothing new.
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
-  // A custom toast, such as a match result. Any thread.
-  void AddToast(std::string text, double now_ms);
+  // A custom toast, such as a match result, shown for `ms`. Any thread.
+  void AddToast(std::string text, double now_ms, double ms = TOAST_MS);
   // A decoded line of the app's chat. Any thread.
   void AddChat(std::string name, std::string text, double now_ms);
   // The newest link stats. Drawing thread, each frame.
@@ -136,7 +138,13 @@ private:
   mutable std::mutex m_lock;
   bool m_seen_ports = false;
   std::vector<Events::PortInfo> m_ports;
-  std::deque<std::pair<double, std::string>> m_toasts;
+  struct ToastEntry
+  {
+    double at;
+    double ms;
+    std::string text;
+  };
+  std::deque<ToastEntry> m_toasts;
   struct ChatEntry
   {
     double at;
@@ -178,6 +186,13 @@ void SetPerf(Perf perf);
 void FrameBoundary(bool shown, double game_held_ms, int game_held_frames);
 // A short toast under the circle. Any thread.
 void ShowToast(std::string text);
+// A toast that stays OverlayModel::NOTICE_MS, for news the player must not miss. Any thread.
+void ShowNotice(std::string text);
+// A joiner's notice when its host left and this game plays on alone. `host` may be empty or the
+// "your friend" stand-in for a name never heard.
+std::string HostLeftNotice(std::string_view host);
+// The same when the host's connection dropped and the room holds its seat for its return.
+std::string HostAwayNotice(std::string_view host);
 // A declared-origin host restarts its own game to shorten a friend's join replay.
 void ShowRestartForJoin(std::string_view name);
 // A declared-origin queue host restarts before the matched game.

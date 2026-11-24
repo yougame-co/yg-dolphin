@@ -250,6 +250,8 @@ struct Match
   // Option B: the input delay picked from the measured round trip when the session started, held
   // for the match (PickDelay). nullopt: the page's choice (ChosenDelay).
   std::optional<int> picked_delay;
+  // Option B: the picked delay was made again from both players' round trips (RelinkDelay).
+  bool delay_relinked = false;
   std::optional<Clock::time_point> last_return;
   Common::EventHook on_state_changed;
 
@@ -523,11 +525,12 @@ std::optional<int> ChosenDelay()
   return DEFAULT_DELAY;
 }
 
-// Option B (Luis, 11-21): the input delay is measured and picked from ping when the session starts,
-// then held for the whole match. An input goes up to the room server and down to the opponent:
-// about one of this player's round trips when both players' links are alike. The delay covers that
-// in whole 60 Hz frames, from 2 (a nearby server) to the session's ceiling of 6 (100 ms); the
-// rollback window takes the rest. No round trip measured yet: DEFAULT_DELAY.
+// Option B: the input delay is measured and picked from ping when the session starts, then held
+// for the whole match. An input goes up to the room server and down to the opponent: about one of
+// this player's round trips when both players' links are alike. The delay covers that in whole
+// 60 Hz frames, from 2 (a nearby server) to the session's ceiling of 6 (100 ms); the rollback
+// window takes the rest. No round trip measured yet: DEFAULT_DELAY. Once the opponent's round trip
+// is in, the pick is made again from the real one way (RelinkDelay, LinkDelay).
 constexpr int PING_DELAY_MIN = 2;
 constexpr int PING_DELAY_MAX = 6;
 int PingDelay(const std::vector<int>& round_trips, int* median_ms)
@@ -722,6 +725,7 @@ Orca::Net::Config SessionConfig()
 void PickDelay(Match& match, Orca::Net::Config& config)
 {
   match.picked_delay.reset();
+  match.delay_relinked = false;
   if (!OptionBRoom())
     return;
   u32 sequence = 0;
@@ -733,6 +737,30 @@ void PickDelay(Match& match, Orca::Net::Config& config)
                  "Option B: input delay {} frames, picked from a {} ms round trip (median of {}), "
                  "held for the match",
                  *match.picked_delay, median_ms, round_trips.size());
+}
+
+// The start pick took one of this player's round trips to the room server for the one way to the
+// opponent, which holds only when both links are alike: across a continent the far player's pick
+// came out larger than the link needs. Once the session knows both players' medians (the
+// opponent's comes in its session packets, within the first frames), the delay is picked once more
+// from the real one way (LinkDelay) and held from then on.
+void RelinkDelay(Match& match)
+{
+  if (!match.picked_delay || match.delay_relinked || !match.session)
+    return;
+  const Orca::Net::Stats& stats = match.session->GetStats();
+  const Orca::Net::DirectSummary direct = Orca::Online::Direct();
+  const int direct_rtt_ms = direct.transport != 0 ? direct.rtt_ms : -1;
+  const std::optional<int> delay = LinkDelay(stats.rtt_median, stats.peer_rtt_median, direct_rtt_ms);
+  if (!delay)
+    return;
+  match.delay_relinked = true;
+  NOTICE_LOG_FMT(ROLLBACK,
+                 "Option B: input delay {} frames (was {}), from round trips of {} ms here and {} ms "
+                 "there{}, held for the match",
+                 *delay, *match.picked_delay, stats.rtt_median, stats.peer_rtt_median,
+                 direct_rtt_ms >= 0 ? fmt::format(", {} ms direct", direct_rtt_ms) : "");
+  match.picked_delay = delay;
 }
 
 // ---- Host ----
@@ -1617,6 +1645,7 @@ bool WaitForAwayHost(Match& match)
       !match.host_room_wait.Start(Clock::now(), Orca::Online::HostAwayDeadline()))
     return false;
   const auto deadline = match.host_room_wait.until;
+  Orca::UX::ShowNotice(Orca::UX::HostAwayNotice(match.host_name));
   BecomeSolo(match, "host room away", nullptr, false, true);
   match.host_room_wait.until = deadline;
   match.joining = true;
@@ -4307,7 +4336,7 @@ void HostGone(Core::System& system, Match& match, const std::function<Pad(int)>&
     }
     // A queue room's screen already says so (UX/SetEnd.h).
     if (Orca::Online::RoomQueue() == "private")
-      Core::DisplayMessage(fmt::format("{} left: you play on", match.host_name), 6000);
+      Orca::UX::ShowNotice(Orca::UX::HostLeftNotice(match.host_name));
     // Ranked set undecided: wait for the verdict (only awarded while someone is in the room).
     const bool linger = Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive() &&
                         !Orca::Online::RoomEnded();
@@ -4774,6 +4803,7 @@ std::optional<int> Boundary(Core::System& system,
   // ChosenDelay); each player's delay is its own.
   if (const auto round_trip_ms = NewRoundTrip(&match.round_trip_sequence))
     match.session->OnRoundTrip(*round_trip_ms);
+  RelinkDelay(match);
   match.session->SetFixedDelay(match.picked_delay ? match.picked_delay : ChosenDelay());
   // A frame over two frame periods was a local hitch (disc read, shader compile). Time the game
   // itself held it (a load, the same on every machine) is not this machine's: a frame slow only by
@@ -5199,9 +5229,9 @@ static std::optional<int> SessionBoundary(
     if (Soft() && survivable && match.joining)
     {
       // Unplugged from the host's game; this one goes on.
-      Core::DisplayMessage(peer_silent ? std::string(PEER_SILENT_SENTENCE) :
-                                         "The connection to your friend's game ended: you play on",
-                           6000);
+      Orca::UX::ShowNotice(peer_silent ? std::string(PEER_SILENT_SENTENCE) :
+                                         "The connection to your friend's game ended. You're "
+                                         "playing on your own.");
       BecomeSolo(match, "the session ended", "host-left");
       RunSolo(match, local_pad);
       return rewound_to;
@@ -6036,6 +6066,19 @@ std::optional<std::vector<int>> DropMissingFriends(Orca::Net::Session& session, 
   for (const int lead : leads)
     session.DropSeat(lead);
   return group_seats;
+}
+
+std::optional<int> LinkDelay(int my_rtt_ms, int peer_rtt_ms, int direct_rtt_ms)
+{
+  if (my_rtt_ms < 0 || peer_rtt_ms < 0)
+    return std::nullopt;
+  // Through the room server an input goes half this player's round trip up and half the
+  // opponent's down. A direct link carries it in half that link's round trip, when shorter.
+  double one_way_ms = (my_rtt_ms + peer_rtt_ms) / 2.0;
+  if (direct_rtt_ms >= 0)
+    one_way_ms = std::min(one_way_ms, direct_rtt_ms / 2.0);
+  const int frames = static_cast<int>(std::ceil(one_way_ms * 60 / 1000 - 1e-6));
+  return std::clamp(frames, PING_DELAY_MIN, PING_DELAY_MAX);
 }
 
 int WaitingFriendSeat(int local_seat, const std::vector<int>& missing, bool joining,

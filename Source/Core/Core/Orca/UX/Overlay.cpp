@@ -121,8 +121,9 @@ void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports
     if (was != m_ports.end() && was->name == p.name && was->remote)
       continue;
     // A joiner's first list already has the host, who is not joining.
-    m_toasts.emplace_back(now_ms, first ? fmt::format("{} is on port {}", NameOf(p), p.port + 1) :
-                                          fmt::format("{} joined on port {}", NameOf(p), p.port + 1));
+    m_toasts.push_back({now_ms, TOAST_MS,
+                        first ? fmt::format("{} is on port {}", NameOf(p), p.port + 1) :
+                                fmt::format("{} joined on port {}", NameOf(p), p.port + 1)});
   }
   for (const Events::PortInfo& p : m_ports)
   {
@@ -130,17 +131,17 @@ void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports
       continue;
     const auto now = find(ports, p.port);
     if (now == ports.end() || now->name != p.name)
-      m_toasts.emplace_back(now_ms, fmt::format("{} left", NameOf(p)));
+      m_toasts.push_back({now_ms, TOAST_MS, fmt::format("{} left", NameOf(p))});
   }
   m_ports = ports;
   while (m_toasts.size() > 3)
     m_toasts.pop_front();
 }
 
-void OverlayModel::AddToast(std::string text, double now_ms)
+void OverlayModel::AddToast(std::string text, double now_ms, double ms)
 {
   std::lock_guard lk(m_lock);
-  m_toasts.emplace_back(now_ms, std::move(text));
+  m_toasts.push_back({now_ms, ms, std::move(text)});
   while (m_toasts.size() > 3)
     m_toasts.pop_front();
 }
@@ -160,8 +161,7 @@ void OverlayModel::Update(const LinkView& link, double now_ms)
   m_stall_history.emplace_back(now_ms, link.stalls);
   while (m_stall_history.size() > 1 && m_stall_history.front().first < now_ms - STALL_WINDOW_MS)
     m_stall_history.pop_front();
-  while (!m_toasts.empty() && m_toasts.front().first < now_ms - TOAST_MS)
-    m_toasts.pop_front();
+  std::erase_if(m_toasts, [&](const ToastEntry& t) { return t.at + t.ms < now_ms; });
   while (!m_chats.empty() && m_chats.front().at < now_ms - CHAT_MS)
     m_chats.pop_front();
 }
@@ -303,13 +303,13 @@ OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats, Perf perf) co
     }
     f.waiting = fmt::format("Waiting for {}…", who);
   }
-  for (const auto& [at, text] : m_toasts)
+  for (const ToastEntry& t : m_toasts)
   {
-    const double left = at + TOAST_MS - now_ms;
+    const double left = t.at + t.ms - now_ms;
     if (left <= 0)
       continue;
     f.toasts.push_back(
-        {text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0)), at});
+        {t.text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0)), t.at});
   }
   for (const ChatEntry& c : m_chats)
   {
@@ -1334,6 +1334,31 @@ void FrameBoundary(bool shown, double game_held_ms, int game_held_frames)
 void ShowToast(std::string text)
 {
   s_overlay.AddToast(std::move(text), NowMs());
+}
+
+void ShowNotice(std::string text)
+{
+  s_overlay.AddToast(std::move(text), NowMs(), OverlayModel::NOTICE_MS);
+}
+
+namespace
+{
+bool NameHeard(std::string_view host)
+{
+  return !host.empty() && host != "your friend" && host != "Your friend";
+}
+}  // namespace
+
+std::string HostLeftNotice(std::string_view host)
+{
+  return NameHeard(host) ? fmt::format("{} left. You're playing on your own.", host) :
+                           std::string("Your opponent left. You're playing on your own.");
+}
+
+std::string HostAwayNotice(std::string_view host)
+{
+  return fmt::format("{} lost the connection. You're playing on your own until they're back.",
+                     NameHeard(host) ? host : std::string_view("Your opponent"));
 }
 
 void ShowRestartForMatch()

@@ -80,6 +80,11 @@ private:
 std::optional<std::vector<int>> FriendsMissingInputs(const Orca::Net::Session& session, bool doubles);
 int WaitingFriendSeat(int local_seat, const std::vector<int>& missing, bool joining,
                        int host_seat, const std::vector<int>& seated);
+// Option B's input delay in frames from the link between the two players: one way is half this
+// player's median round trip to the room server plus half the opponent's, or half the direct
+// link's round trip when that is shorter (direct_rtt_ms < 0: no direct link). Clamped to 2..6.
+// nullopt while either median is unknown (< 0).
+std::optional<int> LinkDelay(int my_rtt_ms, int peer_rtt_ms, int direct_rtt_ms = -1);
 bool WaitForFriendsRoster(const Orca::Net::Session& session, bool joining, bool doubles);
 std::optional<std::vector<int>> DropMissingFriends(Orca::Net::Session& session, bool doubles);
 

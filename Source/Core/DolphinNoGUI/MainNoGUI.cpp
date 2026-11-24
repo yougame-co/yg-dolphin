@@ -55,6 +55,7 @@
 #include "Core/Orca/Perf.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Sandbox.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/PowerPC/JitInterface.h"
@@ -844,6 +845,9 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   // Stopping can take a while (a session leaves its room), so get out of the app's way first.
   s_platform->EmbedTeardown();
   Core::Stop(Core::System::GetInstance());
+  // The CPU thread is stopping, so no frame reacts to the room ending: the others hear this player
+  // leave now, not after the teardown below, which can outlast the app's wait for the exit.
+  Orca::Online::LeaveNow();
 
   Core::Shutdown(Core::System::GetInstance());
   first_frame_hook.reset();

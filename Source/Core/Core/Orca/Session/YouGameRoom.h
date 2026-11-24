@@ -356,6 +356,10 @@ public:
 
   // Leaves the room (reporting a running match void).
   void Leave();
+  // Starts this player's leave on the room's own thread and returns at once: the goodbye goes out
+  // while the caller does other work (a quit tears the emulator down meanwhile). The room ends;
+  // Leave still waits for it.
+  void LeaveNow();
   // Why this player is about to leave, told to the friend first so both report the same thing (an
   // Orca::Status code; only "desync" is passed on).
   void SetLeaveReason(std::string reason);
@@ -491,6 +495,8 @@ struct RoomTestStep
     AppCaps,
     SocketMessage,
     FlushHeld,
+    // This game leaves the room (its room thread's end on a leave).
+    LeaveRoom,
   };
   Kind kind;
   int milliseconds = 0;

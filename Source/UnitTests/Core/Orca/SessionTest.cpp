@@ -5510,6 +5510,52 @@ TEST(OrcaDoubles, WaitingOverlayAlwaysSelectsAnotherSeat)
   EXPECT_EQ(WaitingFriendSeat(0, {0}, true, 0, {0}), -1);
 }
 
+TEST(OrcaOptionB, LinkDelayWaitsForBothRoundTrips)
+{
+  using Rollback::OnlineMatch::LinkDelay;
+  EXPECT_FALSE(LinkDelay(-1, 50));
+  EXPECT_FALSE(LinkDelay(50, -1));
+  EXPECT_FALSE(LinkDelay(-1, -1, 10));
+}
+
+TEST(OrcaOptionB, LinkDelayMatchesThePingPickWhenBothLinksAreAlike)
+{
+  using Rollback::OnlineMatch::LinkDelay;
+  // One way through the server is one round trip when both are alike, as the start pick assumes.
+  EXPECT_EQ(LinkDelay(33, 33), 2);
+  EXPECT_EQ(LinkDelay(40, 40), 3);
+  // Exactly three frames' worth stays three.
+  EXPECT_EQ(LinkDelay(50, 50), 3);
+  EXPECT_EQ(LinkDelay(100, 100), 6);
+}
+
+TEST(OrcaOptionB, LinkDelayFollowsBothPlayersAcrossAContinent)
+{
+  using Rollback::OnlineMatch::LinkDelay;
+  // Far from the server (90 ms) against near it (20 ms): the start picks were 6 and 2 frames; the
+  // real one way is 55 ms, 4 frames, the same on both machines.
+  EXPECT_EQ(LinkDelay(90, 20), 4);
+  EXPECT_EQ(LinkDelay(20, 90), 4);
+}
+
+TEST(OrcaOptionB, LinkDelayTakesADirectLinkWhenShorter)
+{
+  using Rollback::OnlineMatch::LinkDelay;
+  EXPECT_EQ(LinkDelay(90, 20, 70), 3);
+  EXPECT_EQ(LinkDelay(20, 90, 70), 3);
+  // A direct link slower than the server's path does not raise the delay.
+  EXPECT_EQ(LinkDelay(20, 20, 100), 2);
+  EXPECT_EQ(LinkDelay(120, 120, 2), 2);
+}
+
+TEST(OrcaOptionB, LinkDelayStaysWithinTwoToSixFrames)
+{
+  using Rollback::OnlineMatch::LinkDelay;
+  EXPECT_EQ(LinkDelay(0, 0), 2);
+  EXPECT_EQ(LinkDelay(400, 300), 6);
+  EXPECT_EQ(LinkDelay(400, 300, 250), 6);
+}
+
 TEST(OrcaDoubles, SuccessiveBatchesKeepTheUnconfirmedStartGate)
 {
   FourFriends friends(true, 1);
