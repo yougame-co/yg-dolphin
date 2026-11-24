@@ -1425,6 +1425,7 @@ bool WaitForAwayHost(Match& match)
       !match.host_room_wait.Start(Clock::now(), Orca::Online::HostAwayDeadline()))
     return false;
   const auto deadline = match.host_room_wait.until;
+  Orca::UX::ShowNotice(Orca::UX::HostAwayNotice(match.host_name));
   BecomeSolo(match, "host room away", nullptr, false, true);
   match.host_room_wait.until = deadline;
   match.joining = true;
@@ -4015,7 +4016,7 @@ void HostGone(Core::System& system, Match& match, const std::function<Pad(int)>&
     }
     // A queue room's screen already says so (UX/SetEnd.h).
     if (Orca::Online::RoomQueue() == "private")
-      Core::DisplayMessage(fmt::format("{} left: you play on", match.host_name), 6000);
+      Orca::UX::ShowNotice(Orca::UX::HostLeftNotice(match.host_name));
     // Ranked set undecided: wait for the verdict (only awarded while someone is in the room).
     const bool linger = Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive() &&
                         !Orca::Online::RoomEnded();
@@ -4907,9 +4908,9 @@ static std::optional<int> SessionBoundary(
     if (Soft() && survivable && match.joining)
     {
       // Unplugged from the host's game; this one goes on.
-      Core::DisplayMessage(peer_silent ? std::string(PEER_SILENT_SENTENCE) :
-                                         "The connection to your friend's game ended: you play on",
-                           6000);
+      Orca::UX::ShowNotice(peer_silent ? std::string(PEER_SILENT_SENTENCE) :
+                                         "The connection to your friend's game ended. You're "
+                                         "playing on your own.");
       BecomeSolo(match, "the session ended", "host-left");
       RunSolo(match, local_pad);
       return rewound_to;

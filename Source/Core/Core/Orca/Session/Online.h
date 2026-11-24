@@ -216,6 +216,10 @@ void TestDropRoom();
 // datagrams, or none again; "rebuild" rebuilds every link.
 void TestDirect(const std::string& command);
 
+// The process is stopping: the room's leave starts now, ahead of the emulator's teardown, so the
+// others hear this player leave even if the app ends the process before Shutdown runs. Never
+// blocks; Shutdown still waits for the room.
+void LeaveNow();
 // Leaves the room (voiding a running match) and stops its thread, then waits up to 2 s for rooms
 // ShutdownInBackground is still leaving. Call when emulation stops.
 void Shutdown();

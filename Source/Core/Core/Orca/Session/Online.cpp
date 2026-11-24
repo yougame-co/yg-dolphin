@@ -932,6 +932,12 @@ void TestDirect(const std::string& command)
     room->TestDirect(command);
 }
 
+void LeaveNow()
+{
+  if (const auto room = Room())
+    room->LeaveNow();
+}
+
 void Shutdown()
 {
   std::shared_ptr<Net::YouGameRoom> room;

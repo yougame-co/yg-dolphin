@@ -1866,12 +1866,13 @@ TEST(OrcaRoomResilience, AwayWithDirectInputsKeepsPeerAndBackDoesNotAnnounceAgai
 
 TEST(OrcaRoomResilience, SilentDirectInputsKeepTheSessionUntilTheRoomVerdict)
 {
+  // The room found the link quiet (its silence window), not closed: the host may come back.
   const auto trace = TraceRoomForTest(TraceOptions(), {
       {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
-      {RK::DirectInput, 1000, "peer"}, {RK::Message, 1000, RosterMessage("away")},
-      {RK::Tick, 10999}, {RK::Tick, 11000}, {RK::Tick, 12000},
-      {RK::Message, 12000, PeerPacket()},
-      {RK::Message, 15000, RosterMessage("back")}, {RK::Message, 15001, PeerHello()},
+      {RK::DirectInput, 1000, "peer"}, {RK::Message, 16000, RosterMessage("away")},
+      {RK::Tick, 25999}, {RK::Tick, 26000}, {RK::Tick, 27000},
+      {RK::Message, 27000, PeerPacket()},
+      {RK::Message, 30000, RosterMessage("back")}, {RK::Message, 30001, PeerHello()},
   });
   EXPECT_TRUE(trace[4].events.empty());
   EXPECT_TRUE(trace[5].events.empty());
@@ -1909,6 +1910,137 @@ TEST(OrcaRoomResilience, RealLeaveAlsoEndsTheSuspendedHostWait)
   EXPECT_EQ(trace[4].events[0].kind, PeerEvent::Kind::Left);
   EXPECT_TRUE(trace[4].events[0].reason.empty());
   EXPECT_FALSE(trace[4].host_away_until);
+}
+
+TEST(OrcaRoomResilience, AJoinerLeavingAfterItsHostLeftSaysTheOtherPlayerLeft)
+{
+  const auto left = TraceRoomForTest(TraceOptions(), {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::Message, 1000, RosterMessage("leave", true, false)}, {RK::LeaveRoom, 1001},
+  });
+  ASSERT_EQ(left[2].events.size(), 1u);
+  EXPECT_TRUE(left[2].events[0].host);
+  EXPECT_EQ(left[3].status, "The other player left the room");
+  EXPECT_EQ(left[3].state, RoomState::Ended);
+
+  const auto gone = TraceRoomForTest(TraceOptions(), {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::DirectInput, 1000, "peer"}, {RK::Message, 1000, RosterMessage("away")},
+      {RK::Tick, 6000}, {RK::LeaveRoom, 6001},
+  });
+  EXPECT_EQ(gone[5].status, "The other player left the room");
+
+  const auto own = TraceRoomForTest(TraceOptions(), {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::LeaveRoom, 1000},
+  });
+  EXPECT_EQ(own[2].status, "You left the room");
+}
+
+TEST(OrcaRoomResilience, HostGoneNeedsAClosedSocketAndSilentInputs)
+{
+  const auto start = RoomClock::time_point{};
+  PeerRoomPresence host;
+  EXPECT_FALSE(host.HostGone(start + 60s, start, false));
+  host.Away(start);
+  // Closed as its inputs stopped: gone once both have been quiet for HOST_GONE_SILENCE.
+  EXPECT_FALSE(host.HostGone(start + HOST_GONE_SILENCE - 1ms, start, false));
+  EXPECT_TRUE(host.HostGone(start + HOST_GONE_SILENCE, start, false));
+  EXPECT_TRUE(host.HostGone(start + HOST_GONE_SILENCE, start - HOST_CLOSE_GAP, false));
+  EXPECT_LT(HOST_GONE_SILENCE, PEER_SILENCE_LIMIT);
+  // Announced long after its inputs stopped: the room found a quiet link, which may come back.
+  EXPECT_FALSE(host.HostGone(start + 60s, start - HOST_CLOSE_GAP - 1ms, false));
+  EXPECT_FALSE(host.HostGone(start + 60s, start - 15s, false));
+  // Never heard sending inputs: nothing to tell a closed game from a quiet one.
+  EXPECT_FALSE(host.HostGone(start + 60s, std::nullopt, false));
+  // Its game still sends inputs over the direct link: only its room socket went.
+  EXPECT_FALSE(host.HostGone(start + 6s, start + 2s, false));
+  EXPECT_TRUE(host.HostGone(start + 7s, start + 2s, false));
+  // This game's own room socket is the one away.
+  EXPECT_FALSE(host.HostGone(start + 60s, start, true));
+  host.suspended = true;
+  EXPECT_FALSE(host.HostGone(start + 60s, start, false));
+}
+
+TEST(OrcaRoomResilience, JoinerHearsAClosedHostLeaveWithinSeconds)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(), {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::DirectInput, 1000, "peer"}, {RK::Message, 1000, RosterMessage("away")},
+      {RK::Tick, 5999}, {RK::Tick, 6000}, {RK::Tick, 7000},
+  });
+  ASSERT_TRUE(trace[3].host_away_until);
+  ASSERT_TRUE(trace[3].host_input_deadline);
+  EXPECT_TRUE(trace[4].events.empty());
+  ASSERT_EQ(trace[5].events.size(), 1u);
+  EXPECT_EQ(trace[5].events[0].kind, PeerEvent::Kind::Left);
+  EXPECT_TRUE(trace[5].events[0].host);
+  EXPECT_EQ(trace[5].events[0].reason, "host-gone");
+  EXPECT_FALSE(trace[5].host_away_until);
+  // No hold left for the joiner to wait out (OnlineMatch's WaitForAwayHost).
+  EXPECT_FALSE(trace[5].host_input_deadline);
+  EXPECT_TRUE(std::ranges::find(trace[5].notices, "room-away peer 1 ended host-gone") !=
+              trace[5].notices.end());
+  EXPECT_TRUE(trace[6].events.empty());
+}
+
+TEST(OrcaRoomResilience, JoinerHearsAClosedRelayedHostLeave)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(), {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::Message, 1000, PeerPacket()}, {RK::Message, 1000, RosterMessage("away")},
+      {RK::Tick, 5999}, {RK::Tick, 6000},
+  });
+  ASSERT_EQ(trace[2].packets.size(), 1u);
+  EXPECT_TRUE(trace[4].events.empty());
+  ASSERT_EQ(trace[5].events.size(), 1u);
+  EXPECT_EQ(trace[5].events[0].reason, "host-gone");
+}
+
+TEST(OrcaRoomResilience, JoinerKeepsAHostTheRoomFoundSilent)
+{
+  // The room announces a quiet link only after its own silence window: that host may be back.
+  const auto trace = TraceRoomForTest(TraceOptions(), {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::DirectInput, 1000, "peer"}, {RK::Message, 16000, RosterMessage("away")},
+      {RK::Tick, 60000},
+  });
+  EXPECT_TRUE(trace[4].events.empty());
+  EXPECT_TRUE(trace[4].host_away_until);
+}
+
+TEST(OrcaRoomResilience, JoinerKeepsAnAwayHostWhileItsDirectInputsFlow)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(), {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::DirectInput, 1000, "peer"}, {RK::Message, 1000, RosterMessage("away")},
+      {RK::DirectInput, 5000, "peer"}, {RK::Tick, 9999}, {RK::Tick, 10000},
+  });
+  EXPECT_TRUE(trace[5].events.empty());
+  EXPECT_TRUE(trace[5].host_away_until);
+  ASSERT_EQ(trace[6].events.size(), 1u);
+  EXPECT_EQ(trace[6].events[0].reason, "host-gone");
+}
+
+TEST(OrcaRoomResilience, JoinerOwnRoomDropIsNotItsHostLeaving)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(), {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::DirectInput, 1000, "peer"}, {RK::SocketClose, 1000}, {RK::Tick, 20000},
+  });
+  ASSERT_TRUE(trace[3].host_away_until);
+  EXPECT_TRUE(trace[4].events.empty());
+  EXPECT_TRUE(trace[4].host_away_until);
+}
+
+TEST(OrcaRoomResilience, HostRoomKeepsAnAwayFriendPastTheHostGoneSilence)
+{
+  const auto trace = TraceRoomForTest(TraceOptions(false), {
+      {RK::Message, 0, RosterMessage("welcome", false)}, {RK::Message, 0, PeerHello(false)},
+      {RK::DirectInput, 1000, "peer"}, {RK::Message, 1000, RosterMessage("away", false)},
+      {RK::Tick, 20000},
+  });
+  EXPECT_TRUE(trace[4].events.empty());
 }
 
 TEST(OrcaRoomResilience, HoldExpiresEvenWithDirectInputsAndDuplicateAwayDoesNotExtendIt)
@@ -3511,7 +3643,7 @@ TEST(OrcaRoomResilience, OldSessionStalledNoticeCrossingBackKeepsTheRoom)
   const auto trace = TraceRoomForTest(TraceOptions(), {
       {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
       {RK::DirectInput, 1000, "peer"}, {RK::Message, 1000, RosterMessage("away")},
-      {RK::Message, 9000, RosterMessage("back")},
+      {RK::DirectInput, 8000, "peer"}, {RK::Message, 9000, RosterMessage("back")},
       {RK::Message, 9001, R"({"t":"msg","from":"peer","d":{"k":"drop","r":"stalled"}})"},
   });
   EXPECT_EQ(trace.back().state, RoomState::Waiting);
@@ -4128,6 +4260,22 @@ TEST_F(OrcaRoomRuntime, QuitCancelsATicketRefreshAndAttemptsLeave)
   room->Leave();
   EXPECT_LT(RoomClock::now() - start, 3s);
   EXPECT_TRUE(Sent(code, "leave"));
+}
+
+TEST_F(OrcaRoomRuntime, LeaveNowSendsTheLeaveWithoutWaitingForIt)
+{
+  const std::string code = "leavenow1";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return Sent(code, "msg", "hello"); }));
+  const auto start = RoomClock::now();
+  room->LeaveNow();
+  EXPECT_LT(RoomClock::now() - start, 100ms);
+  // The room object stays up (a session may still hold it) while its thread says goodbye.
+  ASSERT_TRUE(Wait([&] { return Sent(code, "leave"); }, 3s));
+  EXPECT_EQ(room->GetState(), RoomState::Ended);
+  EXPECT_FALSE(room->Connected());
+  room->Leave();
+  EXPECT_EQ(room->GetState(), RoomState::Ended);
 }
 
 TEST_F(OrcaRoomRuntime, ResumeRetriesUntilAKeyframeArrives)

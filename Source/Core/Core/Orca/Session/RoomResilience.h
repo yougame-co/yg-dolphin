@@ -23,6 +23,15 @@ inline bool DirectInputLive(std::optional<RoomClock::time_point> input, RoomCloc
   return input && now - *input < DIRECT_INPUT_WINDOW;
 }
 
+// A friends room's host whose socket closed as its inputs stopped (its game quit, crashed or was
+// killed), with no input since for this long, has gone: its joiner ends the match instead of
+// waiting out ROOM_HOLD with nothing on screen.
+inline constexpr auto HOST_GONE_SILENCE = std::chrono::seconds(5);
+// How close to its last input the room must announce the host away for that to be a closed socket.
+// A link that just went quiet is announced only after the room's own silence window (15 s), and
+// keeps the ROOM_HOLD recovery.
+inline constexpr auto HOST_CLOSE_GAP = std::chrono::seconds(3);
+
 enum class RoomLoss
 {
   None,
@@ -59,6 +68,19 @@ struct PeerRoomPresence
     // It is not a room verdict; the server may not have detected the dead socket yet.
     (void)last_direct_input;
     return RoomLoss::None;
+  }
+
+  // A drop-in host gone for good: the room announced it away (not this game's own reconnect,
+  // `local_away`) as its inputs stopped (HOST_CLOSE_GAP), and HOST_GONE_SILENCE passed since both
+  // with no input over either path. A peer never heard sending inputs is left to ROOM_HOLD.
+  bool HostGone(RoomClock::time_point now, std::optional<RoomClock::time_point> last_input,
+                bool local_away) const
+  {
+    if (!away_since || suspended || local_away || !last_input)
+      return false;
+    if (now - *away_since < HOST_GONE_SILENCE || now - *last_input < HOST_GONE_SILENCE)
+      return false;
+    return *away_since - *last_input <= HOST_CLOSE_GAP;
   }
 
   // Also handles a same-id join when the server missed the old socket's close.
