@@ -636,26 +636,31 @@ TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
   EXPECT_EQ(joiner.View(1, Stats::Off).toasts[0].text, "cy is on port 1");
 }
 
-TEST(OrcaUXOverlay, PortToastsOffFollowTheListSilently)
+TEST(OrcaUXOverlay, PortToastsOffSilenceJoinsButNotLeaves)
 {
   OverlayModel m;
   m.OnPorts(0, Ports({{0, "cy", false}}), 0);
   m.SetPortToasts(false);
   m.OnPorts(300, Ports({{0, "cy", false}, {1, "ada", true}}), 1000);
   EXPECT_TRUE(m.View(1001, Stats::Off).toasts.empty());
+  // A leave still toasts: nothing else tells the host the seat went empty.
   m.OnPorts(600, Ports({{0, "cy", false}}), 2000);
-  EXPECT_TRUE(m.View(2001, Stats::Off).toasts.empty());
+  {
+    const auto left = m.View(2001, Stats::Off).toasts;
+    ASSERT_EQ(left.size(), 1u);
+    EXPECT_EQ(left[0].text, "ada left");
+  }
   // Other toasts still show.
   m.AddToast("GAME!", 2100);
-  ASSERT_EQ(m.View(2101, Stats::Off).toasts.size(), 1u);
-  // Back on, only later changes toast: ada's earlier visit stays silent.
+  ASSERT_EQ(m.View(2101, Stats::Off).toasts.size(), 2u);
+  // Back on, only later changes toast: ada's earlier join stays silent.
   m.SetPortToasts(true);
   m.OnPorts(900, Ports({{0, "cy", false}}), 2200);
-  EXPECT_EQ(m.View(2201, Stats::Off).toasts.size(), 1u);
+  EXPECT_EQ(m.View(2201, Stats::Off).toasts.size(), 2u);
   m.OnPorts(1200, Ports({{0, "cy", false}, {1, "bo", true}}), 2300);
   const auto v = m.View(2301, Stats::Off).toasts;
-  ASSERT_EQ(v.size(), 2u);
-  EXPECT_EQ(v[1].text, "bo joined on port 2");
+  ASSERT_EQ(v.size(), 3u);
+  EXPECT_EQ(v[2].text, "bo joined on port 2");
 }
 
 // Text in a very short picture would round to 0 px, which ImGui asserts on
