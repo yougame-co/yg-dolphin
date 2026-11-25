@@ -606,7 +606,7 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
                                     fc->second.get<picojson::array>().size() == 3)
   {
     const auto& entry = fc->second.get<picojson::array>();
-    std::vector<u8> bytes;
+    std::vector<u8> check_bytes;
     const bool numbers = entry[0].is<double>() && entry[1].is<double>() &&
                          entry[2].is<std::string>();
     if (numbers && entry[0].get<double>() >= 1 && entry[0].get<double>() <= 1000 &&
@@ -614,14 +614,15 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
         entry[1].get<double>() >= 0 && entry[1].get<double>() <= MAX_FRAME &&
         std::floor(entry[1].get<double>()) == entry[1].get<double>() &&
         entry[2].get<std::string>().size() <= size_t{MAX_FRAME_CHECKS_IN_PACKET} * 8 &&
-        FromHex(entry[2].get<std::string>(), &bytes) && !bytes.empty() && bytes.size() % 4 == 0)
+        FromHex(entry[2].get<std::string>(), &check_bytes) && !check_bytes.empty() &&
+        check_bytes.size() % 4 == 0)
     {
       out.frame_check_version = static_cast<int>(entry[0].get<double>());
       out.frame_checks_first = static_cast<int>(entry[1].get<double>());
-      for (size_t i = 0; i < bytes.size(); i += 4)
+      for (size_t i = 0; i < check_bytes.size(); i += 4)
       {
-        out.frame_checks.push_back(u32{bytes[i]} << 24 | u32{bytes[i + 1]} << 16 |
-                                   u32{bytes[i + 2]} << 8 | u32{bytes[i + 3]});
+        out.frame_checks.push_back(u32{check_bytes[i]} << 24 | u32{check_bytes[i + 1]} << 16 |
+                                   u32{check_bytes[i + 2]} << 8 | u32{check_bytes[i + 3]});
       }
     }
   }
