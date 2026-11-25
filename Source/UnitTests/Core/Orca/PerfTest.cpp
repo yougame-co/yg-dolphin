@@ -192,6 +192,7 @@ public:
     m_totals.present += Ms(gpu_ms);
     boundary.paused_total = m_paused;
     boundary.rerun_total = m_rerun;
+    boundary.cow_faults = m_faults;
     std::optional<Window> window = m_meter.OnBoundary(boundary, m_now, m_totals);
     if (window)
       m_windows.push_back(*window);
@@ -209,6 +210,15 @@ public:
     boundary.rerun_total = m_rerun;
     m_meter.OnBoundary(boundary, m_now, m_totals);
   }
+  // A snapshot save or load of `ms`, inside the frame being run.
+  void Snapshot(bool load, double ms)
+  {
+    m_now += Ms(ms);
+    m_totals.snap += Ms(ms);
+    m_meter.NoteSnapshot(load, ms);
+  }
+  // `n` copy-on-write faults in the frame being run.
+  void Faults(u64 n) { m_faults += n; }
   // The session waits `ms` (a stall or time sync) without a boundary.
   void Wait(double ms)
   {
@@ -252,6 +262,7 @@ private:
   std::chrono::nanoseconds m_paused{};
   Meter::Totals m_totals;
   u64 m_rerun = 0;
+  u64 m_faults = 0;
   std::vector<Window> m_windows;
 };
 
@@ -705,9 +716,10 @@ TEST(OrcaPerf, TheLinesAreVersionedJson)
   EXPECT_EQ(Orca::Perf::WindowJson(w),
             R"({"v":1,"k":"win","m":"1v1","n":858,"cap":51.7,"fc":58.0,"rw":12.4,"rv":180,)"
             R"("w50":18.9,"w95":24.1,"g95":3.2,"fps":51.6,"rbf":212,"res":1,"pf":1,"as":1})");
-  // A test switch marks every window.
+  // A test switch marks every window, and only then are the rollback timings written.
   w.test = true;
-  EXPECT_NE(Orca::Perf::WindowJson(w).find(R"("as":1,"t":1})"), std::string::npos);
+  EXPECT_NE(Orca::Perf::WindowJson(w).find(R"("as":1,"t":1,"sv":[0.00,0.00],)"),
+            std::string::npos);
   EXPECT_EQ(Orca::Perf::AutoJson(44.25), R"({"v":1,"k":"auto","cap":44.3})");
   Window empty;
   empty.cap = std::numeric_limits<double>::infinity();
@@ -726,6 +738,9 @@ TEST(OrcaPerf, TheLinesAreVersionedJson)
   big.rbf = 1'000'000;
   big.res = 12;
   big.pf = big.as = big.test = true;
+  big.sv = big.ld = big.rr = {1e9, std::numeric_limits<double>::infinity()};
+  big.nl = 1'000'000'000;
+  big.cf = {1e12, 1e12};
   EXPECT_LE(Orca::Perf::WindowJson(big).size() + std::string("orca perf ").size(),
             Orca::Perf::LINE_BYTES);
 }
@@ -822,4 +837,98 @@ TEST(OrcaPerf, ThePerformancePresetIsNativeWithoutScaledCopies)
   EXPECT_EQ(preset[2], (GfxChange{GfxKey::Aniso, -1}));
   EXPECT_EQ(preset[3], (GfxChange{GfxKey::Filter, 0}));
   EXPECT_EQ(preset[4], (GfxChange{GfxKey::Resample, 0}));
+}
+
+TEST(OrcaPerf, RollbackTimingsAreWrittenOnTestWindowsOnly)
+{
+  Window w;
+  w.mode = Mode::OneVsOne;
+  w.n = 600;
+  w.sv = {0.123, 0.456};
+  w.ld = {0.2, 1.575};
+  w.rr = {2.3, 2.84};
+  w.nl = 12;
+  // The app's own lines are unchanged.
+  EXPECT_EQ(Orca::Perf::WindowJson(w).find("\"sv\""), std::string::npos);
+  w.test = true;
+  const std::string json = Orca::Perf::WindowJson(w);
+  EXPECT_NE(json.find(R"("t":1,"sv":[0.12,0.46],"ld":[0.20,1.57],"rr":[2.30,2.84],"nl":12,"cf":[0,0]})"),
+            std::string::npos)
+      << json;
+  // Out-of-range values saturate.
+  w.sv = {-1, std::numeric_limits<double>::quiet_NaN()};
+  w.ld = {5000, 0};
+  w.nl = 5'000'000;
+  EXPECT_NE(Orca::Perf::WindowJson(w).find(R"("sv":[0.00,0.00],"ld":[999.99,0.00],)"),
+            std::string::npos);
+  EXPECT_NE(Orca::Perf::WindowJson(w).find(R"("nl":999999,"cf":[)"), std::string::npos);
+}
+
+TEST(OrcaPerf, RollbackTimingsSplitSavesLoadsAndReRunFrames)
+{
+  Driver d;
+  d.Warm();
+  // A forward frame, then its save (0.2 ms) and a rollback's load (1 ms); three re-run frames of
+  // 2.5 ms, each followed by its save (0.3 ms); a 4 ms stall inside the second re-run frame.
+  d.Frame(16.7, 6.7);
+  d.Snapshot(false, 0.2);
+  d.Snapshot(true, 1.0);
+  d.Rerun(2.5);
+  d.Snapshot(false, 0.3);
+  d.Wait(4);
+  d.Rerun(2.5);
+  d.Snapshot(false, 0.3);
+  d.Rerun(2.5);
+  d.Snapshot(false, 0.3);
+  d.Frame(16.7, 6.7);
+  const Window w = d.NextWindow(1000, 1000 - 10);
+  EXPECT_EQ(w.nl, 1);
+  EXPECT_NEAR(w.ld[0], 1.0, 1e-9);
+  EXPECT_NEAR(w.ld[1], 1.0, 1e-9);
+  EXPECT_NEAR(w.sv[0], 0.3, 1e-9);
+  EXPECT_NEAR(w.sv[1], 0.3, 1e-9);
+  EXPECT_NEAR(w.rr[0], 2.5, 1e-6);
+  EXPECT_NEAR(w.rr[1], 2.5, 1e-6);
+  // The existing re-run work still holds the load and saves: (1.2 + 3 * 2.8 - 0.3) / 3.
+  EXPECT_EQ(w.rv, 3);
+  EXPECT_NEAR(w.rw, (1.2 + 3 * 2.8 - 0.3) / 3, 1e-6);
+}
+
+TEST(OrcaPerf, RollbackTimingsLeaveMenusAndTheWarmUpOut)
+{
+  Driver d;
+  d.Scene(false);
+  d.Frame(16.7);
+  d.Snapshot(false, 0.5);
+  d.Snapshot(true, 2.0);
+  d.Rerun(3);
+  d.Frame(16.7);
+  const Window w = d.NextWindow(16.7);
+  EXPECT_EQ(w.nl, 0);
+  EXPECT_DOUBLE_EQ(w.sv[1], 0);
+  EXPECT_DOUBLE_EQ(w.ld[1], 0);
+  EXPECT_DOUBLE_EQ(w.rr[1], 0);
+}
+
+TEST(OrcaPerf, CopyOnWriteFaultsAreCountedPerValidFrame)
+{
+  Driver d;
+  d.Warm();
+  // Three valid frames with 100, 300 and 200 faults (a rollback's re-run faults belong to the
+  // forward frame after it), then a frame that closes the window with none.
+  d.Faults(100);
+  d.Frame(16.7, 6.7);
+  d.Faults(250);
+  d.Rerun(3);
+  d.Faults(50);
+  d.Frame(16.7, 6.7);
+  d.Faults(200);
+  d.Frame(16.7, 6.7);
+  const Window w = d.NextWindow(1000, 1000 - 10);
+  EXPECT_EQ(w.n, 4);
+  EXPECT_DOUBLE_EQ(w.cf[0], 100);
+  EXPECT_DOUBLE_EQ(w.cf[1], 300);
+  Window t = w;
+  t.test = true;
+  EXPECT_NE(Orca::Perf::WindowJson(t).find(R"("cf":[100,300]})"), std::string::npos);
 }

@@ -10,6 +10,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
+#include "Core/Orca/Perf.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Rollback/Diag.h"
@@ -59,8 +60,10 @@ bool RingPort::Save(int frame)
     return true;
   const auto start = std::chrono::steady_clock::now();
   const bool allocated = m_ring.Save(m_system, frame);
-  double ms =
-      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  const auto took = std::chrono::steady_clock::now() - start;
+  Orca::Perf::NoteSnapshot(false, std::chrono::duration_cast<std::chrono::nanoseconds>(took),
+                           !allocated);
+  double ms = std::chrono::duration<double, std::milli>(took).count();
   if (Diag::SnapTime())
     Diag::AddPortSave(ms);
   // A slot's first use allocates ~100 MB, so it is not a representative sample. Otherwise blend in
@@ -84,11 +87,10 @@ bool RingPort::Load(int frame)
   m_saved_since_run = -1;
   const auto start = std::chrono::steady_clock::now();
   const bool loaded = m_ring.Load(m_system, frame);
+  const auto took = std::chrono::steady_clock::now() - start;
+  Orca::Perf::NoteSnapshot(true, std::chrono::duration_cast<std::chrono::nanoseconds>(took));
   if (Diag::SnapTime())
-  {
-    Diag::AddPortLoad(
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
-  }
+    Diag::AddPortLoad(std::chrono::duration<double, std::milli>(took).count());
   return loaded;
 }
 

@@ -60,6 +60,7 @@
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/PowerPC/JitInterface.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/Rollback/Harness.h"
 #include "Core/Rollback/ReplayStream.h"
 #include "Core/Rollback/Rollback.h"
@@ -3942,6 +3943,9 @@ void PerfBoundary(const Match& match)
     boundary.rerun_total = static_cast<u64>(match.session->GetStats().resimulated_frames);
   }
   boundary.paused_total = std::chrono::nanoseconds(s_paused_total_ns.load());
+  // Test windows only report it, so only they pay for the tracker's lock.
+  if (Orca::Perf::TestRulesActive())
+    boundary.cow_faults = Rollback::Cow::GetCounters().faults;
   Orca::Perf::OnBoundary(boundary);
 }
 

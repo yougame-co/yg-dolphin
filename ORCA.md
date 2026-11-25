@@ -1558,6 +1558,13 @@ switch off, and `ORCA_TEST_SLOW=<ms>[,<ms_on_performance>]` makes a slow machine
 spins the CPU thread that long (the second value while the picture is Performance's), so the switch
 fires and helps.
 
+A test window (`"t":1`) also carries the rollback's own costs, in a warm match only:
+`"sv":[p50,p95]` snapshot saves, `"ld":[p50,p95]` loads and `"rr":[p50,p95]` re-run frames (one
+re-run frame's work with its save, any load and any wait taken out), all in ms with two decimals
+(at most 999.99), `"nl"` the loads (rollbacks) in the window, and `"cf":[p50,p95]` the
+copy-on-write faults per counted frame (a fault's cost lands in the frame's work, not in the save's).
+The app's own lines are unchanged.
+
 Observation only: wall-clock time and drawing settings never reach emulation, the replay, the
 checksums or the compatibility key.
 

@@ -51,6 +51,10 @@ class CPUThreadGuard;
 //   rbf  rollback re-run frames (all of the window's)
 //   m    peers plugged in: solo (0), 1v1 (1), multi (2-3)
 //   t    1 when a test switch (ORCA_TEST_PERF, ORCA_PERF_AUTO=0, ORCA_TEST_SLOW) shaped the run
+//   sv, ld, rr  test runs only (after "t"): in-match snapshot save ms, load ms and re-run frame ms
+//        (one re-run frame's own work, its save and any load taken out), each [p50,p95]; nl the
+//        loads (rollbacks) they cover; cf copy-on-write faults per valid frame [p50,p95] (their
+//        cost is inside the frame's work, not the save's)
 //
 // The page gets one `orca perf {json}` line per window (stdout, embedded only, at most 300 bytes),
 // versioned with "v":1:
@@ -188,6 +192,15 @@ struct Window
   // measured on their own settings again.
   bool as = false;
   bool test = false;  // a test switch shaped the run (TestRulesActive)
+  // Rollback timings, written only on a test window: [p50, p95] in ms of the in-match snapshot
+  // saves, loads and re-run frames (each re-run frame's work less its save and any load), and how
+  // many loads.
+  std::array<double, 2> sv{};
+  std::array<double, 2> ld{};
+  std::array<double, 2> rr{};
+  int nl = 0;
+  // Copy-on-write snapshot faults per valid frame, [p50, p95] (test windows only).
+  std::array<double, 2> cf{};
   bool Counts(const Rules& rules) const;
 };
 
@@ -201,6 +214,11 @@ public:
   void AddRunning(double ms);
   void AddRerun(int frames);
   void SeePeers(int peers);
+  // Rollback timings (Window::sv, ld, rr), in ms.
+  void AddSave(double ms);
+  void AddLoad(double ms);
+  void AddRerunFrame(double ms);
+  void AddFaults(u64 faults);
   double RunningMs() const { return m_running_ms; }
   bool Due(const Rules& rules) const { return m_running_ms >= rules.window_s * 1000; }
   // The window so far (res, pf and as are the caller's); the meter starts the next.
@@ -217,6 +235,10 @@ private:
   int m_shown = 0;
   int m_rerun = 0;
   int m_peers = 0;
+  std::vector<double> m_saves;
+  std::vector<double> m_loads;
+  std::vector<double> m_rerun_frames;
+  std::vector<double> m_faults;
 };
 
 // The re-run cost a window measured (ms per re-run frame), once it held rules.rerun_min re-run
@@ -273,6 +295,8 @@ struct Boundary
   u64 rerun_total = 0;
   // Time the player has paused the game, in total.
   std::chrono::nanoseconds paused_total{};
+  // Copy-on-write snapshot faults so far (Rollback::Cow), in total.
+  u64 cow_faults = 0;
 };
 
 // The frame rules, fed with clock readings: what OnBoundary decides about each frame, without the
@@ -286,6 +310,7 @@ public:
     std::chrono::nanoseconds sleep{};    // AddSleep
     std::chrono::nanoseconds present{};  // AddPresent
     std::chrono::nanoseconds wait{};     // AddWait
+    std::chrono::nanoseconds snap{};     // NoteSnapshot: snapshot saves and loads
   };
   explicit Meter(Rules rules = {}) : m_rules(rules) {}
   // A boundary at `now` (one steady clock throughout) with the totals so far. Returns the window
@@ -294,6 +319,8 @@ public:
                                    const Totals& totals);
   // The scene, as NoteScene gets it.
   void NoteScene(std::optional<bool> in_match);
+  // A snapshot save or load that took `ms`, counted in a warm match only.
+  void NoteSnapshot(bool load, double ms);
   const Rules& GetRules() const { return m_rules; }
 
 private:
@@ -306,11 +333,14 @@ private:
   int m_reruns = 0;
   std::chrono::nanoseconds m_paused{};
   u64 m_rerun_total = 0;
+  std::optional<u64> m_cow_faults;
   // Something since the last forward frame (a catch-up) makes the next one's interval meaningless.
   bool m_spoiled = false;
   bool m_scene_match = false;
   int m_match_frames = 0;
   WindowMeter m_window;
+  // In a match past its warm-up: where the rollback timings are taken.
+  bool InWarmMatch() const { return m_scene_match && m_match_frames > m_rules.warm_frames; }
 };
 
 struct Info
@@ -403,6 +433,10 @@ void AddPresent(std::chrono::nanoseconds time);
 void Presented(bool headless = false);
 void NotePaceScene(const Core::CPUThreadGuard& guard);
 void NoteRollback(int depth);
+// A snapshot save or load on the CPU thread and how long it took (RingPort). `sample` false leaves
+// it out of the window's percentiles (a save that allocated its slot) but still takes its time out
+// of the re-run frame it fell in.
+void NoteSnapshot(bool load, std::chrono::nanoseconds time, bool sample = true);
 // Only synchronous, on-demand ShaderCache misses; never instantiate in background workers.
 class CompileScope
 {

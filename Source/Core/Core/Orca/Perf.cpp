@@ -251,6 +251,26 @@ void WindowMeter::SeePeers(int peers)
   m_peers = std::max(m_peers, peers);
 }
 
+void WindowMeter::AddSave(double ms)
+{
+  m_saves.push_back(std::max(0.0, ms));
+}
+
+void WindowMeter::AddLoad(double ms)
+{
+  m_loads.push_back(std::max(0.0, ms));
+}
+
+void WindowMeter::AddRerunFrame(double ms)
+{
+  m_rerun_frames.push_back(std::max(0.0, ms));
+}
+
+void WindowMeter::AddFaults(u64 faults)
+{
+  m_faults.push_back(static_cast<double>(faults));
+}
+
 Window WindowMeter::Take()
 {
   Window window;
@@ -269,6 +289,11 @@ Window WindowMeter::Take()
   }
   window.fps = m_running_ms > 0 ? m_shown / (m_running_ms / 1000) : 0;
   window.rbf = m_rerun;
+  window.sv = {Percentile(m_saves, 50), Percentile(m_saves, 95)};
+  window.ld = {Percentile(m_loads, 50), Percentile(m_loads, 95)};
+  window.rr = {Percentile(m_rerun_frames, 50), Percentile(m_rerun_frames, 95)};
+  window.nl = static_cast<int>(std::min<std::size_t>(m_loads.size(), 999'999));
+  window.cf = {Percentile(m_faults, 50), Percentile(m_faults, 95)};
   *this = {};
   return window;
 }
@@ -380,7 +405,21 @@ std::string WindowJson(const Window& window)
       Num(window.w95), Num(window.g95), Num(window.fps), window.rbf, window.res, window.pf ? 1 : 0,
       window.as ? 1 : 0);
   if (window.test)
-    json += ",\"t\":1";
+  {
+    // Two decimals: a save or load is a fraction of a millisecond on a fast machine.
+    const auto pair = [](const std::array<double, 2>& v) {
+      const auto ms = [](double x) {
+        return fmt::format("{:.2f}", std::isfinite(x) ? std::clamp(x, 0.0, 999.99) : 0.0);
+      };
+      return fmt::format("[{},{}]", ms(v[0]), ms(v[1]));
+    };
+    const auto count = [](double x) {
+      return std::isfinite(x) ? static_cast<int>(std::clamp(x, 0.0, 99'999.0)) : 0;
+    };
+    json += fmt::format(",\"t\":1,\"sv\":{},\"ld\":{},\"rr\":{},\"nl\":{},\"cf\":[{},{}]",
+                        pair(window.sv), pair(window.ld), pair(window.rr),
+                        std::clamp(window.nl, 0, 999'999), count(window.cf[0]), count(window.cf[1]));
+  }
   return json + "}";
 }
 
@@ -535,11 +574,31 @@ void Meter::NoteScene(std::optional<bool> in_match)
     m_match_frames = 0;
 }
 
+void Meter::NoteSnapshot(bool load, double ms)
+{
+  if (!InWarmMatch())
+    return;
+  if (load)
+    m_window.AddLoad(ms);
+  else
+    m_window.AddSave(ms);
+}
+
 std::optional<Window> Meter::OnBoundary(const Boundary& boundary, std::chrono::nanoseconds now,
                                         const Totals& totals)
 {
   if (!boundary.first_run)
   {
+    // One re-run frame's own work: since the previous boundary, waits, sleeps and the snapshot
+    // saves and loads (reported on their own) out.
+    const bool after_rerun = m_last_rerun && m_last_forward && *m_last_rerun >= *m_last_forward;
+    if (!boundary.excluded && !m_spoiled && m_last_forward && InWarmMatch())
+    {
+      const std::chrono::nanoseconds since = after_rerun ? *m_last_rerun : *m_last_forward;
+      const Totals& before = after_rerun ? m_rerun_totals : m_totals;
+      m_window.AddRerunFrame(Ms(now - since) - Ms(totals.sleep - before.sleep) -
+                             Ms(totals.wait - before.wait) - Ms(totals.snap - before.snap));
+    }
     // A re-run's time belongs to the next forward frame; a catch-up's makes it meaningless.
     if (boundary.excluded)
       m_spoiled = true;
@@ -586,6 +645,13 @@ std::optional<Window> Meter::OnBoundary(const Boundary& boundary, std::chrono::n
   m_window.SeePeers(boundary.peers);
   if (valid)
     m_window.AddValid(Work(frame), frame.gpu_ms, frame.rerun_ms, frame.reruns);
+  // The counter never goes back; a smaller one is a new process's (tests), counted from zero.
+  if (valid && m_cow_faults)
+  {
+    m_window.AddFaults(boundary.cow_faults >= *m_cow_faults ? boundary.cow_faults - *m_cow_faults :
+                                                              boundary.cow_faults);
+  }
+  m_cow_faults = boundary.cow_faults;
 
   m_last_forward = now;
   m_totals = totals;
@@ -608,6 +674,7 @@ std::atomic<bool> s_ready{false};
 std::atomic<s64> s_sleep_ns{0};
 std::atomic<s64> s_present_ns{0};
 std::atomic<s64> s_wait_ns{0};
+std::atomic<s64> s_snap_ns{0};
 std::atomic<int> s_step_scopes{0};
 std::mutex s_gfx_mutex;
 struct PresentEvent
@@ -884,6 +951,15 @@ void NotePaceScene(const Core::CPUThreadGuard& guard)
                      std::memory_order_relaxed);
 }
 
+void NoteSnapshot(bool load, std::chrono::nanoseconds time, bool sample)
+{
+  if (!s_ready.load(std::memory_order_relaxed))
+    return;
+  s_snap_ns.fetch_add(time.count(), std::memory_order_relaxed);
+  if (sample && s_run.meter)
+    s_run.meter->NoteSnapshot(load, Ms(time));
+}
+
 void NoteRollback(int depth)
 {
   if (s_ready.load(std::memory_order_relaxed))
@@ -972,7 +1048,8 @@ void OnBoundary(const Boundary& boundary)
   s_present_read.store(read, std::memory_order_release);
   const Meter::Totals totals{std::chrono::nanoseconds(s_sleep_ns.load(std::memory_order_relaxed)),
                              std::chrono::nanoseconds(s_present_ns.load(std::memory_order_relaxed)),
-                             std::chrono::nanoseconds(s_wait_ns.load(std::memory_order_relaxed))};
+                             std::chrono::nanoseconds(s_wait_ns.load(std::memory_order_relaxed)),
+                             std::chrono::nanoseconds(s_snap_ns.load(std::memory_order_relaxed))};
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
   if (std::optional<Window> window = s_run.meter->OnBoundary(
           boundary, std::chrono::duration_cast<std::chrono::nanoseconds>(now), totals))
