@@ -66,6 +66,14 @@ Kit::Box ButtonBox(const Model::View& view)
   return box;
 }
 
+bool ButtonShown(const Model::View& view)
+{
+  const Kit::Box box = ButtonBox(view);
+  const ImVec2 display = ImGui::GetIO().DisplaySize;
+  return box.max.x > box.min.x && box.min.x < display.x && box.min.y < display.y &&
+         box.max.x > 0 && box.max.y > 0;
+}
+
 void DrawButton(ImDrawList* dl, const Model::View& view)
 {
   if (!view.on || view.place.size <= 0)

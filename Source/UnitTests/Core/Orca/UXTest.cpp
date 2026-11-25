@@ -636,6 +636,28 @@ TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
   EXPECT_EQ(joiner.View(1, Stats::Off).toasts[0].text, "cy is on port 1");
 }
 
+TEST(OrcaUXOverlay, PortToastsOffFollowTheListSilently)
+{
+  OverlayModel m;
+  m.OnPorts(0, Ports({{0, "cy", false}}), 0);
+  m.SetPortToasts(false);
+  m.OnPorts(300, Ports({{0, "cy", false}, {1, "ada", true}}), 1000);
+  EXPECT_TRUE(m.View(1001, Stats::Off).toasts.empty());
+  m.OnPorts(600, Ports({{0, "cy", false}}), 2000);
+  EXPECT_TRUE(m.View(2001, Stats::Off).toasts.empty());
+  // Other toasts still show.
+  m.AddToast("GAME!", 2100);
+  ASSERT_EQ(m.View(2101, Stats::Off).toasts.size(), 1u);
+  // Back on, only later changes toast: ada's earlier visit stays silent.
+  m.SetPortToasts(true);
+  m.OnPorts(900, Ports({{0, "cy", false}}), 2200);
+  EXPECT_EQ(m.View(2201, Stats::Off).toasts.size(), 1u);
+  m.OnPorts(1200, Ports({{0, "cy", false}, {1, "bo", true}}), 2300);
+  const auto v = m.View(2301, Stats::Off).toasts;
+  ASSERT_EQ(v.size(), 2u);
+  EXPECT_EQ(v[1].text, "bo joined on port 2");
+}
+
 // Text in a very short picture would round to 0 px, which ImGui asserts on
 // (ImFontAtlasBakedGetOrAdd: font_size > 0.0f). Below the minimum height the overlay draws nothing.
 TEST(OrcaUXOverlay, NothingInAPictureTooThinForText)
@@ -770,6 +792,69 @@ TEST_F(OrcaUXOverlayDraw, ACutWindowKeepsOrcasOwnElementsInIt)
   }
   banner(false);
   SetPictureForTests(std::nullopt);
+  EXPECT_EQ(ImGuiAssertFailures(), failures);
+}
+
+// A joiner's host-left notice and the port list's toasts reach the screen whatever the YouGame
+// button does: beside it in its pill while it is in view, and in their own cards when the page has
+// parked it out of view (idle, covered or cut), where its pill would be out of view with it.
+TEST_F(OrcaUXOverlayDraw, ToastsShowWhileTheButtonIsParkedOutOfView)
+{
+  Common::ScopeGuard off([] { YgOrb::Apply(*YgOrb::ParseOrb("orb off")); });
+  const std::size_t failures = ImGuiAssertFailures();
+  constexpr float W = 1280, H = 720;
+  ShowNotice(HostLeftNotice("Eve"));
+  // The vertices drawn on the display, and their bounds.
+  struct Drawn
+  {
+    int count = 0;
+    ImVec2 min{W, H}, max{0, 0};
+  };
+  const auto drawn = [&] {
+    Frame(W, H);
+    Drawn d;
+    for (const ImDrawList* list : ImGui::GetDrawData()->CmdLists)
+    {
+      for (const ImDrawVert& v : list->VtxBuffer)
+      {
+        if (v.pos.x < 0 || v.pos.y < 0 || v.pos.x > W || v.pos.y > H)
+          continue;
+        ++d.count;
+        d.min = ImVec2(std::min(d.min.x, v.pos.x), std::min(d.min.y, v.pos.y));
+        d.max = ImVec2(std::max(d.max.x, v.pos.x), std::max(d.max.y, v.pos.y));
+      }
+    }
+    return d;
+  };
+  // No button: the toast and the notice in cards at the top left.
+  const Drawn cards = drawn();
+  EXPECT_GT(cards.count, 0);
+  EXPECT_LT(cards.min.x, W / 4);
+  EXPECT_LT(cards.min.y, H / 4);
+
+  // The button in view: they go in its pill there.
+  YgOrb::Apply(*YgOrb::ParseOrb("orb 16 16 40 0 0 0"));
+  EXPECT_TRUE(YgOrb::ButtonShown(YgOrb::HostView(YgOrb::NowMs())));
+  const Drawn pill = drawn();
+  EXPECT_GT(pill.count, 0);
+  EXPECT_LE(pill.min.x, 16 + 1);
+  EXPECT_LE(pill.min.y, 16 + 1);
+
+  // Parked out of view, still placed, as the page hides an idle button: the same cards as with no
+  // button, not a pill drawn out of view with it.
+  YgOrb::Apply(*YgOrb::ParseOrb("orb 32767 32767 40 0 1 0"));
+  EXPECT_TRUE(YgOrb::HostView(YgOrb::NowMs()).on);
+  EXPECT_FALSE(YgOrb::ButtonShown(YgOrb::HostView(YgOrb::NowMs())));
+  const Drawn parked = drawn();
+  EXPECT_EQ(parked.count, cards.count);
+  EXPECT_EQ(parked.min.x, cards.min.x);
+  EXPECT_EQ(parked.min.y, cards.min.y);
+  EXPECT_EQ(parked.max.x, cards.max.x);
+  EXPECT_EQ(parked.max.y, cards.max.y);
+
+  // Back in view: the pill again.
+  YgOrb::Apply(*YgOrb::ParseOrb("orb 16 16 40 0 0 0"));
+  EXPECT_EQ(drawn().count, pill.count);
   EXPECT_EQ(ImGuiAssertFailures(), failures);
 }
 

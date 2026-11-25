@@ -120,6 +120,8 @@ void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports
     const auto was = find(m_ports, p.port);
     if (was != m_ports.end() && was->name == p.name && was->remote)
       continue;
+    if (!m_port_toasts)
+      continue;
     // A joiner's first list already has the host, who is not joining.
     m_toasts.push_back({now_ms, TOAST_MS,
                         first ? fmt::format("{} is on port {}", NameOf(p), p.port + 1) :
@@ -130,12 +132,18 @@ void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports
     if (!p.remote)
       continue;
     const auto now = find(ports, p.port);
-    if (now == ports.end() || now->name != p.name)
+    if (m_port_toasts && (now == ports.end() || now->name != p.name))
       m_toasts.push_back({now_ms, TOAST_MS, fmt::format("{} left", NameOf(p))});
   }
   m_ports = ports;
   while (m_toasts.size() > 3)
     m_toasts.pop_front();
+}
+
+void OverlayModel::SetPortToasts(bool on)
+{
+  std::lock_guard lk(m_lock);
+  m_port_toasts = on;
 }
 
 void OverlayModel::AddToast(std::string text, double now_ms, double ms)
@@ -1022,8 +1030,9 @@ void DrawScene()
   Yg::Warm();
   const YgOrb::Model::View yg = YgOrb::HostView(now);
   // Dolphin's OSD messages are drawn top left before this. While the YouGame button shows they
-  // move below it, from the next frame.
-  if (!yg.on)
+  // move below it, from the next frame. A button parked out of view leaves them at the top.
+  const bool yg_shown = YgOrb::ButtonShown(yg);
+  if (!yg_shown)
     OSD::SetObscuredPixelsTop(0);
   if (s.Empty() && !yg.on && !yg.showing)
     return;
@@ -1171,9 +1180,11 @@ void DrawScene()
     Kit::Title(dl, ImVec2(vis.x + vis_size.x / 2, top), unit, f.waiting, 5.0f, Kit::Align::Centre);
   }
   // Toasts and chat go below the corner, Dolphin's messages and the top-centre banners.
-  if (yg_top)
+  if (yg_shown)
   {
-    // With the button, toasts and chat go in its pill. Rows are views of this frame's lines.
+    // With the button in view, toasts and chat go in its pill. Rows are views of this frame's
+    // lines. A button the page parked out of view keeps the corner on the right, but its pill
+    // would be out of view too, so they go in cards as without it.
     std::array<YgOrb::PillRow, 12> rows;
     std::size_t n = 0;
     for (const OverlayModel::Toast& t : f.toasts)
@@ -1324,6 +1335,11 @@ void SetStats(Stats stats)
 void SetPerf(Perf perf)
 {
   s_perf = perf;
+}
+
+void SetPortToasts(bool on)
+{
+  s_overlay.SetPortToasts(on);
 }
 
 void FrameBoundary(bool shown, double game_held_ms, int game_held_frames)

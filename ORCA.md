@@ -2551,6 +2551,7 @@ log their raw request and the unchanged bounds after hiding the window. Unset, t
 | `pause` / `resume` | Answers `state paused` / `state running`. In a session it pauses only while the player's game is alone, and ends by itself when drop-in needs the game; otherwise `unsupported pause`. |
 | `volume V` | 0 to 1, this run only. |
 | `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). A frame the game itself holds in emulated time (Project+ loading between scenes) counts as the video frames it held, so the meter, `fps` and the `hi` hitch count in `orca stats` show only this machine falling behind; `hil` counts the frames a load alone made slow (`hi` + `hil` is the older builds' `hi`). |
+| `port-toasts on\|off` | Whether the overlay toasts players joining and leaving ports ("ada joined on port 2", "ada left"). The app turns it off while its own overlay over the game announces them; the port list is still followed, so turning it on shows only later changes. Older Orca writes an unknown command to stderr and keeps toasting. |
 | `music on\|off` | The player's Music switch ([Music switch](#music-switch)), cap `music`. |
 | `gfx <key> <value>` | A live change to one of the player's drawing-only graphics settings ([Graphics](#graphics)), cap `gfx`. |
 | `save N` / `load N` / `reset` | Refused in a session. |
@@ -2575,7 +2576,7 @@ log their raw request and the unchanged bounds after hiding the window. Unset, t
 Most commands are gated by capabilities (`caps`) that Orca and the app agree on; a later `caps` line
 replaces the whole answer. A command without its cap, or a malformed one, answers
 `unsupported <command>` (except unagreed `feedback` and `host-menu`, which are ignored). Any other line goes to stderr. Drawing
-commands (`view`, `dim`, `perf`, `chat`, `orb`, `notice`, `talk`) are host-only: never in game
+commands (`view`, `dim`, `perf`, `port-toasts`, `chat`, `orb`, `notice`, `talk`) are host-only: never in game
 memory or the compatibility key.
 
 `replay` is offered only with `ORCA_REPLAY_SOURCE`, after `talk` and `rumble` and before `record`
@@ -2880,6 +2881,12 @@ STUN and TURN are internet traffic and work in every mode.
 ## Changes by release
 
 What each release changed for players, in plain words.
+
+### 0.3.107
+
+- When the friend whose game you joined leaves, you now see "<friend> left. You're playing on your own." on screen. In 0.3.106 the notice, and the "<name> left" line, could be hidden while the YouGame button was tucked away during a fight.
+- Where the YouGame app shows its own overlay over the game, joins and leaves are announced once, by the app, instead of twice.
+- About 0.3.106: after your host's game closes, you keep playing on your own, and you open a room of your own once you're back in the menus. It doesn't open a new room in the middle of the fight; that is by design.
 
 ### 0.3.106
 

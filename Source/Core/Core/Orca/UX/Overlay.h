@@ -111,6 +111,9 @@ public:
 
   // Called when the port list changes. Any thread. An unchanged list shows nothing new.
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
+  // Off while the app's own overlay announces joins and leaves over the game: the port list is
+  // still followed, so turning toasts back on shows only later changes. Any thread.
+  void SetPortToasts(bool on);
   // A custom toast, such as a match result, shown for `ms`. Any thread.
   void AddToast(std::string text, double now_ms, double ms = TOAST_MS);
   // A decoded line of the app's chat. Any thread.
@@ -137,6 +140,7 @@ private:
 
   mutable std::mutex m_lock;
   bool m_seen_ports = false;
+  bool m_port_toasts = true;
   std::vector<Events::PortInfo> m_ports;
   struct ToastEntry
   {
@@ -182,6 +186,8 @@ int Dim();
 constexpr double DIM_EASE_S = 0.2;
 void SetStats(Stats stats);
 void SetPerf(Perf perf);
+// The app's "port-toasts on|off": whether the overlay toasts players joining and leaving ports.
+void SetPortToasts(bool on);
 // The game's frame boundary, for the frame meter.
 void FrameBoundary(bool shown, double game_held_ms, int game_held_frames);
 // A short toast under the circle. Any thread.
