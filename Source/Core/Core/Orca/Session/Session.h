@@ -68,6 +68,11 @@ constexpr int MAX_FRAME_CHECKS_IN_PACKET = 16;
 constexpr int FRAME_CHECKS_SENT = 8;
 constexpr int FRAME_CHECKS_REPEATED = 3;
 constexpr int FRAME_CHECK_HISTORY = 300;
+// The widest spacing of per-frame checks a peer may announce (Config::frame_check_every).
+constexpr int MAX_FRAME_CHECK_EVERY = 60;
+// The spacing online matches use: hashing what changed costs about as much over four frames as
+// over one, and a desync still shows a few frames after it happens.
+constexpr int ONLINE_FRAME_CHECK_EVERY = 4;
 // Desync recovery (Session::Recover): the most times one session goes back, and how long the
 // reference player waits for another to go back before calling the desync final (it may stall
 // meanwhile, so wall time).
@@ -177,10 +182,11 @@ struct Packet
   std::optional<int> checksum_frame;
   u64 checksum = 0;
   // Per-frame checks: the low 32 bits of the sender's Game::FrameChecksum at the start of frames
-  // frame_checks_first, frame_checks_first + 1, ..., all final. Compared only when
+  // frame_checks_first, frame_checks_first + frame_check_every, ..., all final. Compared only when
   // frame_check_version is this build's FRAME_CHECK_VERSION. Empty: nothing new to report, or an
   // older build.
   int frame_check_version = 0;
+  int frame_check_every = 1;
   int frame_checks_first = 0;
   std::vector<u32> frame_checks;
   // Desync recovery: how many times the sender went back to the reference player's state (-1: it
@@ -259,6 +265,10 @@ struct Config
   // within a frame or two of being final instead of up to checksum_every frames later. Off, the
   // packets are exactly what builds without it send; online matches turn it on.
   bool frame_checks = false;
+  // Hash only frames divisible by this, 1 to MAX_FRAME_CHECK_EVERY. Each hash covers what changed
+  // since the previous one, so wider spacing costs less a frame and finds a desync a few frames
+  // later. Peers with different spacings compare the frames both hashed.
+  int frame_check_every = 1;
   // On a desync, a player other than the reference (Session::ReferenceSeat) goes back to the last
   // frame it agreed on with the reference and re-runs from there, instead of ending the session.
   // Needs frame_checks on both sides; online matches turn it on.
@@ -508,6 +518,7 @@ private:
   // lowest seat in play.
   int ReferenceSeat() const;
   bool RecoversDesyncs() const;
+  int FrameCheckEvery() const;
   // Whether this player compares its state with `seat`'s: the reference compares with everyone;
   // with a reference that recovers, others compare only with it.
   bool Compares(int seat) const;

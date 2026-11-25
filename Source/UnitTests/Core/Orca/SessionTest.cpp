@@ -1538,6 +1538,116 @@ TEST(OrcaSessionFrameChecks, WireFormat)
   EXPECT_EQ(pending->frame_checks, (std::vector<u32>{0, 1, 7, 8, 9, 10}));
 }
 
+// Spaced checks, as online matches take them: only frames divisible by frame_check_every are
+// hashed and sent, identical runs agree on all of them, and a one-byte difference shows at the
+// first check frame it reaches.
+static Config Spaced(int every)
+{
+  Config config = Checked();
+  config.frame_check_every = every;
+  return config;
+}
+
+TEST(OrcaSessionFrameChecks, SpacedChecksAgreeAndFindADesync)
+{
+  {
+    Match match(Spaced(4), 4, 3);
+    match.Play(1200);
+    ExpectClean(match);
+    for (const Player* p : {match.a.get(), match.b.get()})
+    {
+      EXPECT_GT(p->session.GetStats().rollbacks, 10);
+      EXPECT_GT(p->session.GetStats().frame_checks_matched, 250);
+      EXPECT_LE(p->session.GetStats().frame_checks_matched, 300);
+      for (const auto& [frame, state] : p->game.m_frame_checked)
+        EXPECT_EQ(frame % 4, 0) << "frame " << frame;
+    }
+  }
+  for (const int latency : {0, 3})
+  {
+    Match match(Spaced(4), latency, 0);
+    match.b->game.m_corrupt_at = 100;
+    match.b->game.corrupt_mask = u64{0xff} << 16;
+    match.Play(400);
+    const std::string error =
+        match.b->session.Error().empty() ? match.a->session.Error() : match.b->session.Error();
+    EXPECT_NE(error.find("Desync at frame 104:"), std::string::npos)
+        << "latency " << latency << ": " << error;
+  }
+}
+
+// Peers with different spacings compare the frames both hashed.
+TEST(OrcaSessionFrameChecks, DifferentSpacingsCompareCommonFrames)
+{
+  Match match(Spaced(4), 3, 1);
+  Config every_frame = Spaced(1);
+  every_frame.local_seat = 1;
+  match.b = std::make_unique<Player>(every_frame, match.net, 1);
+  match.Play(900);
+  ExpectClean(match);
+  EXPECT_GT(match.a->session.GetStats().frame_checks_matched, 180);
+  EXPECT_GT(match.b->session.GetStats().frame_checks_matched, 180);
+}
+
+// The spacing rides as a fourth element, only when it isn't 1, which older builds ignore (they
+// take exactly three); coalescing joins spaced runs that meet.
+TEST(OrcaSessionFrameChecks, SpacedWireFormat)
+{
+  Packet sent;
+  sent.seat = 1;
+  sent.current_frame = 300;
+  sent.first_frame = 298;
+  sent.pads = {Pad{1}, Pad{2}};
+  sent.frame_check_version = FRAME_CHECK_VERSION;
+  sent.frame_checks_first = 280;
+  sent.frame_checks = {1, 2, 3};
+  EXPECT_NE(EncodePacket(sent).find("\"fc\":[1,280,\"000000010000000200000003\"]"),
+            std::string::npos);
+  sent.frame_check_every = 4;
+  const std::string spaced_json = EncodePacket(sent);
+  EXPECT_NE(spaced_json.find("\"fc\":[1,280,\"000000010000000200000003\",4]"), std::string::npos)
+      << spaced_json;
+  Packet got;
+  ASSERT_TRUE(DecodePacket(spaced_json, &got));
+  EXPECT_EQ(got.frame_check_every, 4);
+  EXPECT_EQ(got.frame_checks_first, 280);
+  EXPECT_EQ(got.frame_checks, sent.frame_checks);
+
+  Packet plain = sent;
+  plain.frame_checks.clear();
+  const std::string json = EncodePacket(plain);
+  for (const std::string field :
+       {"[1,280,\"00000001\",1]", "[1,280,\"00000001\",61]", "[1,280,\"00000001\",2.5]",
+        "[1,280,\"00000001\",\"4\"]", "[1,280,\"00000001\",4,4]"})
+  {
+    Packet odd;
+    ASSERT_TRUE(DecodePacket("{\"fc\":" + field + "," + json.substr(1), &odd)) << field;
+    EXPECT_TRUE(odd.frame_checks.empty()) << field;
+    EXPECT_EQ(odd.pads, sent.pads) << field;
+  }
+
+  std::optional<Packet> pending;
+  CoalescePacket(&pending, sent);
+  Packet next = sent;
+  next.frame_checks_first = 288;
+  next.frame_checks = {7, 8};
+  CoalescePacket(&pending, next);
+  EXPECT_EQ(pending->frame_checks_first, 280);
+  EXPECT_EQ(pending->frame_check_every, 4);
+  EXPECT_EQ(pending->frame_checks, (std::vector<u32>{1, 2, 7, 8}));
+  // A run with another spacing isn't joined: the newer one's checks stand alone.
+  Packet other = sent;
+  other.frame_check_every = 2;
+  other.frame_checks_first = 270;
+  other.frame_checks = {5, 6, 7, 8, 9, 10};
+  std::optional<Packet> mixed;
+  CoalescePacket(&mixed, other);
+  CoalescePacket(&mixed, sent);
+  EXPECT_EQ(mixed->frame_checks_first, 280);
+  EXPECT_EQ(mixed->frame_check_every, 4);
+  EXPECT_EQ(mixed->frame_checks, sent.frame_checks);
+}
+
 // Desync recovery: a player whose state left the reference's (seat 0 here, the lowest in play) for
 // a reason re-running cures goes back to the last frame they agreed on, re-runs, and both play on in
 // the same state; the reference waits for it.

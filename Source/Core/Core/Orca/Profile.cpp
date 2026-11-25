@@ -465,6 +465,14 @@ int TestSnapshotEvery()
   return std::clamp(std::atoi(value.c_str()), 1, Net::MAX_SNAPSHOT_EVERY);
 }
 
+std::optional<int> TestFrameCheckEvery()
+{
+  const std::string value = GetEnv("ORCA_TEST_FRAME_CHECK_EVERY");
+  if (!SessionActive() || value.empty())
+    return std::nullopt;
+  return std::clamp(std::atoi(value.c_str()), 0, Net::MAX_FRAME_CHECK_EVERY);
+}
+
 bool TestFullSnapshots()
 {
   return SessionActive() && EnvIs("ORCA_TEST_FULL_SNAPSHOTS", "1");
@@ -541,7 +549,8 @@ bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
          TestBlackoutConfig().has_value() ||
-         TestSnapshotEvery() != 0 || TestFullSnapshots() || TestNoAfp() ||
+         TestSnapshotEvery() != 0 || TestFrameCheckEvery().has_value() || TestFullSnapshots() ||
+         TestNoAfp() ||
          TestCpuCore().has_value() || !TestGateSpec().empty() || !TestQueueSpec().empty() ||
          !TestCharOrderSpec().empty() || !TestQueuePickSpec().empty();
 }

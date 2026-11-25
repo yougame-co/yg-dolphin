@@ -214,6 +214,7 @@ struct TestNetUplink
 };
 std::optional<TestNetUplink> TestNetUplinkConfig();
 int TestSnapshotEvery();  // 0: unset
+std::optional<int> TestFrameCheckEvery();  // 0: per-frame checks off
 bool TestFullSnapshots();
 bool TestNoAfp();
 std::optional<PowerPC::CPUCore> TestCpuCore();

@@ -712,14 +712,22 @@ IOS::HLE::FS::HostFileSystem* HostNand(Core::System& system)
   return ios ? static_cast<IOS::HLE::FS::HostFileSystem*>(ios->GetFS().get()) : nullptr;
 }
 
+// Per-frame checks and desync recovery, on in every online match unless a test turns them off.
+void SetFrameChecks(Orca::Net::Config* config)
+{
+  const std::optional<int> every = Orca::TestFrameCheckEvery();
+  config->frame_checks = every.value_or(1) != 0;
+  config->frame_check_every = std::max(every.value_or(Orca::Net::ONLINE_FRAME_CHECK_EVERY), 1);
+  config->recover_desyncs = config->frame_checks;
+}
+
 Orca::Net::Config SessionConfig()
 {
   Orca::Net::Config config;
   config.seats = Orca::Net::MAX_SEATS;
   config.per_peer_inputs = Orca::Online::RoomDoubles();
   config.max_rollback = MAX_ROLLBACK;
-  config.frame_checks = true;
-  config.recover_desyncs = true;
+  SetFrameChecks(&config);
   // Snapshot spacing is local only (it changes no frame's result); a test may fix it.
   config.snapshot_every = Orca::TestSnapshotEvery();
   // So is the input delay.
@@ -5958,8 +5966,7 @@ static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGa
     Orca::Net::Config config;
     config.seats = Orca::Net::MAX_SEATS;
     config.per_peer_inputs = room.Doubles();
-    config.frame_checks = true;
-    config.recover_desyncs = true;
+    SetFrameChecks(&config);
     config.local_seat = 0;
     config.co_seats = match.co_seats;
     config.authority_seat = 0;

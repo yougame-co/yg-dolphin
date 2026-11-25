@@ -387,7 +387,8 @@ picojson::object PacketToJson(const Packet& packet)
       bytes[i] = static_cast<u8>(packet.checksum >> (56 - 8 * i));
     d["h"] = picojson::value(ToHex(bytes, 8));
   }
-  // Per-frame checks as [version, first frame, 8 hex digits each]. Older peers ignore the key.
+  // Per-frame checks as [version, first frame, 8 hex digits each], then the spacing between their
+  // frames when it isn't 1. Older peers ignore the key, and a spaced form.
   if (!packet.frame_checks.empty())
   {
     std::string hex;
@@ -397,9 +398,12 @@ picojson::object PacketToJson(const Packet& packet)
                            static_cast<u8>(check >> 8), static_cast<u8>(check)};
       hex += ToHex(bytes, 4);
     }
-    d["fc"] = picojson::value(picojson::array{
-        picojson::value(static_cast<double>(packet.frame_check_version)),
-        picojson::value(static_cast<double>(packet.frame_checks_first)), picojson::value(hex)});
+    picojson::array fc{picojson::value(static_cast<double>(packet.frame_check_version)),
+                       picojson::value(static_cast<double>(packet.frame_checks_first)),
+                       picojson::value(hex)};
+    if (packet.frame_check_every != 1)
+      fc.push_back(picojson::value(static_cast<double>(packet.frame_check_every)));
+    d["fc"] = picojson::value(std::move(fc));
   }
   if (packet.recoveries >= 0)
     d["fe"] = picojson::value(static_cast<double>(packet.recoveries));
@@ -603,13 +607,19 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
   // Per-frame checks: a malformed or unknown form is ignored rather than refused, so a later
   // format can't break this build's link.
   if (const auto fc = d.find("fc"); fc != d.end() && fc->second.is<picojson::array>() &&
-                                    fc->second.get<picojson::array>().size() == 3)
+                                    (fc->second.get<picojson::array>().size() == 3 ||
+                                     fc->second.get<picojson::array>().size() == 4))
   {
     const auto& entry = fc->second.get<picojson::array>();
     std::vector<u8> check_bytes;
     const bool numbers = entry[0].is<double>() && entry[1].is<double>() &&
                          entry[2].is<std::string>();
-    if (numbers && entry[0].get<double>() >= 1 && entry[0].get<double>() <= 1000 &&
+    const bool spaced = entry.size() == 4;
+    const bool every_ok =
+        !spaced || (entry[3].is<double>() && entry[3].get<double>() >= 2 &&
+                    entry[3].get<double>() <= MAX_FRAME_CHECK_EVERY &&
+                    std::floor(entry[3].get<double>()) == entry[3].get<double>());
+    if (numbers && every_ok && entry[0].get<double>() >= 1 && entry[0].get<double>() <= 1000 &&
         std::floor(entry[0].get<double>()) == entry[0].get<double>() &&
         entry[1].get<double>() >= 0 && entry[1].get<double>() <= MAX_FRAME &&
         std::floor(entry[1].get<double>()) == entry[1].get<double>() &&
@@ -619,6 +629,7 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     {
       out.frame_check_version = static_cast<int>(entry[0].get<double>());
       out.frame_checks_first = static_cast<int>(entry[1].get<double>());
+      out.frame_check_every = spaced ? static_cast<int>(entry[3].get<double>()) : 1;
       for (size_t i = 0; i < check_bytes.size(); i += 4)
       {
         out.frame_checks.push_back(u32{check_bytes[i]} << 24 | u32{check_bytes[i + 1]} << 16 |
@@ -6950,29 +6961,35 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
     merged.checksum = pending->checksum;
   }
   // Per-frame checks: the older packet's when the newer has none, or joined in front of the newer
-  // one's when the two runs meet.
+  // one's when the two runs meet with the same spacing.
   if (!pending->frame_checks.empty() && same_history)
   {
+    const int every = merged.frame_check_every;
     if (merged.frame_checks.empty())
     {
       merged.frame_check_version = pending->frame_check_version;
+      merged.frame_check_every = pending->frame_check_every;
       merged.frame_checks_first = pending->frame_checks_first;
       merged.frame_checks = pending->frame_checks;
     }
     else if (pending->frame_check_version == merged.frame_check_version &&
+             pending->frame_check_every == every &&
              pending->frame_checks_first < merged.frame_checks_first &&
-             pending->frame_checks_first + static_cast<int>(pending->frame_checks.size()) >=
+             (merged.frame_checks_first - pending->frame_checks_first) % every == 0 &&
+             pending->frame_checks_first +
+                     static_cast<int>(pending->frame_checks.size()) * every >=
                  merged.frame_checks_first)
     {
-      const int extra =
-          std::min(merged.frame_checks_first - pending->frame_checks_first,
-                   MAX_FRAME_CHECKS_IN_PACKET - static_cast<int>(merged.frame_checks.size()));
+      // Checks of the older packet in front of the newer one's first.
+      const int before = (merged.frame_checks_first - pending->frame_checks_first) / every;
+      const int room_left =
+          MAX_FRAME_CHECKS_IN_PACKET - static_cast<int>(merged.frame_checks.size());
+      const int extra = std::min(before, room_left);
       if (extra > 0)
       {
-        const auto from = pending->frame_checks.begin() +
-                          (merged.frame_checks_first - extra - pending->frame_checks_first);
+        const auto from = pending->frame_checks.begin() + (before - extra);
         merged.frame_checks.insert(merged.frame_checks.begin(), from, from + extra);
-        merged.frame_checks_first -= extra;
+        merged.frame_checks_first -= extra * every;
       }
     }
   }

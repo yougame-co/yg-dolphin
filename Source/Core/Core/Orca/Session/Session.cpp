@@ -1997,6 +1997,7 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
       packet.current_frame < 0 || packet.current_frame > far_limit ||
       (packet.checksum_frame && (*packet.checksum_frame < 0 || *packet.checksum_frame > far_limit)) ||
       packet.frame_checks.size() > static_cast<size_t>(MAX_FRAME_CHECKS_IN_PACKET) ||
+      packet.frame_check_every < 1 || packet.frame_check_every > MAX_FRAME_CHECK_EVERY ||
       packet.frame_checks_first < 0 || packet.frame_checks_first > far_limit ||
       packet.history.size() > static_cast<size_t>(MAX_HISTORY_IN_PACKET) ||
       packet.history_first < 0 || packet.history_ack > far_limit)
@@ -2333,7 +2334,7 @@ void Session::CheckChecksums()
 void Session::RecordFrameCheck(int frame)
 {
   // Once per frame run: a stalled or waiting boundary repeats the frame with nothing run since.
-  if (!m_config.frame_checks || m_frame_checked == frame)
+  if (!m_config.frame_checks || m_frame_checked == frame || frame % FrameCheckEvery() != 0)
     return;
   m_frame_checked = frame;
   if (const std::optional<u64> check = m_game.FrameChecksum(frame))
@@ -2359,7 +2360,7 @@ void Session::AddPeerFrameChecks(int seat, const Packet& packet)
   auto& checks = m_peer_frame_checks[seat];
   for (size_t i = 0; i < packet.frame_checks.size(); ++i)
   {
-    const int frame = packet.frame_checks_first + static_cast<int>(i);
+    const int frame = packet.frame_checks_first + static_cast<int>(i) * packet.frame_check_every;
     if (frame >= lowest && frame <= highest)
       checks.emplace(frame, packet.frame_checks[i]);
   }
@@ -2368,11 +2369,16 @@ void Session::AddPeerFrameChecks(int seat, const Packet& packet)
 void Session::AddFrameChecks(Packet* packet)
 {
   // The checks of final frames not sent yet, at most FRAME_CHECKS_SENT a packet, behind a few
-  // already sent again: a lost packet's checks still arrive with the next one.
+  // already sent again: a lost packet's checks still arrive with the next one. Only frames
+  // divisible by FrameCheckEvery() are hashed.
   if (!m_config.frame_checks || m_frame_checks.empty())
     return;
-  m_checks_sent = std::max(m_checks_sent, m_frame_checks.begin()->first - 1);
-  const int last = std::min(FinalFrame(), m_checks_sent + FRAME_CHECKS_SENT);
+  const int every = FrameCheckEvery();
+  m_checks_sent = std::max(m_checks_sent, m_frame_checks.begin()->first - every);
+  int last = std::min(FinalFrame(), m_checks_sent + FRAME_CHECKS_SENT * every);
+  if (last <= m_checks_sent)
+    return;
+  last -= last % every;
   if (last <= m_checks_sent)
     return;
   if (!m_frame_checks.contains(last))
@@ -2381,16 +2387,17 @@ void Session::AddFrameChecks(Packet* packet)
     m_checks_sent = last;
     return;
   }
-  int first = std::max(last - FRAME_CHECKS_SENT + 1, m_checks_sent + 1 - FRAME_CHECKS_REPEATED);
-  // Only a run this machine hashed every frame of.
+  const int first = std::max(last - (FRAME_CHECKS_SENT - 1) * every,
+                             m_checks_sent + 1 - FRAME_CHECKS_REPEATED * every);
+  // Only a run this machine hashed every check frame of.
   int from = last;
-  while (from > first && m_frame_checks.contains(from - 1))
-    --from;
-  first = from;
+  while (from - every >= first && m_frame_checks.contains(from - every))
+    from -= every;
   packet->frame_check_version = FRAME_CHECK_VERSION;
-  packet->frame_checks_first = first;
+  packet->frame_check_every = every;
+  packet->frame_checks_first = from;
   packet->frame_checks.clear();
-  for (int frame = first; frame <= last; ++frame)
+  for (int frame = from; frame <= last; frame += every)
     packet->frame_checks.push_back(static_cast<u32>(m_frame_checks.at(frame)));
   m_checks_sent = last;
 }
@@ -2445,6 +2452,11 @@ int Session::ReferenceSeat() const
       return s;
   }
   return m_config.local_seat;
+}
+
+int Session::FrameCheckEvery() const
+{
+  return std::clamp(m_config.frame_check_every, 1, MAX_FRAME_CHECK_EVERY);
 }
 
 bool Session::RecoversDesyncs() const
