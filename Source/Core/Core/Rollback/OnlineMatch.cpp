@@ -2974,8 +2974,17 @@ void Leave(Match& match)
 // "join <code>": join a friend's game during play, playing solo until its keyframe loads.
 void JoinInPlay(Match& match, const std::string& code, bool keep_room)
 {
-  if (code == Orca::Online::Code() && match.joining)
+  // Already joining that room, or hosting it: leaving it to join it again would leave it with no
+  // host, so the join would be refused.
+  if (code == Orca::Online::Code() && (match.joining || Orca::Online::Joining() == false))
+  {
+    if (!match.joining)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Drop-in: asked to join room {}, which this game hosts; ignored",
+                     code);
+    }
     return;
+  }
   if (match.session)
     GoSolo(match, "joining another game", nullptr);
   ResetDropIn(match);

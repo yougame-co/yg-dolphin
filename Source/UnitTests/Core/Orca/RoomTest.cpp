@@ -313,6 +313,31 @@ TEST(OrcaRoomPingRange, QueueWelcomesAdvertiseProbeOnJoin)
   }
 }
 
+// A room the app's hello names is joined, unless the server seats this player alone as its host:
+// then nobody hosts it, so this game does. The role stays unknown until a roster settles it.
+TEST(OrcaRoom, HelloNamedRoomIsHostedWhenNobodyIsInIt)
+{
+  auto hello = TraceOptions(true);
+  hello.room_code.clear();
+  const std::string bare = R"({"t":"welcome","me":"me","host":"me","lifecycle":"game"})";
+  const auto alone = TraceRoomForTest(
+      hello, {{RK::Message, 0, bare}, {RK::Message, 10, RosterMessage("welcome", false, false)}});
+  EXPECT_FALSE(alone[0].joining.has_value());
+  EXPECT_EQ(alone[1].joining, false);
+  EXPECT_EQ(alone[1].seat, 0);
+
+  const auto hosted = TraceRoomForTest(hello, {{RK::Message, 0, RosterMessage("welcome", true)}});
+  EXPECT_EQ(hosted[0].joining, true);
+  EXPECT_EQ(hosted[0].seat, 1);
+
+  // Seated first but named someone else's room: still a joiner.
+  const std::string other_host =
+      R"({"t":"welcome","me":"me","host":"peer","lifecycle":"game",)"
+      R"("players":[{"id":"me","name":"Me"}],)"
+      R"("participants":[{"connectionId":"me","slot":0,"name":"Me"}]})";
+  EXPECT_EQ(TraceRoomForTest(hello, {{RK::Message, 0, other_host}})[0].joining, true);
+}
+
 TEST(OrcaRoomPingRange, FriendsAndTournamentJoinsKeepTheirBytes)
 {
   ScopedEnv direct("ORCA_DIRECT", "1");

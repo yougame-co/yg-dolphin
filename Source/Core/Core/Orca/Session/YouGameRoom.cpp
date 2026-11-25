@@ -1357,6 +1357,8 @@ struct YouGameRoom::Impl
   // once the ticket is in (role_known, under mutex).
   bool joining = false;
   bool role_known = false;
+  // The app's hello named the room: the first roster settles the role (under mutex).
+  bool role_from_roster = false;
   std::atomic<bool> offer_now{false};
   // The room as the page draws it (from welcome, join, leave, lobby and start).
   picojson::array room_participants, room_players;
@@ -1931,9 +1933,13 @@ struct YouGameRoom::Impl
         if (!post(bridge + "/sdk", hello, headers, &reply))
           return false;
         room = Str(reply, "room");
-        // The app opened an invite: this Orca joins the friend's game.
+        // The app opened an invite: this Orca joins the friend's game, unless the room has nobody
+        // in it and makes this player its host (Roster settles that).
         if (!room.empty())
+        {
           joining = true;
+          role_from_roster = true;
+        }
       }
       if (room.empty())
         room = RandomString(CODE_ALPHABET, 8);
@@ -5278,6 +5284,18 @@ struct YouGameRoom::Impl
           removed_local.push_back(previous);
       my_seat = seat;
       friends_room = queue_known && (queue == "private" || doubles);
+      // A room nobody else is in, whose host the server made this player, has no game to join.
+      if (role_from_roster && !me.empty())
+      {
+        if (joining && my_seat == 0 && host == me && present.empty() && queue == "private")
+        {
+          joining = false;
+          NOTICE_LOG_FMT(NETPLAY, "Orca room: room {} had nobody in it and made this game its "
+                                  "host, so it hosts instead of joining",
+                         code);
+        }
+        role_from_roster = false;
+      }
     }
     if (co_wait_expired)
     {
@@ -6339,6 +6357,13 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
   auto& room = *owner.m_impl;
   room.code = options.room_code;
   room.bridged = true;  // Exercise publication without starting a bridge or making requests.
+  // No code: the app's hello named the room, the ticket is in, and the first roster sets the role.
+  if (options.room_code.empty() && options.ask_app_for_room && options.joining)
+  {
+    room.code = "hellotest";
+    room.role_known = true;
+    room.role_from_roster = true;
+  }
   std::vector<RoomTestSnapshot> trace;
   for (const RoomTestStep& step : steps)
   {
@@ -6485,6 +6510,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     snapshot.probe_lines = std::exchange(room.test_probe_lines, {});
     snapshot.host_input_deadline = owner.HostAwayDeadline();
     snapshot.seat = owner.Seat();
+    snapshot.joining = owner.Joining();
     snapshot.co_seats = owner.CoSeats();
     snapshot.ticket_local_seats = room.TicketLocalSeats();
     snapshot.teams = owner.Teams();
@@ -6563,7 +6589,7 @@ std::vector<int> YouGameRoom::GroupOf(int seat) const
 std::optional<bool> YouGameRoom::Joining() const
 {
   std::lock_guard lock(m_impl->mutex);
-  if (!m_impl->role_known)
+  if (!m_impl->role_known || m_impl->role_from_roster)
     return std::nullopt;
   return m_impl->joining;
 }

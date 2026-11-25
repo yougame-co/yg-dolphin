@@ -2882,6 +2882,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.109
+
+- "Play with your party" works when your game reaches the party's room first. In 0.3.108 that game waited to join a room nobody was hosting, then said it couldn't join and opened a different room. It now hosts the party's room, and the others join it.
+- A game told to join the room it is already hosting stays its host and ignores the request.
+
 ### 0.3.108
 
 - Where the YouGame app shows its own overlay over the game, the host again sees "<name> left" when a player leaves. In 0.3.107 that overlay muted the leave notice along with the join one; joins stay announced once, by Orca's "is joining on port" line.
