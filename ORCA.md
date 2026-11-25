@@ -2551,7 +2551,7 @@ log their raw request and the unchanged bounds after hiding the window. Unset, t
 | `pause` / `resume` | Answers `state paused` / `state running`. In a session it pauses only while the player's game is alone, and ends by itself when drop-in needs the game; otherwise `unsupported pause`. |
 | `volume V` | 0 to 1, this run only. |
 | `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). A frame the game itself holds in emulated time (Project+ loading between scenes) counts as the video frames it held, so the meter, `fps` and the `hi` hitch count in `orca stats` show only this machine falling behind; `hil` counts the frames a load alone made slow (`hi` + `hil` is the older builds' `hi`). |
-| `port-toasts on\|off` | Whether the overlay toasts players joining and leaving ports ("ada joined on port 2", "ada left"). The app turns it off while its own overlay over the game announces them; the port list is still followed, so turning it on shows only later changes. Older Orca writes an unknown command to stderr and keeps toasting. |
+| `port-toasts on\|off` | Whether the overlay toasts players joining ports ("ada joined on port 2"). The app turns it off while its own overlay over the game is up, since Orca's on-screen "is joining on port" line already announces each join; leaves ("ada left") always toast, because nothing else announces them. The port list is still followed, so turning it on shows only later joins. Older Orca writes an unknown command to stderr and keeps toasting. |
 | `music on\|off` | The player's Music switch ([Music switch](#music-switch)), cap `music`. |
 | `gfx <key> <value>` | A live change to one of the player's drawing-only graphics settings ([Graphics](#graphics)), cap `gfx`. |
 | `save N` / `load N` / `reset` | Refused in a session. |
@@ -2881,6 +2881,10 @@ STUN and TURN are internet traffic and work in every mode.
 ## Changes by release
 
 What each release changed for players, in plain words.
+
+### 0.3.108
+
+- Where the YouGame app shows its own overlay over the game, the host again sees "<name> left" when a player leaves. In 0.3.107 that overlay muted the leave notice along with the join one; joins stay announced once, by Orca's "is joining on port" line.
 
 ### 0.3.107
 
