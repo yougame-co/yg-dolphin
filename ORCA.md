@@ -635,12 +635,39 @@ the live build.
   hook again at the same boundary writes nothing new. Anything that depends on one machine (the
   overlay, stdout lines) happens on first runs only.
 - **Snapshots** hold device state and MEM1/MEM2, copy-on-write (`Rollback/Cow.h`). The session NAND
-  is kept as a journal mark, not bytes. A load restores only the 4 KB pages that changed, and drops
-  the JIT blocks in those pages; the rest of the JIT is kept across loads. The EFB is left alone:
-  re-run frames draw nothing.
-- **Window:** 7 frames of rollback, 3 frames of input delay by default, fixed
-  ([Input delay](#input-delay)). Peers exchange a checksum every 60 frames; a mismatch is a desync,
+  is kept as a journal mark, not bytes. A load restores only the 4 KB pages that changed. It keeps
+  every compiled block unless a restored word that differs was compiled, or the JIT dropped a block
+  or a learned fact since the snapshot; then it drops the blocks in every changed page, as before
+  (all or nothing, `Rollback.h` `CodeKeepCheck`). The EFB is left alone: re-run frames draw nothing.
+- **Window:** 7 frames of rollback, 2-6 frames of input delay picked from ping when the session
+  starts (3 with no round trip measured), then fixed ([Input delay](#input-delay)). Peers exchange a checksum every 60 frames; a mismatch is a desync,
   which unplugs the friend rather than letting the games drift.
+- **Per-frame checks.** Every final frame is also checked: each machine hashes all of MEM1 and MEM2
+  at the start of every frame (`Rollback/FrameHash.h`) and sends the low 32 bits of the frames it
+  has not reported yet in its next packets (`"fc": [version, first frame, hex]`, up to 8 new and 3
+  repeated). A desync shows as `Desync at frame N` for the first frame that differs, a frame or two
+  after it is final instead of up to 60 later. The hash is the sum of a seeded XXH3 of every 4 KB
+  block, so it is the same on every host page size; a frame re-hashes only the pages copy-on-write
+  saw written or restored (`Cow::TakeTouched`) plus 1/360 of RAM, an audit that would find a write
+  the tracking missed (logged as `untracked RAM writes found`, never seen). A machine without
+  copy-on-write snapshots sends no checks. Builds before this one send none and ignore the key, and
+  a peer whose checks are in another format (`FRAME_CHECK_VERSION`) is never compared, so mixed
+  builds can't false-alarm; the 60-frame checksum still runs for them. The stats line after the
+  match's says how many checks matched and what the hash cost (`frame hash X ms a frame`).
+- **Desync recovery.** The reference player's state is the right one: the host
+  (`Config::authority_seat`), or with no host the lowest seat in play; every machine works that out
+  the same way, with no vote. When another player's frame check or checksum differs from the
+  reference's, that player goes back to the newest snapshot of a frame whose check matched the
+  reference's and re-runs from there with the inputs it already has (`Session::Recover`), like a
+  deep rollback: the screen jumps once, nothing else is shown. Checkpoint snapshots (every 60
+  frames) are kept outside the rollback ring for this (`SnapshotRing::Keep`, two at a time, only
+  with copy-on-write snapshots), so the re-run is at most about 60 frames plus the detection delay.
+  The reference waits up to 5 s for that player's next packets, whose `"fe"` (recoveries so far)
+  went up; checks and checksums from before are dropped. Only the other players go back, so this
+  cures a difference that re-running cures on their side; if the same frame differs again, if there
+  is no agreed snapshot, after 3 recoveries, or when the reference is an older build (no `"fe"`),
+  the session ends with `Desync at frame N` as before, and the match is void. With a reference
+  that recovers, other players compare only with it. The log line says `desync recovered`.
 - **Ports.** Online, SI is forced to four GameCube pads, and a port without a player reports no
   controller (bit `0x80` of byte 0, `UNPLUGGED_PAD`). Pads travel as 8 bytes (`PadCodec.h`).
 - **Inputs read where the game reads them.** `Rollback::InputOverride` supplies each poll; the
@@ -1095,12 +1122,26 @@ Tests: `OrcaDirectLink*`, `OrcaRoom.TicketSwitchesDirectLinks`, `OrcaSessionDire
 
 ## Input delay
 
-Fixed, never adaptive: players want a delay that never moves with the link. The page sends `delay N`
-(1-6; YouGame's `ORCA_DELAY_DEFAULT`, 3 since Orca 0.3.32's v-sync move); with no page, no `caps
-delay` or an old page's `delay auto`, Orca plays at its own fixed 3 (`Rollback/OnlineMatch.cpp`
-`DEFAULT_DELAY`, Orca 0.3.33+; before, the adaptive delay below from 2). Rollback hides the rest of
-the link, jitter and spikes included: a spike past the rollback window costs a stall there, not a
-frame of delay on every input all match long. Each player's delay is their own: a 2 and a 3 play
+Fixed for the match, never adaptive: players want a delay that never moves with the link. A page
+that sends `delay N` (1-6; YouGame's `ORCA_DELAY_DEFAULT`, 3 since Orca 0.3.32's v-sync move) sets
+it. With no page, no `caps delay`, no `delay N` yet or `delay auto`, every online session (queue,
+ranked, friends rooms, 2v2) picks it when it starts (`Rollback/OnlineMatch.h` `HeldDelay`):
+
+- **At the start**, from the median of this player's recent round trips to the room server, in
+  whole frames from 2 to 6: an input goes up to the server and down to the opponent, about one of
+  this player's round trips when both links are alike. No round trip measured: a fixed 3
+  (`DEFAULT_DELAY`).
+- **Once**, as soon as the session knows both players' medians (the opponent's comes in its session
+  packets within the first frames; in 2v2 the slowest friend's): half of each, or half a shorter
+  direct link's round trip (`LinkDelay`). Across a continent the far player's start pick was larger
+  than the link needs.
+- Then held until the session ends. A `delay N` sent mid-match applies from the next frame; `delay
+  auto` goes back to the pick. Option B rooms pick even over a page's `delay N`.
+
+Logged as `input delay N frames, picked from a M ms round trip ...` and `input delay N frames (was
+K), from round trips of ...`. Rollback hides the rest of the link, jitter and spikes included: a
+spike past the rollback window costs a stall there, not a frame of delay on every input all match
+long. Each player's delay is their own (every input travels with its frame): a 2 and a 4 play
 together.
 
 The session's adaptive delay (`Orca/Session/Session.cpp`, "Input delay"; `Config::input_delay` 2 is
@@ -1397,9 +1438,12 @@ Result: on an M4 every match start is smooth from the first launch after an upda
 the first 600 frames' compiles; `node Tools/orca/match-start.mjs --from-frame 28 <run>` (Project+;
 Brawl 170) counts the frame times a player sees after the loading image.
 
-A rollback in Project+ recompiles 40-120 blocks (pages with code also hold data that changes every
-frame, and a restore drops every block in a restored page). Invalidating only changed 32-byte lines
-would keep most of them (not done).
+A rollback in Project+ used to recompile 40-120 blocks (pages with code also hold data that changes
+every frame, and a restore dropped every block in a restored page). Now a load keeps all
+compiled code when no restored word that differs was compiled and the JIT lost nothing since the
+snapshot (`CodeKeepCheck`); otherwise it drops those pages' blocks as before, never a subset.
+`YG_SNAPTIME=1` logs how many loads kept the code and how many blocks the others dropped;
+`YG_KEEPJIT=0` brings back the old rule for A/B runs.
 
 ## Graphics
 
@@ -1882,7 +1926,8 @@ Leaving a ranked set once game 1 began is a forfeit (the room's 15 s grace); a s
 game 1 began (a no-show, a leave or a crash while game 1's stage loads) is void and rates nobody.
 The room knows game 1 began from the leaver's own `game-start` (Orca 0.3.33+) or from a game it
 settled (rooms `game-lobby.ts` `reached`; YouGame `docs/ORCA_ONLINE_UX.md` "3B leaving mid-game").
-A desync voids the match in progress before the players part.
+A desync voids the match in progress before the players part, unless going back cures it
+([Rollback and snapshots](#rollback-and-snapshots), desync recovery).
 
 `game-start`: each Orca sends `{"t":"game-start","matchId":M,"id":"g<start>"}` once per ranked game,
 when its fighters are in: the first frame of a fight with `SET_FIGHT_FLAGS`' `FIGHT_SEEN`, which
@@ -2551,7 +2596,7 @@ log their raw request and the unchanged bounds after hiding the window. Unset, t
 | `pause` / `resume` | Answers `state paused` / `state running`. In a session it pauses only while the player's game is alone, and ends by itself when drop-in needs the game; otherwise `unsupported pause`. |
 | `volume V` | 0 to 1, this run only. |
 | `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). A frame the game itself holds in emulated time (Project+ loading between scenes) counts as the video frames it held, so the meter, `fps` and the `hi` hitch count in `orca stats` show only this machine falling behind; `hil` counts the frames a load alone made slow (`hi` + `hil` is the older builds' `hi`). |
-| `port-toasts on\|off` | Whether the overlay toasts players joining and leaving ports ("ada joined on port 2", "ada left"). The app turns it off while its own overlay over the game announces them; the port list is still followed, so turning it on shows only later changes. Older Orca writes an unknown command to stderr and keeps toasting. |
+| `port-toasts on\|off` | Whether the overlay toasts players joining ports ("ada joined on port 2"). The app turns it off while its own overlay over the game is up, since Orca's on-screen "is joining on port" line already announces each join; leaves ("ada left") always toast, because nothing else announces them. The port list is still followed, so turning it on shows only later joins. Older Orca writes an unknown command to stderr and keeps toasting. |
 | `music on\|off` | The player's Music switch ([Music switch](#music-switch)), cap `music`. |
 | `gfx <key> <value>` | A live change to one of the player's drawing-only graphics settings ([Graphics](#graphics)), cap `gfx`. |
 | `save N` / `load N` / `reset` | Refused in a session. |
@@ -2563,7 +2608,7 @@ log their raw request and the unchanged bounds after hiding the window. Unset, t
 | `replay pause` / `replay resume` | Product playback only, cap `replay`: hold the displayed replay position or continue. Prints `state paused` / `state running`. The window heartbeat and replay clock keep reporting while paused. |
 | `replay seek <frame>` | Cap `replay`: absolute recorded frame in the history received so far, including its first frame and excluding the end. Restores the local origin and replays unseen to that frame, which is rendered. Keeps the pause choice. Out-of-range targets answer `unsupported replay`. |
 | `replay names [<port> <name> ...]` | Cap `replay`: replace the complete view-time map, in the same format as `ORCA_REPLAY_NAMES`. No pairs clears it to the `Player N` defaults. |
-| `delay auto` / `delay N` | Orca's default input delay (a fixed 3), or a fixed 1-6 frames. |
+| `delay auto` / `delay N` | Orca's own input delay (picked from ping at each online match's start, then held; 3 with no round trip measured), or a fixed 1-6 frames. |
 | `chat <name> <text>` | A line from the page's chat, shown while Orca fills the screen. Fields are `encodeURIComponent` of UTF-8 (name at most 24 code points, text 140). Never logged. |
 | `controls <hex>` | The player's own controls ([Each player's own controls](#each-players-own-controls)); the tag gets them at the next character select. A bad profile answers `unsupported controls`. |
 | `orb <x> <y> <size> <lit> <away> <badge>` / `orb blink` / `orb off` | YouGame's overlay button, drawn where the page's own stands under Orca's window. |

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -31,6 +32,22 @@
 #endif
 
 using namespace Gen;
+
+namespace
+{
+// Starts at 1, so 0 can stand for "unknown" in a snapshot.
+std::atomic<u64> s_code_generation{1};
+}  // namespace
+
+u64 JitBaseBlockCache::CodeGeneration()
+{
+  return s_code_generation.load(std::memory_order_relaxed);
+}
+
+void JitBaseBlockCache::NoteCodeChanged()
+{
+  s_code_generation.fetch_add(1, std::memory_order_relaxed);
+}
 
 bool JitBlock::OverlapsPhysicalRange(u32 address, u32 length) const
 {
@@ -84,6 +101,7 @@ void JitBaseBlockCache::Clear()
 #endif
   if (Rollback::Diag::g_jit_code_log)
     Rollback::Diag::JitCodeCleared("blocks");
+  NoteCodeChanged();
   m_jit.js.fifoWriteAddresses.clear();
   m_jit.js.pairedQuantizeAddresses.clear();
   m_jit.js.noSpeculativeConstantsAddresses.clear();
@@ -359,12 +377,15 @@ void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 addre
     // being in the right place between instructions).
     if (!forced)
     {
+      std::size_t forgotten = 0;
       for (u32 i = address; i < address + length; i += 4)
       {
-        m_jit.js.fifoWriteAddresses.erase(i);
-        m_jit.js.pairedQuantizeAddresses.erase(i);
-        m_jit.js.noSpeculativeConstantsAddresses.erase(i);
+        forgotten += m_jit.js.fifoWriteAddresses.erase(i);
+        forgotten += m_jit.js.pairedQuantizeAddresses.erase(i);
+        forgotten += m_jit.js.noSpeculativeConstantsAddresses.erase(i);
       }
+      if (forgotten != 0)
+        NoteCodeChanged();
     }
   }
 }
@@ -457,6 +478,33 @@ u32* JitBaseBlockCache::GetBlockBitSet() const
   return valid_block.m_valid_block.get();
 }
 
+bool JitBaseBlockCache::HasCode(u32 physical_address, u32 length) const
+{
+  if (length == 0)
+    return false;
+  const u64 end = u64{physical_address} + length;
+  // Every 32-byte line a live block covers has its valid_block bit set (bits of erased blocks may
+  // linger), so a range whose lines are all clear holds no code.
+  bool marked = false;
+  for (u64 line = physical_address / 32; line < (end + 31) / 32 && !marked; ++line)
+    marked = valid_block.Test(static_cast<u32>(line));
+  if (!marked)
+    return false;
+  // Confirm against the blocks themselves, as ErasePhysicalRange finds them.
+  const auto last = end > 0xFFFFFFFFull ? block_range_map.end() :
+                                          block_range_map.lower_bound(static_cast<u32>(end));
+  for (auto it = block_range_map.lower_bound(physical_address & BLOCK_RANGE_MAP_MASK); it != last;
+       ++it)
+  {
+    for (const JitBlock* block : it->second)
+    {
+      if (block->OverlapsPhysicalRange(physical_address, length))
+        return true;
+    }
+  }
+  return false;
+}
+
 void JitBaseBlockCache::WriteDestroyBlock(const JitBlock& block)
 {
 }
@@ -527,6 +575,7 @@ void JitBaseBlockCache::UnlinkBlock(const JitBlock& block)
 
 void JitBaseBlockCache::DestroyBlock(JitBlock& block)
 {
+  NoteCodeChanged();
   if (m_entry_points_ptr)
   {
     if (m_entry_points_ptr[block.fast_block_map_index] == block.normalEntry)

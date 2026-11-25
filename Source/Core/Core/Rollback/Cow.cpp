@@ -79,6 +79,12 @@ struct Tracker
   Counters counters;
   // Ids stay unique across arms, so a stale id never names another ring's snapshot.
   u64 next_id = 1;
+  // Pages that may have been written since the last TakeTouched: every page opened since, every
+  // page open at that call, and every page a restore changed. A flag per page and their list.
+  std::vector<u8> touched_flag;
+  std::vector<u32> touched;
+  // Counts arms (never reset), so TakeTouched's caller can tell tracking started again.
+  u64 generation = 0;
 };
 
 // Never destroyed: a fault or a static destructor may still use it at exit.
@@ -115,6 +121,14 @@ bool Protect(u8* address, std::size_t size, bool writable)
   ERROR_LOG_FMT(MEMMAP, "Rollback COW: could not make {} bytes at {} {}", size, fmt::ptr(address),
                 writable ? "writable" : "read-only");
   return false;
+}
+
+void Touch(Tracker& t, std::size_t page)
+{
+  if (t.touched_flag[page])
+    return;
+  t.touched_flag[page] = 1;
+  t.touched.push_back(static_cast<u32>(page));
 }
 
 u8* AliasOf(const Tracker& t, std::size_t page)
@@ -270,6 +284,7 @@ bool OpenPage(Tracker& t, std::size_t v, std::size_t page)
   if (t.open_in[page] == 0)
     t.open_pages.push_back(static_cast<u32>(page));
   t.open_in[page] |= bit;
+  Touch(t, page);
   return true;
 }
 
@@ -292,6 +307,8 @@ void ResetLocked(Tracker& t)
   t.open_pages.clear();
   t.heat.clear();
   t.fault_recorded.clear();
+  t.touched_flag.clear();
+  t.touched.clear();
   t.log.reset();
 }
 }  // namespace
@@ -335,6 +352,9 @@ bool Arm(const void* owner, const std::vector<Area>& areas, const std::vector<Vi
   t.open_pages.reserve(pages);
   t.heat.assign(pages, 0);
   t.fault_recorded.assign(pages, 0);
+  t.touched_flag.assign(pages, 0);
+  t.touched.clear();
+  ++t.generation;
   t.owner = owner;
   // The handler must be installed and s_armed set before any page is protected.
   EMM::InstallCowFallbackHandler();
@@ -412,7 +432,7 @@ bool Has(u64 id)
   return t.log && t.log->Has(id);
 }
 
-bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>& changed)
+bool Restore(u64 id, const ChangedBlock& changed)
 {
   Tracker& t = T();
   std::lock_guard lock(t.lock);
@@ -426,8 +446,10 @@ bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>
     {
       if (std::memcmp(live + offset, pre_image + offset, RESTORE_BLOCK) == 0)
         continue;
+      changed(physical + static_cast<u32>(offset), static_cast<u32>(RESTORE_BLOCK), live + offset,
+              pre_image + offset);
       std::memcpy(live + offset, pre_image + offset, RESTORE_BLOCK);
-      changed(physical + static_cast<u32>(offset), static_cast<u32>(RESTORE_BLOCK));
+      Touch(t, page);
     }
   });
   t.log->RewindTo(id);
@@ -482,6 +504,41 @@ std::optional<u64> Checksum(u64 id)
   const u64 hash = XXH3_64bits_digest(state);
   XXH3_freeState(state);
   return hash;
+}
+
+bool TakeTouched(const void* owner, Touched* out)
+{
+  Tracker& t = T();
+  std::lock_guard lock(t.lock);
+  if (!t.log || t.owner != owner)
+    return false;
+  out->generation = t.generation;
+  out->areas = t.areas;
+  out->ranges.clear();
+  for (const u32 page : t.open_pages)
+    Touch(t, page);
+  std::sort(t.touched.begin(), t.touched.end());
+  for (const u32 page : t.touched)
+  {
+    t.touched_flag[page] = 0;
+    const u32 physical = PhysicalOf(t, page);
+    const u32 size = static_cast<u32>(t.page_size);
+    if (!out->ranges.empty() &&
+        u64{out->ranges.back().first} + out->ranges.back().second == physical)
+    {
+      out->ranges.back().second += size;
+    }
+    else
+    {
+      out->ranges.emplace_back(physical, size);
+    }
+  }
+  t.touched.clear();
+  // Open pages stay writable, so a write to one lands without a fault: they count as touched for
+  // the next call too.
+  for (const u32 page : t.open_pages)
+    Touch(t, page);
+  return true;
 }
 
 bool HandleFault(uintptr_t address)

@@ -7,11 +7,13 @@
 #include <chrono>
 #include <optional>
 #include <thread>
+#include <vector>
 
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Replay.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/Rollback/Diag.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/System.h"
@@ -135,6 +137,38 @@ void RingPort::SetResimulating(bool resimulating)
 std::optional<u64> RingPort::SnapshotChecksum(int frame)
 {
   return m_ring.RamChecksum(frame);
+}
+
+std::optional<u64> RingPort::FrameChecksum(int frame)
+{
+  // Only copy-on-write tracking knows what changed; without it a whole-RAM hash every frame would
+  // cost too much, so this machine sends no per-frame checks.
+  Cow::Touched touched;
+  if (!Cow::TakeTouched(&m_ring, &touched))
+  {
+    m_frame_hash.Reset();
+    return std::nullopt;
+  }
+  std::vector<FrameHash::Area> areas;
+  for (const Cow::Area& area : touched.areas)
+    areas.push_back(FrameHash::Area{area.alias, area.physical_address, area.size});
+  // Tracking started again: RAM may have changed anywhere since the last hash.
+  const bool fresh = touched.generation != m_hash_generation;
+  m_hash_generation = touched.generation;
+  const u64 misses = m_frame_hash.AuditMisses();
+  const auto start = std::chrono::steady_clock::now();
+  const u64 hash = m_frame_hash.Update(areas, fresh ? nullptr : &touched.ranges);
+  const double ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  if (!fresh)
+    m_hash_ms = m_hash_ms == 0 ? ms : m_hash_ms + (ms - m_hash_ms) / 32;
+  if (m_frame_hash.AuditMisses() != misses)
+  {
+    WARN_LOG_FMT(ROLLBACK, "Frame hash: {} blocks of RAM changed without copy-on-write tracking "
+                           "seeing it, found at frame {}",
+                 m_frame_hash.AuditMisses() - misses, frame);
+  }
+  return hash;
 }
 
 void RingPort::ResetPacing()

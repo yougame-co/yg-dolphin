@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -72,14 +73,30 @@ bool IsArmedFor(const void* owner);
 // Takes a snapshot and opens an empty undo log for it. Returns its id (never 0).
 u64 Snapshot();
 bool Has(u64 id);
-// Puts RAM back as it was at snapshot `id`, calling changed() for each 4 KB block that differed.
+// Puts RAM back as it was at snapshot `id`, calling changed() for each 4 KB block that differs,
+// just before it is overwritten: `live` holds its current bytes and `saved` the ones it gets back.
 // Newer snapshots are dropped and `id` becomes the newest, with an empty log. False if `id` is
 // not held.
-bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>& changed);
+using ChangedBlock =
+    std::function<void(u32 physical_address, u32 length, const u8* live, const u8* saved)>;
+bool Restore(u64 id, const ChangedBlock& changed);
 // Forgets snapshot `id`; its saved pages merge into the next older snapshot's log.
 void Drop(u64 id);
 // RamChecksum (Rollback.h) of RAM as it was at snapshot `id`, rebuilt from live RAM and the logs.
 std::optional<u64> Checksum(u64 id);
+
+// What may have changed in tracked RAM since the previous TakeTouched, for the per-frame hash
+// (FrameHash.h): every page made writable since then or still writable, and every page a Restore
+// changed, as (physical address, length) ranges in host pages, plus the tracked areas.
+// `generation` changes whenever tracking starts again, since RAM may then have changed anywhere.
+struct Touched
+{
+  u64 generation = 0;
+  std::vector<Area> areas;
+  std::vector<std::pair<u32, u32>> ranges;
+};
+// False if `owner` is not tracking.
+bool TakeTouched(const void* owner, Touched* out);
 
 // Called first by the fault handlers. True if `address` is a protected page of tracked RAM; the
 // page is then saved and made writable so the faulting write can be retried.

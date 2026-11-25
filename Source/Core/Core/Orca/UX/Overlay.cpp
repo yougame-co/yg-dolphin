@@ -132,7 +132,9 @@ void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports
     if (!p.remote)
       continue;
     const auto now = find(ports, p.port);
-    if (m_port_toasts && (now == ports.end() || now->name != p.name))
+    // Leaves toast even with port toasts off: nothing else announces them, and a host would
+    // otherwise only see the seat go empty.
+    if (now == ports.end() || now->name != p.name)
       m_toasts.push_back({now_ms, TOAST_MS, fmt::format("{} left", NameOf(p))});
   }
   m_ports = ports;

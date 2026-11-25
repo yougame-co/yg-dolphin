@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <span>
+#include <string_view>
 #include <tuple>
 #include <unordered_set>
 
@@ -98,23 +100,21 @@ constexpr u32 MEM2_VIRTUAL = 0x90000000u;
 // Effective to physical for MEM1/MEM2 and their uncached mirrors (0x8/0xC -> 0x0, 0x9/0xD -> 0x1).
 constexpr u32 PHYSICAL_MASK = 0x1FFFFFFFu;
 
-// Copies saved RAM back one page at a time, skipping pages that already match. Only changed pages
-// have their JIT blocks invalidated; clearing the whole JIT (as a normal state load does) would
-// recompile the hot code after every rollback. Changed pages are collected by physical address.
-void RestoreRam(Core::System& system, u8* live, const std::vector<u8>& saved, u32 virtual_base,
-                std::unordered_set<u32>* changed_pages)
+// Copies saved RAM back one page at a time, skipping pages that already match, and collects the
+// changed pages by physical address. `code` sees each one before it is overwritten.
+void RestoreRam(u8* live, const std::vector<u8>& saved, u32 physical_base, CodeKeepCheck* code,
+                std::vector<u32>* changed)
 {
-  auto& jit = system.GetJitInterface();
   const std::size_t size = saved.size();
   for (std::size_t offset = 0; offset < size; offset += RESTORE_PAGE)
   {
     const std::size_t length = std::min(RESTORE_PAGE, size - offset);
     if (std::memcmp(live + offset, saved.data() + offset, length) == 0)
       continue;
+    const u32 physical = physical_base + static_cast<u32>(offset);
+    code->Compare(physical, live + offset, saved.data() + offset, static_cast<u32>(length));
     std::memcpy(live + offset, saved.data() + offset, length);
-    const u32 address = virtual_base + static_cast<u32>(offset);
-    jit.InvalidateICache(address, static_cast<u32>(length), true);
-    changed_pages->insert(address & PHYSICAL_MASK);
+    changed->push_back(physical);
   }
 }
 
@@ -131,9 +131,23 @@ void ForgetLearnedJitAddresses(Core::System& system, const std::unordered_set<u3
   const auto in_changed_page = [&changed_pages](u32 address) {
     return changed_pages.contains(address & PHYSICAL_MASK & ~static_cast<u32>(RESTORE_PAGE - 1));
   };
-  std::erase_if(jit->js.fifoWriteAddresses, in_changed_page);
-  std::erase_if(jit->js.pairedQuantizeAddresses, in_changed_page);
-  std::erase_if(jit->js.noSpeculativeConstantsAddresses, in_changed_page);
+  const std::size_t forgotten = std::erase_if(jit->js.fifoWriteAddresses, in_changed_page) +
+                                std::erase_if(jit->js.pairedQuantizeAddresses, in_changed_page) +
+                                std::erase_if(jit->js.noSpeculativeConstantsAddresses,
+                                              in_changed_page);
+  if (forgotten != 0)
+    JitBaseBlockCache::NoteCodeChanged();
+}
+
+// YG_KEEPJIT=0 makes every load drop the blocks of changed pages, as before CodeKeepCheck, for
+// A/B measurements. It changes only what this machine recompiles, never what the game computes.
+bool KeepCodeAllowed()
+{
+  static const bool allowed = [] {
+    const char* value = std::getenv("YG_KEEPJIT");
+    return !(value && std::string_view(value) == "0");
+  }();
+  return allowed;
 }
 
 // The NAND file system, which is always the host backend. Its journal undoes NAND writes.
@@ -143,6 +157,29 @@ IOS::HLE::FS::HostFileSystem* HostNand(Core::System& system)
   return ios ? static_cast<IOS::HLE::FS::HostFileSystem*>(ios->GetFS().get()) : nullptr;
 }
 }  // namespace
+
+void CodeKeepCheck::Compare(u32 physical, const u8* live, const u8* saved, u32 length)
+{
+  constexpr u32 LINE = 32;
+  for (u32 line = 0; line < length && m_keep; line += LINE)
+  {
+    const u32 line_length = std::min(LINE, length - line);
+    if (std::memcmp(live + line, saved + line, line_length) == 0)
+      continue;
+    // Most changed lines hold no code at all; one query rules a whole line out.
+    if (!m_jit.HasCompiledCode(physical + line, line_length))
+      continue;
+    for (u32 word = line; word < line + line_length; word += 4)
+    {
+      if (std::memcmp(live + word, saved + word, 4) != 0 &&
+          m_jit.HasCompiledCode(physical + word, 4))
+      {
+        m_keep = false;
+        break;
+      }
+    }
+  }
+}
 
 u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2)
 {
@@ -184,7 +221,8 @@ SnapshotScope::~SnapshotScope()
   s_in_snapshot.store(false, std::memory_order_relaxed);
 }
 
-SnapshotRing::SnapshotRing(std::size_t slots) : m_slots(std::max<std::size_t>(slots, 2))
+SnapshotRing::SnapshotRing(std::size_t slots)
+    : m_rotation(std::max<std::size_t>(slots, 2)), m_slots(m_rotation + KEPT)
 {
 }
 
@@ -252,6 +290,29 @@ bool SnapshotRing::Has(s64 frame) const
   return slot && (slot->cow_id == 0 || Cow::Has(slot->cow_id));
 }
 
+bool SnapshotRing::Keep(s64 frame)
+{
+  Slot* slot = Find(frame);
+  if (!m_cow.value_or(false) || !slot || slot->cow_id == 0 || !Cow::Has(slot->cow_id))
+    return false;
+  const auto index = static_cast<std::size_t>(slot - m_slots.data());
+  if (index >= m_rotation)
+    return true;
+  // The free kept slot, or the one holding the oldest frame.
+  Slot* target = &m_slots[m_rotation];
+  for (std::size_t i = m_rotation; i < m_slots.size(); ++i)
+  {
+    if (m_slots[i].frame < target->frame)
+      target = &m_slots[i];
+  }
+  Forget(target);
+  // The buffers move with the snapshot; the rotation slot gets the forgotten one's.
+  std::swap(*slot, *target);
+  if (m_last == index)
+    m_last = static_cast<std::size_t>(target - m_slots.data());
+  return true;
+}
+
 void SnapshotRing::Reset(Core::System& system)
 {
   for (Slot& slot : m_slots)
@@ -273,7 +334,7 @@ bool SnapshotRing::Save(Core::System& system, s64 frame)
   if (!slot)
   {
     slot = &m_slots[m_next];
-    m_next = (m_next + 1) % m_slots.size();
+    m_next = (m_next + 1) % m_rotation;
   }
   m_last = static_cast<std::size_t>(slot - m_slots.data());
   Forget(slot);
@@ -318,6 +379,7 @@ bool SnapshotRing::Save(Core::System& system, s64 frame)
   }
   slot->l1_cache.assign(memory.GetL1Cache(), memory.GetL1Cache() + memory.GetL1CacheSize());
   slot->frame = frame;
+  slot->jit_generation = JitInterface::CodeGeneration();
 
   // NAND changes older than the oldest snapshot can never be undone, so trim them.
   if (IOS::HLE::FS::HostFileSystem* nand = HostNand(system))
@@ -354,35 +416,52 @@ bool SnapshotRing::LoadSlot(Core::System& system, s64 frame, bool redisplay)
   // load writes no RAM in a session, since EFB copies stay on the GPU.
   const auto start = std::chrono::steady_clock::now();
   auto& memory = system.GetMemory();
-  std::unordered_set<u32> changed_pages;
+  auto& jit = system.GetJitInterface();
+  // Compiled code survives the load unless it lost something since the snapshot or a restored
+  // word it covers changes (CodeKeepCheck, Rollback.h).
+  CodeKeepCheck code(jit, KeepCodeAllowed() && slot->jit_generation != 0 &&
+                              slot->jit_generation == JitInterface::CodeGeneration());
+  std::vector<u32> changed_blocks;  // 4 KB, by physical address
   if (slot->cow_id != 0)
   {
     // The undo logs of this snapshot and every newer one list exactly the pages written since.
-    std::vector<u32> changed_blocks;
-    if (!Cow::Restore(slot->cow_id, [&changed_blocks](u32 physical, u32 length) {
-          for (u32 offset = 0; offset < length; offset += static_cast<u32>(RESTORE_PAGE))
-            changed_blocks.push_back(physical + offset);
-        }))
+    if (!Cow::Restore(slot->cow_id,
+                      [&](u32 physical, u32 length, const u8* live, const u8* saved) {
+                        code.Compare(physical, live, saved, length);
+                        for (u32 offset = 0; offset < length;
+                             offset += static_cast<u32>(RESTORE_PAGE))
+                        {
+                          changed_blocks.push_back(physical + offset);
+                        }
+                      }))
     {
       ERROR_LOG_FMT(CORE, "Rollback: the copy-on-write snapshot for frame {} is gone", frame);
       return false;
     }
-    // MEM1 is at 0x80000000 and MEM2 at 0x90000000: both are physical | 0x80000000.
-    auto& jit = system.GetJitInterface();
-    for (const u32 physical : changed_blocks)
-    {
-      jit.InvalidateICache(physical | MEM1_VIRTUAL, static_cast<u32>(RESTORE_PAGE), true);
-      changed_pages.insert(physical);
-    }
   }
   else
   {
-    RestoreRam(system, memory.GetRAM(), slot->mem1, MEM1_VIRTUAL, &changed_pages);
+    RestoreRam(memory.GetRAM(), slot->mem1, MEM1_VIRTUAL & PHYSICAL_MASK, &code, &changed_blocks);
     if (memory.GetEXRAM() && !slot->mem2.empty())
-      RestoreRam(system, memory.GetEXRAM(), slot->mem2, MEM2_VIRTUAL, &changed_pages);
+    {
+      RestoreRam(memory.GetEXRAM(), slot->mem2, MEM2_VIRTUAL & PHYSICAL_MASK, &code,
+                 &changed_blocks);
+    }
   }
+  const std::unordered_set<u32> changed_pages(changed_blocks.begin(), changed_blocks.end());
+  const bool kept_code = code.Keep();
+  const std::size_t blocks_before = jit.GetBlockCount();
+  if (!kept_code)
+  {
+    // MEM1 is at 0x80000000 and MEM2 at 0x90000000: both are physical | 0x80000000.
+    for (const u32 physical : changed_blocks)
+      jit.InvalidateICache(physical | MEM1_VIRTUAL, static_cast<u32>(RESTORE_PAGE), true);
+  }
+  const std::size_t blocks_dropped = blocks_before - jit.GetBlockCount();
   std::memcpy(memory.GetL1Cache(), slot->l1_cache.data(), slot->l1_cache.size());
-  ForgetLearnedJitAddresses(system, changed_pages);
+  // Kept code keeps its facts too: they are the snapshot's (the generation would have moved).
+  if (!kept_code)
+    ForgetLearnedJitAddresses(system, changed_pages);
 
   bool ok;
   {
@@ -404,18 +483,23 @@ bool SnapshotRing::LoadSlot(Core::System& system, s64 frame, bool redisplay)
     return false;
   }
 
+  // The JIT now matches this snapshot as a fresh save would see it: what it dropped above is
+  // accounted for, so the next load of this frame compares against now.
+  slot->jit_generation = JitInterface::CodeGeneration();
+
   // Later frames are about to be re-run and re-saved, so drop their snapshots.
   for (Slot& other : m_slots)
   {
     if (other.frame > frame || (other.cow_id != 0 && !Cow::Has(other.cow_id)))
       Forget(&other);
   }
-  m_next = (static_cast<std::size_t>(slot - m_slots.data()) + 1) % m_slots.size();
+  if (const auto index = static_cast<std::size_t>(slot - m_slots.data()); index < m_rotation)
+    m_next = (index + 1) % m_rotation;
   if (Diag::SnapTime())
   {
     Diag::AddRingLoad(
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
-        changed_pages.size());
+        changed_pages.size(), kept_code, blocks_dropped);
   }
   return true;
 }
@@ -460,7 +544,7 @@ bool SnapshotRing::LoadMachineImage(Core::System& system, MachineImage image, s6
   if (!slot)
   {
     slot = &m_slots[m_next];
-    m_next = (m_next + 1) % m_slots.size();
+    m_next = (m_next + 1) % m_rotation;
   }
   // Store as a full-copy slot (cow_id 0), so LoadSlot restores mem1/mem2 directly.
   Forget(slot);
@@ -472,6 +556,7 @@ bool SnapshotRing::LoadMachineImage(Core::System& system, MachineImage image, s6
   slot->l1_cache = std::move(image.l1_cache);
   slot->frame = frame;
   slot->nand_journal_mark = 0;
+  slot->jit_generation = 0;  // not this machine's own past: never keep code on its first load
   // A joining machine has nothing on screen yet, so show the keyframe's frame.
   return LoadSlot(system, frame, true);
 }

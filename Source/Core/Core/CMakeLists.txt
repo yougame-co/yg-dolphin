@@ -747,6 +747,8 @@ add_library(core
   Rollback/Cow.h
   Rollback/Diag.cpp
   Rollback/Diag.h
+  Rollback/FrameHash.cpp
+  Rollback/FrameHash.h
   Rollback/Harness.cpp
   Rollback/Harness.h
   Rollback/InputGate.cpp

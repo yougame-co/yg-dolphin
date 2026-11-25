@@ -88,6 +88,7 @@ target_link_libraries(OrcaBundleTest PRIVATE ed25519 xxhash::xxhash)
 # The keys the build pins (Source/Core/Core/CMakeLists.txt), so PinnedKey checks Bundle.cpp got them.
 target_compile_definitions(OrcaBundleTest PRIVATE ${ORCA_BUNDLE_DEFINITIONS})
 add_dolphin_test(OrcaCowTest Orca/CowTest.cpp)
+add_dolphin_test(OrcaFrameHashTest Orca/FrameHashTest.cpp)
 add_dolphin_test(OrcaKeyframeTest Orca/KeyframeTest.cpp)
 add_dolphin_test(OrcaFreshStartTest Orca/FreshStartTest.cpp)
 add_dolphin_test(OrcaSnapshotTest Orca/SnapshotTest.cpp)
@@ -168,6 +169,8 @@ target_sources(PowerPCTest PRIVATE
 )
 if(_M_X86_64 OR _M_ARM_64)
   target_sources(PowerPCTest PRIVATE PowerPC/JitHookCompileTest.cpp)
+  # Rollback loads keeping compiled code: needs a host JIT.
+  add_dolphin_test(OrcaKeepJitTest Orca/KeepJitTest.cpp)
 endif()
 
 add_dolphin_test(OrcaHarnessInputTest Orca/HarnessInputTest.cpp)

@@ -21,6 +21,8 @@
 #include "Common/CommonTypes.h"
 #include "InputCommon/GCPadStatus.h"
 
+class JitInterface;
+
 namespace Core
 {
 class CPUThreadGuard;
@@ -44,6 +46,35 @@ public:
   ~SnapshotScope();
   SnapshotScope(const SnapshotScope&) = delete;
   SnapshotScope& operator=(const SnapshotScope&) = delete;
+};
+
+// Decides whether a snapshot load may keep every compiled JIT block.
+//
+// A load used to drop every block in each restored 4 KB block that differed, and pages with code
+// also hold data that changes every frame, so a rollback recompiled dozens of blocks. The rule now
+// is all or nothing: keep everything when (1) the JIT's code generation is the one the snapshot
+// saved, so no block or learned fact was dropped or added since except by new compiles, and (2) no
+// restored word that differs is part of a compiled block. Otherwise the load drops the blocks of
+// every changed 4 KB block and forgets their learned facts, as before. Never a subset: recompiling
+// some blocks with facts the JIT learned later can move where interrupts are taken.
+//
+// Why keeping is exact: with (1) the JIT holds what it held at the snapshot plus blocks compiled
+// since, and the same facts; with (2) the restore changes no word any of those blocks covers. So
+// the re-run runs the code the first run ran. The instruction
+// cache emulation is restored by the state load; the JIT never follows its fills, only its
+// invalidations (icbi, flash invalidate), and those move the generation.
+class CodeKeepCheck
+{
+public:
+  // `possible` is condition (1). With it false, Compare does nothing.
+  CodeKeepCheck(const JitInterface& jit, bool possible) : m_jit(jit), m_keep(possible) {}
+  // `length` bytes at `physical` (a multiple of 4) are about to go from `live` to `saved`.
+  void Compare(u32 physical, const u8* live, const u8* saved, u32 length);
+  bool Keep() const { return m_keep; }
+
+private:
+  const JitInterface& m_jit;
+  bool m_keep;
 };
 
 // A full machine image at a frame boundary: the keyframe a host sends to a player joining mid-game.
@@ -72,6 +103,11 @@ public:
   // would run the boundary twice.
   bool Load(Core::System& system, s64 frame);
   bool Has(s64 frame) const;
+  // Takes the snapshot of `frame` out of the rotation into one of KEPT slots, replacing the oldest
+  // kept one, so a desync can go back further than any rollback (Session::Recover). Only with
+  // copy-on-write snapshots, where keeping one costs only the pages written since; false otherwise
+  // or if `frame` isn't held. A load of an earlier frame drops it like any later snapshot.
+  bool Keep(s64 frame);
   // Forgets every snapshot and stops the NAND journal. Call while emulation is still running.
   void Reset(Core::System& system);
   // RamChecksum of the snapshot taken at `frame`, or nullopt if it is not in the ring.
@@ -102,6 +138,9 @@ private:
     u64 nand_journal_mark = 0;  // NAND journal position at save time
     // Copy-on-write snapshot id for MEM1/MEM2, or 0 when they are copied into mem1/mem2.
     u64 cow_id = 0;
+    // JitInterface::CodeGeneration() when saved (or last loaded); 0 when unknown (an image from
+    // elsewhere), which never matches.
+    u64 jit_generation = 0;
   };
 
   Slot* Find(s64 frame);
@@ -111,6 +150,9 @@ private:
   // Whether saves are copy-on-write; decided, and tracking armed, at the first save.
   bool UseCow(Core::System& system, bool* armed_now);
 
+  static constexpr std::size_t KEPT = 2;
+  // The first m_rotation slots take saves in turn; the KEPT after them hold kept snapshots.
+  std::size_t m_rotation;
   std::vector<Slot> m_slots;
   std::size_t m_next = 0;
   std::size_t m_last = 0;

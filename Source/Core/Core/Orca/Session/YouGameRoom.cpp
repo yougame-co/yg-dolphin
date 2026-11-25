@@ -387,6 +387,22 @@ picojson::object PacketToJson(const Packet& packet)
       bytes[i] = static_cast<u8>(packet.checksum >> (56 - 8 * i));
     d["h"] = picojson::value(ToHex(bytes, 8));
   }
+  // Per-frame checks as [version, first frame, 8 hex digits each]. Older peers ignore the key.
+  if (!packet.frame_checks.empty())
+  {
+    std::string hex;
+    for (const u32 check : packet.frame_checks)
+    {
+      const u8 bytes[4] = {static_cast<u8>(check >> 24), static_cast<u8>(check >> 16),
+                           static_cast<u8>(check >> 8), static_cast<u8>(check)};
+      hex += ToHex(bytes, 4);
+    }
+    d["fc"] = picojson::value(picojson::array{
+        picojson::value(static_cast<double>(packet.frame_check_version)),
+        picojson::value(static_cast<double>(packet.frame_checks_first)), picojson::value(hex)});
+  }
+  if (packet.recoveries >= 0)
+    d["fe"] = picojson::value(static_cast<double>(packet.recoveries));
   // Drop-in (all optional): the roster as [plug, unplug, live] per seat (-1: never), the history
   // ack, history as [count, pads hex] runs, and a leave request.
   if (packet.roster)
@@ -583,6 +599,39 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     out.checksum = 0;
     for (u8 b : hash)
       out.checksum = out.checksum << 8 | b;
+  }
+  // Per-frame checks: a malformed or unknown form is ignored rather than refused, so a later
+  // format can't break this build's link.
+  if (const auto fc = d.find("fc"); fc != d.end() && fc->second.is<picojson::array>() &&
+                                    fc->second.get<picojson::array>().size() == 3)
+  {
+    const auto& entry = fc->second.get<picojson::array>();
+    std::vector<u8> bytes;
+    const bool numbers = entry[0].is<double>() && entry[1].is<double>() &&
+                         entry[2].is<std::string>();
+    if (numbers && entry[0].get<double>() >= 1 && entry[0].get<double>() <= 1000 &&
+        std::floor(entry[0].get<double>()) == entry[0].get<double>() &&
+        entry[1].get<double>() >= 0 && entry[1].get<double>() <= MAX_FRAME &&
+        std::floor(entry[1].get<double>()) == entry[1].get<double>() &&
+        entry[2].get<std::string>().size() <= size_t{MAX_FRAME_CHECKS_IN_PACKET} * 8 &&
+        FromHex(entry[2].get<std::string>(), &bytes) && !bytes.empty() && bytes.size() % 4 == 0)
+    {
+      out.frame_check_version = static_cast<int>(entry[0].get<double>());
+      out.frame_checks_first = static_cast<int>(entry[1].get<double>());
+      for (size_t i = 0; i < bytes.size(); i += 4)
+      {
+        out.frame_checks.push_back(u32{bytes[i]} << 24 | u32{bytes[i + 1]} << 16 |
+                                   u32{bytes[i + 2]} << 8 | u32{bytes[i + 3]});
+      }
+    }
+  }
+  // Desync recoveries: also ignored when malformed.
+  if (const auto fe = d.find("fe"); fe != d.end() && fe->second.is<double>() &&
+                                    fe->second.get<double>() >= 0 &&
+                                    fe->second.get<double>() <= MAX_FRAME &&
+                                    std::floor(fe->second.get<double>()) == fe->second.get<double>())
+  {
+    out.recoveries = static_cast<int>(fe->second.get<double>());
   }
   if (d.count("ro"))
   {
@@ -6891,10 +6940,40 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
       merged.first_frame -= extra;
     }
   }
-  if (pending->checksum_frame && !merged.checksum_frame)
+  // What the sender reported before going back to another player's state (Packet::recoveries)
+  // must not ride along with what it reports after.
+  const bool same_history = pending->recoveries == merged.recoveries;
+  if (pending->checksum_frame && !merged.checksum_frame && same_history)
   {
     merged.checksum_frame = pending->checksum_frame;
     merged.checksum = pending->checksum;
+  }
+  // Per-frame checks: the older packet's when the newer has none, or joined in front of the newer
+  // one's when the two runs meet.
+  if (!pending->frame_checks.empty() && same_history)
+  {
+    if (merged.frame_checks.empty())
+    {
+      merged.frame_check_version = pending->frame_check_version;
+      merged.frame_checks_first = pending->frame_checks_first;
+      merged.frame_checks = pending->frame_checks;
+    }
+    else if (pending->frame_check_version == merged.frame_check_version &&
+             pending->frame_checks_first < merged.frame_checks_first &&
+             pending->frame_checks_first + static_cast<int>(pending->frame_checks.size()) >=
+                 merged.frame_checks_first)
+    {
+      const int extra =
+          std::min(merged.frame_checks_first - pending->frame_checks_first,
+                   MAX_FRAME_CHECKS_IN_PACKET - static_cast<int>(merged.frame_checks.size()));
+      if (extra > 0)
+      {
+        const auto from = pending->frame_checks.begin() +
+                          (merged.frame_checks_first - extra - pending->frame_checks_first);
+        merged.frame_checks.insert(merged.frame_checks.begin(), from, from + extra);
+        merged.frame_checks_first -= extra;
+      }
+    }
   }
   // Drop-in history: the older packet's goes first when the newer one continues it (or has none); a
   // gap is resent once the joiner's ack stalls.

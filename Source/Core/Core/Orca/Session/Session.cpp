@@ -167,6 +167,8 @@ Session::Session(const Config& config, Game& game, Transport& transport)
   m_window_start = m_frame;
   m_sync_start = m_frame;
   m_last_checksum_frame = m_frame - m_frame % m_config.checksum_every;
+  // Every player starts from the same state.
+  m_agreed = m_frame;
   // Frames before the input delay have no sampled input: both sides treat them as neutral (or as
   // the host's held pad when a friend just arrived). Sending them explicitly lets the other side
   // confirm them like any other frame.
@@ -649,6 +651,11 @@ void Session::AdmitSeat(int seat, int live_from, int history_from)
   m_peer_rtt[seat].reset();
   m_peer_sequence[seat] = 0;
   m_peer_checksum_frame[seat] = -1;
+  m_peer_frame_checks[seat].clear();
+  m_peer_checks_matched[seat] = -1;
+  m_peer_recoveries[seat] = -1;
+  m_await_until[seat] = -1;
+  m_awaited[seat] = 0;
   ResetLateness(seat);
   AdvanceReceived(seat);
 }
@@ -993,6 +1000,10 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
       }
       m_peer_sequence[s] = 0;
       m_peer_checksum_frame[s] = -1;
+      m_peer_frame_checks[s].clear();
+      m_peer_checks_matched[s] = -1;
+      m_peer_recoveries[s] = -1;
+      m_await_until[s] = -1;
       ResetLateness(s);
     }
     mine = now;
@@ -1183,6 +1194,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
   if (m_resim_until >= 0)
   {
     const int next = completed_frame + 1;
+    RecordFrameCheck(next);
     if (NeedsSnapshot(next) && !SaveOnce(next))
       return Fail(fmt::format("Saving frame {} failed", next));
     if (completed_frame < m_resim_until)
@@ -1204,6 +1216,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
       return Fail(fmt::format("Frame alignment lost: frame {} ended, expected {}", completed_frame,
                               m_frame - 1));
     }
+    RecordFrameCheck(m_frame);
     if (NeedsSnapshot(m_frame) && !SaveOnce(m_frame))
       return Fail(fmt::format("Saving frame {} failed", m_frame));
 
@@ -1226,12 +1239,26 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
   // measured up to here (Packet::spared).
   if (m_stalling && m_stall_ended_ms < 0 && m_frame - ConfirmedFrame() <= StallLimit())
     m_stall_ended_ms = m_game.NowMs();
-  CheckChecksums();
+  CheckFrameChecks();
   if (!m_error.empty())
     return {StepKind::Ended, m_frame};
+  if (m_recover_at < 0)
+    CheckChecksums();
+  if (!m_error.empty())
+    return {StepKind::Ended, m_frame};
+  // The reference player: one that disagreed and said it would go back has had time to.
+  for (int s = 0; s < m_config.seats; ++s)
+  {
+    if (m_await_until[s] >= 0 && InPlay(s) && m_game.NowMs() > m_await_until[s])
+      return Fail(m_await_error[s] + "; that player never went back to this one's state");
+  }
   if (m_config.authority_seat == m_config.local_seat)
     PlugCaughtUpPeers();
   SendPacket();
+
+  // This machine's state left the reference player's: go back to where they agreed.
+  if (m_recover_at >= 0)
+    return Recover(std::exchange(m_recover_at, -1));
 
   // A frame already ran with a wrong guess: load the newest snapshot at or before it and re-run to
   // the newest frame. Frames before the wrong one re-run with the same inputs, so they come out the
@@ -1249,6 +1276,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
     if (from < 0 || depth > m_config.max_rollback + MAX_SNAPSHOT_EVERY - 1)
       return Fail(fmt::format("No snapshot to roll back to frame {} from", dirty));
     m_last_saved = -1;
+    m_frame_checked = -1;
     if (!m_game.Load(from))
       return Fail(fmt::format("Loading frame {} failed", from));
     // Snapshots after the loaded frame belong to the history being replaced.
@@ -1374,6 +1402,10 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
   }
   std::erase_if(m_local_checksums, [this](const auto& e) { return e.first < m_frame - 600; });
   std::erase_if(m_peer_checksums, [this](const auto& e) { return e.first.first < m_frame - 600; });
+  const int oldest_check = m_frame - FRAME_CHECK_HISTORY;
+  std::erase_if(m_frame_checks, [oldest_check](const auto& e) { return e.first < oldest_check; });
+  for (auto& checks : m_peer_frame_checks)
+    std::erase_if(checks, [oldest_check](const auto& e) { return e.first < oldest_check; });
 
   m_stats.confirmed_frame = ConfirmedFrame();
   return {StepKind::Run, run};
@@ -1388,6 +1420,14 @@ bool Session::SaveOnce(int frame)
   m_last_saved = frame;
   m_saved.insert(frame);
   ++m_stats.saves;
+  // Desync recovery goes back to a frame both agreed on, which may be older than any rollback.
+  if (frame % m_config.checksum_every == 0 && m_config.frame_checks && m_config.recover_desyncs &&
+      m_game.Keep(frame))
+  {
+    m_kept.insert(frame);
+    while (m_kept.size() > 2)
+      m_kept.erase(m_kept.begin());
+  }
   return true;
 }
 
@@ -1956,6 +1996,8 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
       packet.first_frame + static_cast<int>(packet.pads.size()) > m_frame + window + 1 ||
       packet.current_frame < 0 || packet.current_frame > far_limit ||
       (packet.checksum_frame && (*packet.checksum_frame < 0 || *packet.checksum_frame > far_limit)) ||
+      packet.frame_checks.size() > static_cast<size_t>(MAX_FRAME_CHECKS_IN_PACKET) ||
+      packet.frame_checks_first < 0 || packet.frame_checks_first > far_limit ||
       packet.history.size() > static_cast<size_t>(MAX_HISTORY_IN_PACKET) ||
       packet.history_first < 0 || packet.history_ack > far_limit)
   {
@@ -2154,7 +2196,9 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
   // packet's.
   if (stale)
   {
+    NotePeerRecoveries(s, packet);
     AddPeerChecksum(s, packet);
+    AddPeerFrameChecks(s, packet);
     return;
   }
   // How far this player ran past the newest of our inputs it had, while it needed them: how deep
@@ -2226,14 +2270,17 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
     m_stats.peer_hitches = std::max(m_stats.peer_hitches, packet.hitches);
     m_last_hitch_frame = m_frame;
   }
+  NotePeerRecoveries(s, packet);
   AddPeerChecksum(s, packet);
+  AddPeerFrameChecks(s, packet);
 }
 
 void Session::AddPeerChecksum(int seat, const Packet& packet)
 {
   // A seat's checksums go out in frame order, one per packet: a frame at or before the newest taken
-  // is a duplicate copy, already compared.
-  if (!packet.checksum_frame || *packet.checksum_frame <= m_peer_checksum_frame[seat])
+  // is a duplicate copy, already compared. One from before the seat's latest recovery is stale.
+  if (!packet.checksum_frame || *packet.checksum_frame <= m_peer_checksum_frame[seat] ||
+      packet.recoveries < m_peer_recoveries[seat])
     return;
   m_peer_checksum_frame[seat] = *packet.checksum_frame;
   m_peer_checksums[{*packet.checksum_frame, seat}] = packet.checksum;
@@ -2263,15 +2310,256 @@ void Session::CheckChecksums()
       ++it;
       continue;
     }
+    const int seat = it->first.second;
+    if (!Compares(seat) || m_await_until[seat] >= 0)
+    {
+      it = m_peer_checksums.erase(it);
+      continue;
+    }
     if (mine->second != it->second)
     {
-      Fail(fmt::format("Desync at frame {}: {:016x} here, {:016x} there", it->first.first, mine->second,
-                       it->second));
+      OnMismatch(seat, it->first.first,
+                 fmt::format("Desync at frame {}: {:016x} here, {:016x} there", it->first.first,
+                             mine->second, it->second));
       return;
     }
+    if (seat == ReferenceSeat())
+      m_agreed = std::max(m_agreed, it->first.first);
     ++m_stats.checksums_matched;
     it = m_peer_checksums.erase(it);
   }
+}
+
+void Session::RecordFrameCheck(int frame)
+{
+  // Once per frame run: a stalled or waiting boundary repeats the frame with nothing run since.
+  if (!m_config.frame_checks || m_frame_checked == frame)
+    return;
+  m_frame_checked = frame;
+  if (const std::optional<u64> check = m_game.FrameChecksum(frame))
+  {
+    m_frame_checks[frame] = *check;
+    m_hashing = true;
+  }
+  else
+  {
+    m_frame_checks.erase(frame);
+  }
+}
+
+void Session::AddPeerFrameChecks(int seat, const Packet& packet)
+{
+  if (!m_config.frame_checks || packet.frame_check_version != FRAME_CHECK_VERSION ||
+      packet.recoveries < m_peer_recoveries[seat])
+    return;
+  // Only frames this machine still has or will soon reach: a joiner far behind its host compares
+  // once it catches up (the full checksum covers the catch-up).
+  const int lowest = std::max(m_frame - FRAME_CHECK_HISTORY, m_peer_checks_matched[seat] + 1);
+  const int highest = m_frame + MAX_FRAMES_AHEAD + m_config.max_delay;
+  auto& checks = m_peer_frame_checks[seat];
+  for (size_t i = 0; i < packet.frame_checks.size(); ++i)
+  {
+    const int frame = packet.frame_checks_first + static_cast<int>(i);
+    if (frame >= lowest && frame <= highest)
+      checks.emplace(frame, packet.frame_checks[i]);
+  }
+}
+
+void Session::AddFrameChecks(Packet* packet)
+{
+  // The checks of final frames not sent yet, at most FRAME_CHECKS_SENT a packet, behind a few
+  // already sent again: a lost packet's checks still arrive with the next one.
+  if (!m_config.frame_checks || m_frame_checks.empty())
+    return;
+  m_checks_sent = std::max(m_checks_sent, m_frame_checks.begin()->first - 1);
+  const int last = std::min(FinalFrame(), m_checks_sent + FRAME_CHECKS_SENT);
+  if (last <= m_checks_sent)
+    return;
+  if (!m_frame_checks.contains(last))
+  {
+    // A frame this machine didn't hash (a gap): nothing to send up to it.
+    m_checks_sent = last;
+    return;
+  }
+  int first = std::max(last - FRAME_CHECKS_SENT + 1, m_checks_sent + 1 - FRAME_CHECKS_REPEATED);
+  // Only a run this machine hashed every frame of.
+  int from = last;
+  while (from > first && m_frame_checks.contains(from - 1))
+    --from;
+  first = from;
+  packet->frame_check_version = FRAME_CHECK_VERSION;
+  packet->frame_checks_first = first;
+  packet->frame_checks.clear();
+  for (int frame = first; frame <= last; ++frame)
+    packet->frame_checks.push_back(static_cast<u32>(m_frame_checks.at(frame)));
+  m_checks_sent = last;
+}
+
+void Session::CheckFrameChecks()
+{
+  // As CheckChecksums: the state at the start of a frame up to FinalFrame() is final.
+  const int final_up_to = FinalFrame();
+  const int reference = ReferenceSeat();
+  for (int s = 0; s < m_config.seats; ++s)
+  {
+    auto& theirs = m_peer_frame_checks[s];
+    if (!Compares(s) || m_await_until[s] >= 0)
+    {
+      theirs.clear();
+      continue;
+    }
+    for (auto it = theirs.begin(); it != theirs.end() && it->first <= final_up_to;)
+    {
+      const auto mine = m_frame_checks.find(it->first);
+      if (mine == m_frame_checks.end())
+      {
+        // Not hashed here (no tracking then): nothing to compare.
+        it = theirs.erase(it);
+        continue;
+      }
+      if (static_cast<u32>(mine->second) != it->second)
+      {
+        // Kept: after going back, this frame is compared again.
+        OnMismatch(s, it->first,
+                   fmt::format("Desync at frame {}: {:08x} here, {:08x} there (player {}'s frame "
+                               "check)",
+                               it->first, static_cast<u32>(mine->second), it->second, s + 1));
+        return;
+      }
+      if (s == reference)
+        m_agreed = std::max(m_agreed, it->first);
+      ++m_stats.frame_checks_matched;
+      m_peer_checks_matched[s] = std::max(m_peer_checks_matched[s], it->first);
+      it = theirs.erase(it);
+    }
+  }
+}
+
+int Session::ReferenceSeat() const
+{
+  if (m_config.authority_seat >= 0)
+    return m_config.authority_seat;
+  for (int s = 0; s < m_config.seats; ++s)
+  {
+    if (s == m_config.local_seat || InPlay(s))
+      return s;
+  }
+  return m_config.local_seat;
+}
+
+bool Session::RecoversDesyncs() const
+{
+  return m_config.frame_checks && m_config.recover_desyncs && m_hashing;
+}
+
+bool Session::Compares(int seat) const
+{
+  if (seat == m_config.local_seat)
+    return false;
+  const int reference = ReferenceSeat();
+  // A reference that recovers settles every disagreement with it; others needn't compare.
+  return !RecoversDesyncs() || reference == m_config.local_seat || seat == reference ||
+         m_peer_recoveries[reference] < 0;
+}
+
+void Session::NotePeerRecoveries(int seat, const Packet& packet)
+{
+  if (packet.recoveries <= m_peer_recoveries[seat] || packet.recoveries > MAX_RECOVERIES)
+    return;
+  const bool recovered = m_peer_recoveries[seat] >= 0;
+  m_peer_recoveries[seat] = packet.recoveries;
+  if (!recovered)
+    return;
+  // The player went back: what it reported before is from the history it left.
+  ++m_stats.peer_recoveries;
+  m_await_until[seat] = -1;
+  m_await_error[seat].clear();
+  m_peer_frame_checks[seat].clear();
+  m_peer_checks_matched[seat] = -1;
+  std::erase_if(m_peer_checksums, [seat](const auto& e) { return e.first.second == seat; });
+  m_peer_checksum_frame[seat] = -1;
+}
+
+void Session::OnMismatch(int seat, int frame, const std::string& error)
+{
+  const int reference = ReferenceSeat();
+  if (RecoversDesyncs() && reference == m_config.local_seat && m_peer_recoveries[seat] >= 0 &&
+      m_awaited[seat] < MAX_RECOVERIES)
+  {
+    // The other player goes back to this one's state (Recover); give it time to.
+    ++m_awaited[seat];
+    m_await_until[seat] = m_game.NowMs() + RECOVERY_WAIT_MS;
+    m_await_error[seat] = error;
+    m_peer_frame_checks[seat].clear();
+    std::erase_if(m_peer_checksums, [seat](const auto& e) { return e.first.second == seat; });
+    m_stats.last_mismatch = error;
+    return;
+  }
+  if (RecoversDesyncs() && seat == reference && m_peer_recoveries[reference] >= 0)
+  {
+    if (m_recover_at < 0 || frame < m_recover_at)
+    {
+      m_recover_at = frame;
+      m_recover_error = error;
+    }
+    return;
+  }
+  Fail(error);
+}
+
+Step Session::Recover(int bad_frame)
+{
+  const std::string error = std::exchange(m_recover_error, {});
+  // The same frame differing again after going back: a difference re-running doesn't cure.
+  if (m_recoveries >= MAX_RECOVERIES || bad_frame <= m_recovered_bad)
+    return Fail(fmt::format("{}; still different after going back {} times", error, m_recoveries));
+  // The newest snapshot of a frame both agreed on, whose inputs are all still known.
+  const int agreed = std::min(m_agreed, bad_frame - 1);
+  std::set<int> held(m_saved.begin(), m_saved.end());
+  held.insert(m_kept.begin(), m_kept.end());
+  int from = -1;
+  for (auto it = held.upper_bound(agreed); it != held.begin();)
+  {
+    --it;
+    if (*it < m_log_base)
+      break;
+    if (m_game.HasSnapshot(*it))
+    {
+      from = *it;
+      break;
+    }
+  }
+  if (from < 0)
+    return Fail(fmt::format("{}; no snapshot of a frame both agreed on (through {})", error, agreed));
+  m_stats.last_mismatch = fmt::format("{}; went back to frame {}", error, from);
+  m_last_saved = -1;
+  m_frame_checked = -1;
+  if (!m_game.Load(from))
+    return Fail(fmt::format("{}; loading frame {} failed", error, from));
+  // Everything this machine worked out after the loaded frame belongs to the history it leaves.
+  m_saved.erase(m_saved.upper_bound(from), m_saved.end());
+  m_kept.erase(m_kept.upper_bound(from), m_kept.end());
+  m_frame_checks.erase(m_frame_checks.upper_bound(from), m_frame_checks.end());
+  m_local_checksums.erase(m_local_checksums.upper_bound(from), m_local_checksums.end());
+  m_last_checksum_frame =
+      std::min(m_last_checksum_frame, from - from % m_config.checksum_every);
+  if (m_pending_checksum && *m_pending_checksum > from)
+    m_pending_checksum.reset();
+  m_checks_sent = std::min(m_checks_sent, from);
+  for (int& matched : m_peer_checks_matched)
+    matched = std::min(matched, from);
+  m_agreed = from;
+  m_dirty = INT_MAX;
+  m_recovered_bad = bad_frame;
+  ++m_recoveries;
+  ++m_stats.recoveries;
+  m_stats.resimulated_frames += m_frame - from;
+  m_resim_until = m_frame - 1;
+  m_game.SetResimulating(true);
+  const Pads pads = PadsFor(from);
+  m_used[from] = pads;
+  m_game.SetPads(from, pads);
+  return {StepKind::Rollback, from};
 }
 
 void Session::PrepareCoPrefixReplies(const Packet& packet)
@@ -2552,6 +2840,8 @@ void Session::SendPacket()
     packet.checksum = m_local_checksums[*m_pending_checksum];
     m_pending_checksum.reset();
   }
+  AddFrameChecks(&packet);
+  packet.recoveries = RecoversDesyncs() ? m_recoveries : -1;
   m_last_sent_newest = newest;
   if (drop_in && m_config.per_peer_inputs && PeersInPlay() > 2)
   {

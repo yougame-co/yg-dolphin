@@ -92,7 +92,8 @@ struct SnapTimes
   std::vector<float> cow_faults, cow_recorded, cow_copied;  // per first-pass frame
   bool cow_sampled = false;
   Rollback::Cow::Counters cow_last;
-  std::vector<float> ring_loads, ring_load_blocks;
+  std::vector<float> ring_loads, ring_load_blocks, ring_load_jit_dropped;
+  std::size_t ring_loads_kept_code = 0;
 } s_snap;
 
 struct PageDiff
@@ -258,9 +259,12 @@ void LogSummary()
   }
   if (!s_snap.ring_loads.empty())
   {
-    NOTICE_LOG_FMT(ROLLBACK, "Diag ring loads: {}, ms {}; 4 KB blocks restored {}",
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Diag ring loads: {}, ms {}; 4 KB blocks restored {}; compiled code kept on {} "
+                   "loads; JIT blocks dropped per load {}",
                    s_snap.ring_loads.size(), Describe(s_snap.ring_loads),
-                   Describe(s_snap.ring_load_blocks));
+                   Describe(s_snap.ring_load_blocks), s_snap.ring_loads_kept_code,
+                   Describe(s_snap.ring_load_jit_dropped));
   }
   if (!s_snap.port_saves.empty() || !s_snap.port_loads.empty())
   {
@@ -329,10 +333,13 @@ void AddCowSave(double state_ms, double protect_ms)
   ++s_snap.cow_saves;
 }
 
-void AddRingLoad(double ms, std::size_t changed_blocks)
+void AddRingLoad(double ms, std::size_t changed_blocks, bool kept_code, std::size_t blocks_dropped)
 {
   s_snap.ring_loads.push_back(static_cast<float>(ms));
   s_snap.ring_load_blocks.push_back(static_cast<float>(changed_blocks));
+  s_snap.ring_load_jit_dropped.push_back(static_cast<float>(blocks_dropped));
+  if (kept_code)
+    ++s_snap.ring_loads_kept_code;
 }
 
 void AddPortSave(double ms)

@@ -80,11 +80,40 @@ private:
 std::optional<std::vector<int>> FriendsMissingInputs(const Orca::Net::Session& session, bool doubles);
 int WaitingFriendSeat(int local_seat, const std::vector<int>& missing, bool joining,
                        int host_seat, const std::vector<int>& seated);
-// Option B's input delay in frames from the link between the two players: one way is half this
-// player's median round trip to the room server plus half the opponent's, or half the direct
-// link's round trip when that is shorter (direct_rtt_ms < 0: no direct link). Clamped to 2..6.
-// nullopt while either median is unknown (< 0).
+// The input delay in frames from the link between the two players: one way is half this player's
+// median round trip to the room server plus half the opponent's (the slowest one's), or half the
+// direct link's round trip when that is shorter (direct_rtt_ms < 0: no direct link). Clamped to
+// 2..6. nullopt while either median is unknown (< 0).
 std::optional<int> LinkDelay(int my_rtt_ms, int peer_rtt_ms, int direct_rtt_ms = -1);
+
+// An online session's input delay (ORCA.md, "Input delay"): picked from this player's round trips
+// to the room server when the session starts, picked once more from both players' round trips once
+// the opponent's is in (LinkDelay), then held for the match; never adaptive. No round trip
+// measured: 3 frames. A delay the player chose ("delay N") wins over the pick, unless the room
+// picks over it (over_choice: Option B rooms). Each player's delay is its own: every input travels
+// with its frame, so peers at different delays agree.
+class HeldDelay
+{
+public:
+  // A new session; returns the delay it starts at. `chosen`: the player's own delay, if any.
+  int Start(std::optional<int> chosen, bool over_choice, const std::vector<int>& round_trips);
+  // Each frame: once both medians are known, picks again, once per session. Returns the delay it
+  // replaced when it did.
+  std::optional<int> Relink(int my_rtt_ms, int peer_rtt_ms, int direct_rtt_ms = -1);
+  // The delay to play this frame at; `chosen` as in Start (the player may change it mid-match).
+  int Delay(std::optional<int> chosen) const;
+  // The delay picked from ping (nullopt: the player's choice holds).
+  std::optional<int> Picked() const { return m_picked; }
+  bool Relinked() const { return m_relinked; }
+  // The median round trip the start pick used (-1: none measured).
+  int StartMedianMs() const { return m_start_median_ms; }
+
+private:
+  std::optional<int> m_picked;
+  bool m_over_choice = false;
+  bool m_relinked = false;
+  int m_start_median_ms = -1;
+};
 bool WaitForFriendsRoster(const Orca::Net::Session& session, bool joining, bool doubles);
 std::optional<std::vector<int>> DropMissingFriends(Orca::Net::Session& session, bool doubles);
 

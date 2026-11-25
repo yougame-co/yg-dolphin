@@ -23,6 +23,8 @@ class System;
 //   YG_NTCOPY=1           copy RAM into snapshots with non-temporal stores (x86-64 only)
 //   YG_PAGEDIFF=<frame>   from that frame, count 4 KB pages of RAM that differ from 1, 2 and 4
 //                         frames earlier, bucketed per 1 MB
+//   YG_KEEPJIT=0          every load drops the compiled blocks of changed pages, as before
+//                         compiled code was kept across loads (A/B runs; not a measurement)
 //   YG_JITCODE_LOG=<path> log instruction words a JIT compile reads that differ from the previous
 //                         compile ("chg") or from RAM ("stale"), plus what invalidated that address
 //                         in between, cache clears, and free JIT code space
@@ -40,7 +42,9 @@ void LogSummary();
 void CopyRam(std::vector<u8>* dst, const u8* src, std::size_t size);
 void AddSnapshotSave(double state_ms, double mem1_ms, double mem2_ms);
 void AddCowSave(double state_ms, double protect_ms);
-void AddRingLoad(double ms, std::size_t changed_blocks);
+// `kept_code`: the load kept every compiled block (Rollback.h CodeKeepCheck); otherwise
+// `blocks_dropped` blocks were dropped.
+void AddRingLoad(double ms, std::size_t changed_blocks, bool kept_code, std::size_t blocks_dropped);
 void AddPortSave(double ms);
 void AddPortLoad(double ms);
 

@@ -57,6 +57,10 @@ public:
   void RunOnBlocks(const Core::CPUThreadGuard& guard,
                    const std::function<void(const JitBlock&)>& f) const;
   std::size_t GetBlockCount() const;
+  // Orca: whether a compiled block covers any of [physical_address, physical_address + length),
+  // and the code generation (JitBaseBlockCache::CodeGeneration). For rollback loads.
+  bool HasCompiledCode(u32 physical_address, u32 length) const;
+  static u64 CodeGeneration();
 
   // Memory Utilities
   bool HandleFault(uintptr_t access_address, SContext* ctx);

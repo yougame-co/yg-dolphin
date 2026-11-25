@@ -196,6 +196,16 @@ public:
 
   u32* GetBlockBitSet() const;
 
+  // Orca: whether a live block was compiled from any word of [physical_address,
+  // physical_address + length). Exact, and cheap for ranges with no code.
+  bool HasCode(u32 physical_address, u32 length) const;
+  // Orca: a count that moves whenever compiled code or a learned fact (JitBase::js's exception
+  // check addresses) is dropped or added by anything but a new compile: a block destroyed, the
+  // cache cleared, a fact learned or forgotten. Process-wide, so a new JIT never repeats a value.
+  // Rollback compares it with the value saved in a snapshot (Rollback.cpp).
+  static u64 CodeGeneration();
+  static void NoteCodeChanged();
+
 protected:
   virtual void DestroyBlock(JitBlock& block);
 

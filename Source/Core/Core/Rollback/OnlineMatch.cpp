@@ -247,11 +247,9 @@ struct Match
   int last_percent = -1;
 
   u32 round_trip_sequence = 0;
-  // Option B: the input delay picked from the measured round trip when the session started, held
-  // for the match (PickDelay). nullopt: the page's choice (ChosenDelay).
-  std::optional<int> picked_delay;
-  // Option B: the picked delay was made again from both players' round trips (RelinkDelay).
-  bool delay_relinked = false;
+  // The session's input delay: picked from ping when it started and held for the match, unless
+  // the player chose one (PickDelay, RelinkDelay).
+  HeldDelay delay;
   std::optional<Clock::time_point> last_return;
   Common::EventHook on_state_changed;
 
@@ -266,6 +264,9 @@ struct Match
   // Video frames the game itself held shown frames for since then (LastFrameHeldFrames).
   int stats_held = 0;
   Orca::Net::Stats stats_last{};
+  // Desync recoveries (this player's and others') already logged.
+  int recoveries_logged = 0;
+  int peer_recoveries_logged = 0;
   int stats_rbmax = 0;
   double stats_stall_ms = 0;
   // The local controller's input-age totals at the last line (Orca::Events::InputAge).
@@ -508,29 +509,33 @@ constexpr std::chrono::seconds RANKED_STALL_LIMIT{15};
 // Set over: holding B this long on the results screen leaves the room.
 constexpr std::chrono::milliseconds SET_OVER_HOLD{1500};
 
-// Orca's input delay when the page chooses none (no "caps delay", no "delay N" yet, or an old
-// page's "delay auto"): a fixed three frames, the page's own default. Never the session's adaptive
-// delay: players want a delay that never moves with the link; lag shows as rollbacks or stalls.
+// Orca's input delay when nothing better is known: no round trip measured when an online session
+// starts (PingDelay), or no session. A fixed three frames, the page's own default. Never the
+// session's adaptive delay: players want a delay that never moves with the link; lag shows as
+// rollbacks or stalls.
 constexpr int DEFAULT_DELAY = 3;
 
-// The input delay this player plays at: the page's "delay N" (with "caps delay"), else
-// DEFAULT_DELAY. Always fixed.
-std::optional<int> ChosenDelay()
+// The player's own input delay: the page's "delay N" (with "caps delay"). nullopt when the page
+// set none, or sent "delay auto": Orca picks it (HeldDelay).
+std::optional<int> PlayerDelay()
 {
   if (Orca::Status::Cap("delay"))
-  {
-    if (const std::optional<int> chosen = Orca::Online::ChosenDelay())
-      return chosen;
-  }
-  return DEFAULT_DELAY;
+    return Orca::Online::ChosenDelay();
+  return std::nullopt;
 }
 
-// Option B: the input delay is measured and picked from ping when the session starts, then held
-// for the whole match. An input goes up to the room server and down to the opponent: about one of
-// this player's round trips when both players' links are alike. The delay covers that in whole
-// 60 Hz frames, from 2 (a nearby server) to the session's ceiling of 6 (100 ms); the rollback
-// window takes the rest. No round trip measured yet: DEFAULT_DELAY. Once the opponent's round trip
-// is in, the pick is made again from the real one way (RelinkDelay, LinkDelay).
+// The input delay outside a picked one: the player's choice, else DEFAULT_DELAY. Always fixed.
+int ChosenDelay()
+{
+  return PlayerDelay().value_or(DEFAULT_DELAY);
+}
+
+// An online session's input delay is measured and picked from ping when the session starts, then
+// held for the whole match. An input goes up to the room server and down to the opponent: about
+// one of this player's round trips when both players' links are alike. The delay covers that in
+// whole 60 Hz frames, from 2 (a nearby server) to the session's ceiling of 6 (100 ms); the
+// rollback window takes the rest. No round trip measured yet: DEFAULT_DELAY. Once the opponent's
+// round trip is in, the pick is made again from the real one way (RelinkDelay, LinkDelay).
 constexpr int PING_DELAY_MIN = 2;
 constexpr int PING_DELAY_MAX = 6;
 int PingDelay(const std::vector<int>& round_trips, int* median_ms)
@@ -713,6 +718,8 @@ Orca::Net::Config SessionConfig()
   config.seats = Orca::Net::MAX_SEATS;
   config.per_peer_inputs = Orca::Online::RoomDoubles();
   config.max_rollback = MAX_ROLLBACK;
+  config.frame_checks = true;
+  config.recover_desyncs = true;
   // Snapshot spacing is local only (it changes no frame's result); a test may fix it.
   config.snapshot_every = Orca::TestSnapshotEvery();
   // So is the input delay.
@@ -720,23 +727,19 @@ Orca::Net::Config SessionConfig()
   return config;
 }
 
-// A new session's input delay: Option B picks it from the room's recent round trips and holds it
-// for the match; other rooms keep the page's choice.
+// A new session's input delay (HeldDelay): picked from the room's recent round trips and held for
+// the match, unless the player chose one. Option B rooms pick even then.
 void PickDelay(Match& match, Orca::Net::Config& config)
 {
-  match.picked_delay.reset();
-  match.delay_relinked = false;
-  if (!OptionBRoom())
-    return;
   u32 sequence = 0;
   const std::vector<int> round_trips = Orca::Online::RecentRoundTrips(&sequence);
-  int median_ms = -1;
-  match.picked_delay = PingDelay(round_trips, &median_ms);
-  config.fixed_delay = match.picked_delay;
+  config.fixed_delay = match.delay.Start(PlayerDelay(), OptionBRoom(), round_trips);
+  if (!match.delay.Picked())
+    return;
   NOTICE_LOG_FMT(ROLLBACK,
-                 "Option B: input delay {} frames, picked from a {} ms round trip (median of {}), "
-                 "held for the match",
-                 *match.picked_delay, median_ms, round_trips.size());
+                 "input delay {} frames, picked from a {} ms round trip (median of {}), held for "
+                 "the match",
+                 *match.delay.Picked(), match.delay.StartMedianMs(), round_trips.size());
 }
 
 // The start pick took one of this player's round trips to the room server for the one way to the
@@ -746,21 +749,20 @@ void PickDelay(Match& match, Orca::Net::Config& config)
 // from the real one way (LinkDelay) and held from then on.
 void RelinkDelay(Match& match)
 {
-  if (!match.picked_delay || match.delay_relinked || !match.session)
+  if (!match.session)
     return;
   const Orca::Net::Stats& stats = match.session->GetStats();
   const Orca::Net::DirectSummary direct = Orca::Online::Direct();
   const int direct_rtt_ms = direct.transport != 0 ? direct.rtt_ms : -1;
-  const std::optional<int> delay = LinkDelay(stats.rtt_median, stats.peer_rtt_median, direct_rtt_ms);
-  if (!delay)
+  const std::optional<int> was = match.delay.Relink(stats.rtt_median, stats.peer_rtt_median,
+                                                    direct_rtt_ms);
+  if (!was)
     return;
-  match.delay_relinked = true;
   NOTICE_LOG_FMT(ROLLBACK,
-                 "Option B: input delay {} frames (was {}), from round trips of {} ms here and {} ms "
+                 "input delay {} frames (was {}), from round trips of {} ms here and {} ms "
                  "there{}, held for the match",
-                 *delay, *match.picked_delay, stats.rtt_median, stats.peer_rtt_median,
+                 *match.delay.Picked(), *was, stats.rtt_median, stats.peer_rtt_median,
                  direct_rtt_ms >= 0 ? fmt::format(", {} ms direct", direct_rtt_ms) : "");
-  match.picked_delay = delay;
 }
 
 // ---- Host ----
@@ -4799,12 +4801,12 @@ std::optional<int> Boundary(Core::System& system,
   if (!match.session)
     return std::nullopt;
 
-  // Round trips go to the session's stats (the delay is always fixed: Option B's picked delay, else
-  // ChosenDelay); each player's delay is its own.
+  // Round trips go to the session's stats (the delay is always fixed: the picked delay, else the
+  // player's choice); each player's delay is its own.
   if (const auto round_trip_ms = NewRoundTrip(&match.round_trip_sequence))
     match.session->OnRoundTrip(*round_trip_ms);
   RelinkDelay(match);
-  match.session->SetFixedDelay(match.picked_delay ? match.picked_delay : ChosenDelay());
+  match.session->SetFixedDelay(match.delay.Delay(PlayerDelay()));
   // A frame over two frame periods was a local hitch (disc read, shader compile). Time the game
   // itself held it (a load, the same on every machine) is not this machine's: a frame slow only by
   // that is counted apart, so a gate can still compare the raw count with an older build's.
@@ -4947,6 +4949,18 @@ static std::optional<int> SessionBoundary(
     }
     if (match.session && match.session->GetStats().stalls > stalls_before)
       match.stats_stall_ms += MsSince(step_start);
+    if (match.session)
+    {
+      const Orca::Net::Stats& recovery = match.session->GetStats();
+      if (recovery.recoveries != match.recoveries_logged ||
+          recovery.peer_recoveries != match.peer_recoveries_logged)
+      {
+        WARN_LOG_FMT(ROLLBACK, "Online match: desync recovered ({} here, {} by others): {}",
+                     recovery.recoveries, recovery.peer_recoveries, recovery.last_mismatch);
+        match.recoveries_logged = recovery.recoveries;
+        match.peer_recoveries_logged = recovery.peer_recoveries;
+      }
+    }
     if (step.kind == Orca::Net::StepKind::Rollback)
     {
       Orca::Perf::NoteRollback(running_before - step.frame + 1);
@@ -5384,6 +5398,16 @@ void LogStats(const char* when)
       Orca::Online::Direct().line, stats.saves, stats.snapshot_every,
       match.port ? match.port->SaveMs() : 0.0, stats.late_seats,
       match.session->Error().empty() ? "" : "; ", match.session->Error());
+  if (match.port)
+  {
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Online match {}: {} frame checks matched, frame hash {:.3f} ms a frame ({} KB "
+                   "read last frame), {} untracked RAM writes found, {} desyncs recovered here, "
+                   "{} by others",
+                   when, stats.frame_checks_matched, match.port->FrameHashMs(),
+                   match.port->FrameHashKb(), match.port->FrameHashAuditMisses(), stats.recoveries,
+                   stats.peer_recoveries);
+  }
 }
 
 void ReportJoinFailure(std::string_view code, std::string_view sentence)
@@ -5934,6 +5958,8 @@ static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGa
     Orca::Net::Config config;
     config.seats = Orca::Net::MAX_SEATS;
     config.per_peer_inputs = room.Doubles();
+    config.frame_checks = true;
+    config.recover_desyncs = true;
     config.local_seat = 0;
     config.co_seats = match.co_seats;
     config.authority_seat = 0;
@@ -6079,6 +6105,35 @@ std::optional<int> LinkDelay(int my_rtt_ms, int peer_rtt_ms, int direct_rtt_ms)
     one_way_ms = std::min(one_way_ms, direct_rtt_ms / 2.0);
   const int frames = static_cast<int>(std::ceil(one_way_ms * 60 / 1000 - 1e-6));
   return std::clamp(frames, PING_DELAY_MIN, PING_DELAY_MAX);
+}
+
+int HeldDelay::Start(std::optional<int> chosen, bool over_choice,
+                     const std::vector<int>& round_trips)
+{
+  *this = {};
+  m_over_choice = over_choice;
+  if (chosen && !over_choice)
+    return *chosen;
+  m_picked = PingDelay(round_trips, &m_start_median_ms);
+  return *m_picked;
+}
+
+std::optional<int> HeldDelay::Relink(int my_rtt_ms, int peer_rtt_ms, int direct_rtt_ms)
+{
+  if (!m_picked || m_relinked)
+    return std::nullopt;
+  const std::optional<int> delay = LinkDelay(my_rtt_ms, peer_rtt_ms, direct_rtt_ms);
+  if (!delay)
+    return std::nullopt;
+  m_relinked = true;
+  return std::exchange(m_picked, delay);
+}
+
+int HeldDelay::Delay(std::optional<int> chosen) const
+{
+  if (m_picked && (m_over_choice || !chosen))
+    return *m_picked;
+  return chosen.value_or(DEFAULT_DELAY);
 }
 
 int WaitingFriendSeat(int local_seat, const std::vector<int>& missing, bool joining,

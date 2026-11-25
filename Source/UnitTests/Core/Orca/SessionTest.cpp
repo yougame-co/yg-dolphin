@@ -106,6 +106,11 @@ public:
     if (!m_saved_since_load.insert(frame).second)
       ++m_double_saves;
     ++m_saves;
+    if (const auto kept = m_kept.find(frame); kept != m_kept.end())
+    {
+      kept->second = m_state;
+      return true;
+    }
     // Like SnapshotRing: a new frame takes the next slot, evicting what it held.
     if (ring_slots > 0 && !m_snapshots.contains(frame))
     {
@@ -121,10 +126,12 @@ public:
   {
     m_saved_since_load.clear();
     const auto it = m_snapshots.find(frame);
-    if (it == m_snapshots.end())
+    const auto kept = m_kept.find(frame);
+    if (it == m_snapshots.end() && kept == m_kept.end())
       return false;
-    m_state = it->second;
+    m_state = it != m_snapshots.end() ? it->second : kept->second;
     m_loads.emplace_back(frame, m_state);
+    m_kept.erase(m_kept.upper_bound(frame), m_kept.end());
     // Like SnapshotRing: the snapshots after the loaded frame are gone (the re-run saves them
     // again), and the next save takes the slot after the loaded one.
     m_snapshots.erase(m_snapshots.upper_bound(frame), m_snapshots.end());
@@ -136,9 +143,36 @@ public:
         if (f > frame)
           f = -1;
       }
-      m_next = static_cast<size_t>(slot - m_ring.begin() + 1) % ring_slots;
+      if (slot != m_ring.end())
+        m_next = static_cast<size_t>(slot - m_ring.begin() + 1) % ring_slots;
     }
     return true;
+  }
+  // Like SnapshotRing::Keep: the snapshot leaves the ring for one of two kept slots.
+  bool Keep(int frame) override
+  {
+    if (!keeps)
+      return false;
+    const auto it = m_snapshots.find(frame);
+    if (it == m_snapshots.end())
+      return m_kept.contains(frame);
+    ++m_keeps;
+    if (ring_slots == 0)
+      return true;
+    m_kept[frame] = it->second;
+    m_snapshots.erase(it);
+    for (int& f : m_ring)
+    {
+      if (f == frame)
+        f = -1;
+    }
+    while (m_kept.size() > 2)
+      m_kept.erase(m_kept.begin());
+    return true;
+  }
+  bool HasSnapshot(int frame) const override
+  {
+    return has_snapshots && (m_snapshots.contains(frame) || m_kept.contains(frame));
   }
   void SetPads(int frame, const Pads& pads) override
   {
@@ -150,10 +184,19 @@ public:
   void SetResimulating(bool resimulating) override { m_resimulating = resimulating; }
   std::optional<u64> SnapshotChecksum(int frame) override
   {
+    if (const auto kept = m_kept.find(frame); kept != m_kept.end())
+      return kept->second;
     const auto it = m_snapshots.find(frame);
     if (it == m_snapshots.end())
       return std::nullopt;
     return it->second;
+  }
+  std::optional<u64> FrameChecksum(int frame) override
+  {
+    if (!frame_checks)
+      return std::nullopt;
+    m_frame_checked[frame] = m_state;  // the state at the start of `frame` (re-runs overwrite)
+    return m_state ^ frame_check_salt;
   }
   void ResetPacing() override { ++m_pacing_resets; }
   double SaveMs() const override { return save_ms; }
@@ -167,9 +210,10 @@ public:
       for (u8 b : pad)
         h = Mix(h, b);
     m_state = h;
-    // A bug that corrupts this frame on every run, re-runs included.
-    if (m_corrupt_at == m_pads_frame)
-      m_state ^= 1;
+    // A bug that corrupts this frame on every run, re-runs included, or until the session first
+    // goes back to another player's state (a fault re-running cures).
+    if (m_corrupt_at == m_pads_frame && !(cured_by && cured_by->GetStats().recoveries > 0))
+      m_state ^= corrupt_mask;
     return m_pads_frame;
   }
 
@@ -193,6 +237,18 @@ public:
   bool m_resimulating = false;
   int m_pacing_resets = 0;
   std::optional<int> m_corrupt_at;
+  u64 corrupt_mask = 1;
+  const Session* cured_by = nullptr;
+  // Desync recovery: whether Keep works, whether HasSnapshot sees anything, kept snapshots.
+  bool keeps = true;
+  bool has_snapshots = true;
+  int m_keeps = 0;
+  std::map<int, u64> m_kept;
+  // Per-frame checks (Game::FrameChecksum): whether this machine can take them, a change to every
+  // value (a build that hashes differently), and the state each was taken from.
+  bool frame_checks = true;
+  u64 frame_check_salt = 0;
+  std::map<int, u64> m_frame_checked;
 };
 
 // Both directions of a link, with latency and jitter counted in ticks (one tick = one frame).
@@ -1298,6 +1354,319 @@ TEST(OrcaSession, DetectsDesync)
   const bool detected = match.a->session.Error().find("Desync") != std::string::npos ||
                         match.b->session.Error().find("Desync") != std::string::npos;
   EXPECT_TRUE(detected) << match.a->session.Error() << " / " << match.b->session.Error();
+}
+
+// Per-frame checks and desync recovery, as online matches run them (both are off by default, so
+// the packets of a default session stay byte for byte what older builds send).
+static Config Checked()
+{
+  Config config;
+  config.frame_checks = true;
+  config.recover_desyncs = true;
+  return config;
+}
+
+// Per-frame checks: identical runs agree on every final frame, rollbacks and re-runs included, and
+// each check is taken from the state at the start of its frame.
+TEST(OrcaSessionFrameChecks, IdenticalRunsAgreeEveryFrame)
+{
+  Match match(Checked(), 4, 3);
+  match.Play(1200);
+  ExpectClean(match);
+  for (const Player* p : {match.a.get(), match.b.get()})
+  {
+    const Stats& stats = p->session.GetStats();
+    EXPECT_GT(stats.rollbacks, 10);
+    // Nearly every frame, each compared once.
+    EXPECT_GT(stats.frame_checks_matched, 1000);
+    EXPECT_LE(stats.frame_checks_matched, 1200);
+    int compared = 0;
+    for (const auto& [frame, state] : p->game.m_frame_checked)
+    {
+      const auto ran = p->game.m_history.find(frame);
+      if (frame > Settled(*p) || ran == p->game.m_history.end())
+        continue;
+      EXPECT_EQ(state, ran->second) << "frame " << frame;
+      ++compared;
+    }
+    EXPECT_GT(compared, 1000);
+  }
+}
+
+// A one-byte difference in the state shows at the first frame it reaches, within two frames of it
+// being run when the link is instant, and a trip across the link plus that when it isn't; without
+// per-frame checks only the next 60-frame checksum (frame 120) finds it.
+TEST(OrcaSessionFrameChecks, OneByteDifferenceShowsWithinTwoFrames)
+{
+  for (const int latency : {0, 3})
+  {
+    for (const bool frame_checks : {true, false})
+    {
+      Match match(Checked(), latency, 0);
+      match.b->game.m_corrupt_at = 100;
+      match.b->game.corrupt_mask = u64{0xff} << 16;
+      match.a->game.frame_checks = frame_checks;
+      match.b->game.frame_checks = frame_checks;
+      int corrupted = -1;
+      int detected = -1;
+      for (int t = 0; t < 400 && detected < 0; ++t)
+      {
+        match.Play(1);
+        if (corrupted < 0 && match.b->completed >= 100)
+          corrupted = t;
+        if (!match.a->session.Error().empty() || !match.b->session.Error().empty())
+          detected = t;
+      }
+      const std::string error =
+          match.b->session.Error().empty() ? match.a->session.Error() : match.b->session.Error();
+      SCOPED_TRACE(fmt::format("latency {}, frame checks {}: {} at tick {}, run at tick {}",
+                               latency, frame_checks, error, detected, corrupted));
+      ASSERT_GE(corrupted, 0);
+      ASSERT_GE(detected, corrupted);
+      if (frame_checks)
+      {
+        EXPECT_NE(error.find("Desync at frame 101:"), std::string::npos);
+        EXPECT_LE(detected - corrupted, 2 + latency + (latency > 0 ? 1 : 0));
+      }
+      else
+      {
+        EXPECT_NE(error.find("Desync at frame 120:"), std::string::npos);
+        EXPECT_GE(detected - corrupted, 19);
+      }
+    }
+  }
+}
+
+// A peer that sends no checks (an older build, or a machine without copy-on-write tracking) or
+// checks in a format this build doesn't know is never compared, so nothing false-alarms; the
+// 60-frame checksum still catches a real desync.
+TEST(OrcaSessionFrameChecks, MixedBuildsNeverFalseAlarm)
+{
+  {
+    Match match(Checked(), 3, 1);
+    match.a->game.frame_checks = false;
+    match.Play(900);
+    ExpectClean(match);
+    EXPECT_EQ(match.a->session.GetStats().frame_checks_matched, 0);
+    EXPECT_EQ(match.b->session.GetStats().frame_checks_matched, 0);
+    EXPECT_GT(match.a->session.GetStats().checksums_matched, 10);
+  }
+  {
+    // Both send checks, each in a format the other doesn't know (and that would disagree).
+    Match match(Checked(), 3, 1);
+    match.a->game.frame_check_salt = 0x5a5a5a5a;
+    match.net.tamper = [](int, Packet* packet) {
+      if (!packet->frame_checks.empty())
+        packet->frame_check_version = FRAME_CHECK_VERSION + 1;
+    };
+    match.Play(900);
+    ExpectClean(match);
+    EXPECT_EQ(match.a->session.GetStats().frame_checks_matched, 0);
+    EXPECT_EQ(match.b->session.GetStats().frame_checks_matched, 0);
+    EXPECT_GT(match.a->session.GetStats().checksums_matched, 10);
+  }
+  {
+    Match match(Checked(), 3, 1);
+    match.a->game.frame_checks = false;
+    match.b->game.m_corrupt_at = 100;
+    match.Play(600);
+    const std::string error =
+        match.a->session.Error().empty() ? match.b->session.Error() : match.a->session.Error();
+    EXPECT_NE(error.find("Desync at frame 120:"), std::string::npos) << error;
+  }
+}
+
+// Checks travel as an optional key older builds ignore; a malformed or unknown one is dropped, never
+// the packet; coalescing keeps checks a lost packet would have carried.
+TEST(OrcaSessionFrameChecks, WireFormat)
+{
+  Packet sent;
+  sent.seat = 1;
+  sent.current_frame = 300;
+  sent.first_frame = 298;
+  sent.pads = {Pad{1}, Pad{2}};
+  EXPECT_EQ(EncodePacket(sent).find("\"fc\""), std::string::npos);
+  Packet got;
+  ASSERT_TRUE(DecodePacket(EncodePacket(sent), &got));
+  EXPECT_TRUE(got.frame_checks.empty());
+  EXPECT_EQ(got.frame_check_version, 0);
+
+  sent.frame_check_version = FRAME_CHECK_VERSION;
+  sent.frame_checks_first = 290;
+  sent.frame_checks = {0, 1, 0xdeadbeef, 0xffffffff};
+  Packet checked;
+  ASSERT_TRUE(DecodePacket(EncodePacket(sent), &checked));
+  EXPECT_EQ(checked.frame_check_version, FRAME_CHECK_VERSION);
+  EXPECT_EQ(checked.frame_checks_first, 290);
+  EXPECT_EQ(checked.frame_checks, sent.frame_checks);
+  EXPECT_EQ(checked.pads, sent.pads);
+
+  Packet plain = sent;
+  plain.frame_checks.clear();
+  const std::string json = EncodePacket(plain);
+  ASSERT_EQ(json.front(), '{');
+  // Too many checks for one packet, then shapes no build sends.
+  const std::vector<std::string> odd_fields = {
+      "[1,290,\"" + std::string((MAX_FRAME_CHECKS_IN_PACKET + 1) * 8, '0') + "\"]",
+      "[1,\"x\",\"00000001\"]", "[1,290,\"0001\"]",       "[1,290,\"zz000001\"]",
+      "[1,-5,\"00000001\"]",    "[0,290,\"00000001\"]",  "[1,290]",
+      "\"00000001\"",          "[1,290.5,\"00000001\"]", "[1,290,\"\"]"};
+  for (const std::string& field : odd_fields)
+  {
+    Packet odd;
+    ASSERT_TRUE(DecodePacket("{\"fc\":" + field + "," + json.substr(1), &odd)) << field;
+    EXPECT_TRUE(odd.frame_checks.empty()) << field;
+    EXPECT_EQ(odd.pads, sent.pads) << field;
+  }
+  // A later format decodes; the session leaves it alone (MixedBuildsNeverFalseAlarm).
+  Packet later;
+  ASSERT_TRUE(DecodePacket("{\"fc\":[2,290,\"0000000a\"]," + json.substr(1), &later));
+  EXPECT_EQ(later.frame_check_version, 2);
+  EXPECT_EQ(later.frame_checks, std::vector<u32>{10});
+
+  // Coalescing: a newer packet without checks keeps the older one's; runs that meet are joined.
+  std::optional<Packet> pending;
+  CoalescePacket(&pending, sent);
+  CoalescePacket(&pending, plain);
+  EXPECT_EQ(pending->frame_checks_first, 290);
+  EXPECT_EQ(pending->frame_checks, sent.frame_checks);
+  Packet next = sent;
+  next.frame_checks_first = 292;
+  next.frame_checks = {7, 8, 9, 10};
+  CoalescePacket(&pending, next);
+  EXPECT_EQ(pending->frame_checks_first, 290);
+  EXPECT_EQ(pending->frame_checks, (std::vector<u32>{0, 1, 7, 8, 9, 10}));
+}
+
+// Desync recovery: a player whose state left the reference's (seat 0 here, the lowest in play) for
+// a reason re-running cures goes back to the last frame they agreed on, re-runs, and both play on in
+// the same state; the reference waits for it.
+TEST(OrcaSessionRecovery, GoesBackToTheReferenceState)
+{
+  for (const bool still : {true, false})
+  {
+    SCOPED_TRACE(still ? "no rollbacks" : "with rollbacks");
+    Match match(Checked(), 3, 1);
+    match.a->still = match.b->still = still;
+    match.b->game.m_corrupt_at = 300;
+    match.b->game.corrupt_mask = u64{0xff} << 24;
+    match.b->game.cured_by = &match.b->session;
+    match.Play(900);
+    ExpectClean(match);
+    EXPECT_EQ(match.b->session.GetStats().recoveries, 1);
+    EXPECT_EQ(match.a->session.GetStats().recoveries, 0);
+    EXPECT_EQ(match.a->session.GetStats().peer_recoveries, 1);
+    EXPECT_NE(match.b->session.GetStats().last_mismatch.find("Desync at frame 301:"),
+              std::string::npos)
+        << match.b->session.GetStats().last_mismatch;
+    // It went back to an agreed frame at most a checksum interval before the bad one.
+    const auto deep = std::ranges::find_if(match.b->game.m_loads, [](const auto& load) {
+      return load.first <= 300 && load.first >= 240;
+    });
+    EXPECT_NE(deep, match.b->game.m_loads.end());
+    // Every confirmed frame is the same on both sides again, the ones after the bad frame included,
+    // and checks match again after it.
+    EXPECT_GT(match.CompareConfirmed(), 850);
+    EXPECT_GT(match.b->game.m_history.at(800), 0u);
+    EXPECT_EQ(match.a->game.m_history.at(800), match.b->game.m_history.at(800));
+    EXPECT_GT(match.a->session.GetStats().frame_checks_matched, 800);
+    EXPECT_GT(match.a->session.GetStats().checksums_matched, 10);
+  }
+}
+
+// When the reference's own state is the odd one out, or the difference comes back on every re-run,
+// going back can't cure it: one try, then the session ends with a desync as before.
+TEST(OrcaSessionRecovery, ADifferenceReRunningKeepsEndsAsADesync)
+{
+  for (const bool reference_wrong : {false, true})
+  {
+    SCOPED_TRACE(reference_wrong ? "the reference differs" : "every re-run differs");
+    Match match(Checked(), 3, 1);
+    Player& wrong = reference_wrong ? *match.a : *match.b;
+    wrong.game.m_corrupt_at = 300;
+    match.Play(900);
+    EXPECT_EQ(match.b->session.GetStats().recoveries, 1);
+    for (const Player* p : {match.a.get(), match.b.get()})
+    {
+      EXPECT_TRUE(p->session.Error().starts_with("Desync at frame 301:")) << p->session.Error();
+    }
+    EXPECT_NE(match.b->session.Error().find("still different after going back"), std::string::npos)
+        << match.b->session.Error();
+  }
+}
+
+// Without a snapshot of a frame both agreed on, or against a reference that doesn't recover (an
+// older build), a desync ends the session as before.
+TEST(OrcaSessionRecovery, NoAgreedSnapshotOrOlderReferenceEndsAsADesync)
+{
+  {
+    Match match(Checked(), 3, 1);
+    match.b->game.m_corrupt_at = 300;
+    match.b->game.cured_by = &match.b->session;
+    match.b->game.has_snapshots = false;
+    match.Play(900);
+    EXPECT_EQ(match.b->session.GetStats().recoveries, 0);
+    EXPECT_TRUE(match.b->session.Error().starts_with("Desync at frame 301:"))
+        << match.b->session.Error();
+    EXPECT_NE(match.b->session.Error().find("no snapshot"), std::string::npos);
+    // The reference waited for it to go back, then ended too.
+    EXPECT_TRUE(match.a->session.Error().starts_with("Desync at frame 301:"))
+        << match.a->session.Error();
+  }
+  {
+    Match match(Checked(), 3, 1);
+    match.b->game.m_corrupt_at = 300;
+    match.b->game.cured_by = &match.b->session;
+    match.net.tamper = [](int from, Packet* packet) {
+      if (from == 0)
+        packet->recoveries = -1;
+    };
+    match.Play(600);
+    EXPECT_EQ(match.b->session.GetStats().recoveries, 0);
+    const std::string error =
+        match.b->session.Error().empty() ? match.a->session.Error() : match.b->session.Error();
+    EXPECT_TRUE(error.starts_with("Desync at frame 301:")) << error;
+  }
+}
+
+// A recovery's counter travels as an optional key; a sender's checks from before it never ride
+// along with ones from after it.
+TEST(OrcaSessionRecovery, WireFormat)
+{
+  Packet sent;
+  sent.seat = 1;
+  sent.current_frame = 300;
+  EXPECT_EQ(EncodePacket(sent).find("\"fe\""), std::string::npos);
+  Packet none;
+  ASSERT_TRUE(DecodePacket(EncodePacket(sent), &none));
+  EXPECT_EQ(none.recoveries, -1);
+  sent.recoveries = 2;
+  Packet two;
+  ASSERT_TRUE(DecodePacket(EncodePacket(sent), &two));
+  EXPECT_EQ(two.recoveries, 2);
+  const std::string json = EncodePacket(Packet{});
+  for (const char* odd : {"-1", "1.5", "\"2\"", "[2]"})
+  {
+    Packet packet;
+    ASSERT_TRUE(DecodePacket("{\"fe\":" + std::string(odd) + "," + json.substr(1), &packet)) << odd;
+    EXPECT_EQ(packet.recoveries, -1) << odd;
+  }
+
+  Packet before = sent;
+  before.recoveries = 0;
+  before.frame_check_version = FRAME_CHECK_VERSION;
+  before.frame_checks_first = 290;
+  before.frame_checks = {1, 2, 3};
+  before.checksum_frame = 240;
+  before.checksum = 77;
+  Packet after = sent;
+  after.recoveries = 1;
+  std::optional<Packet> pending;
+  CoalescePacket(&pending, before);
+  CoalescePacket(&pending, after);
+  EXPECT_EQ(pending->recoveries, 1);
+  EXPECT_TRUE(pending->frame_checks.empty());
+  EXPECT_FALSE(pending->checksum_frame);
 }
 
 TEST(OrcaPadCodec, NeutralIsZeroAndRoundTrips)
@@ -5554,6 +5923,173 @@ TEST(OrcaOptionB, LinkDelayStaysWithinTwoToSixFrames)
   EXPECT_EQ(LinkDelay(0, 0), 2);
   EXPECT_EQ(LinkDelay(400, 300), 6);
   EXPECT_EQ(LinkDelay(400, 300, 250), 6);
+}
+
+// Every online room (queue, ranked, friends, 2v2) picks its delay from ping when the player chose
+// none: one of this player's round trips to the room server, in whole frames.
+TEST(OrcaHeldDelay, DefaultRoomPicksFromPing)
+{
+  using Rollback::OnlineMatch::HeldDelay;
+  HeldDelay held;
+  EXPECT_EQ(held.Start(std::nullopt, false, {70, 60, 65, 400}), 5);
+  EXPECT_EQ(held.Picked().value_or(-1), 5);
+  EXPECT_EQ(held.StartMedianMs(), 70);
+  EXPECT_EQ(held.Delay(std::nullopt), 5);
+  EXPECT_FALSE(held.Relinked());
+
+  EXPECT_EQ(held.Start(std::nullopt, false, {20, 25, 30}), 2);
+  EXPECT_EQ(held.Start(std::nullopt, false, {200, 210, 190}), 6);
+  // A failed measurement (-1) counts for nothing.
+  EXPECT_EQ(held.Start(std::nullopt, false, {-1, 65, -1}), 4);
+  EXPECT_EQ(held.StartMedianMs(), 65);
+}
+
+TEST(OrcaHeldDelay, NoMeasurementGivesThree)
+{
+  using Rollback::OnlineMatch::HeldDelay;
+  HeldDelay held;
+  EXPECT_EQ(held.Delay(std::nullopt), 3);
+  EXPECT_EQ(held.Start(std::nullopt, false, {}), 3);
+  EXPECT_EQ(held.StartMedianMs(), -1);
+  EXPECT_EQ(held.Delay(std::nullopt), 3);
+  EXPECT_EQ(held.Start(std::nullopt, false, {-1, -1}), 3);
+  EXPECT_EQ(held.Delay(std::nullopt), 3);
+}
+
+// The pick is made again once from both players' medians, then held whatever the link does.
+TEST(OrcaHeldDelay, RelinksOnceThenHolds)
+{
+  using Rollback::OnlineMatch::HeldDelay;
+  HeldDelay held;
+  EXPECT_EQ(held.Start(std::nullopt, false, {90, 90, 90}), 6);
+  EXPECT_FALSE(held.Relink(-1, 20));
+  EXPECT_FALSE(held.Relink(90, -1));
+  EXPECT_EQ(held.Delay(std::nullopt), 6);
+  EXPECT_EQ(held.Relink(90, 20).value_or(-1), 6);
+  EXPECT_TRUE(held.Relinked());
+  EXPECT_EQ(held.Delay(std::nullopt), 4);
+  EXPECT_FALSE(held.Relink(20, 20));
+  EXPECT_FALSE(held.Relink(300, 300));
+  EXPECT_EQ(held.Delay(std::nullopt), 4);
+  // A new session picks and relinks afresh.
+  EXPECT_EQ(held.Start(std::nullopt, false, {20, 20, 20}), 2);
+  EXPECT_FALSE(held.Relinked());
+  EXPECT_EQ(held.Relink(20, 90).value_or(-1), 2);
+  EXPECT_EQ(held.Delay(std::nullopt), 4);
+}
+
+// A delay the player set ("delay N") wins over the pick, at the start or mid-match; Option B rooms
+// pick over it.
+TEST(OrcaHeldDelay, AnExplicitChoiceWins)
+{
+  using Rollback::OnlineMatch::HeldDelay;
+  HeldDelay held;
+  EXPECT_EQ(held.Start(2, false, {90, 90, 90}), 2);
+  EXPECT_FALSE(held.Picked());
+  EXPECT_FALSE(held.Relink(90, 90));
+  EXPECT_EQ(held.Delay(2), 2);
+  EXPECT_EQ(held.Delay(5), 5);
+  // "delay auto" mid-match, with nothing picked: the default.
+  EXPECT_EQ(held.Delay(std::nullopt), 3);
+
+  // Picked, then the player sets one mid-match: theirs, until they clear it.
+  EXPECT_EQ(held.Start(std::nullopt, false, {65, 65, 65}), 4);
+  EXPECT_EQ(held.Delay(1), 1);
+  EXPECT_EQ(held.Delay(std::nullopt), 4);
+
+  EXPECT_EQ(held.Start(3, true, {65, 65, 65}), 4);
+  EXPECT_EQ(held.Delay(3), 4);
+  EXPECT_EQ(held.Relink(20, 20).value_or(-1), 4);
+  EXPECT_EQ(held.Delay(3), 2);
+}
+
+namespace
+{
+// Plays two sessions whose delays follow a HeldDelay each, as an online match does: started from
+// each player's own round trips, relinked from the session's medians, set every frame.
+void PlayHeld(Match& match, std::array<Rollback::OnlineMatch::HeldDelay, 2>& held,
+              const std::array<std::optional<int>, 2>& chosen, int ticks)
+{
+  for (int t = 0; t < ticks; ++t)
+  {
+    for (int i = 0; i < 2; ++i)
+    {
+      Session& session = (i == 0 ? match.a : match.b)->session;
+      const Stats& stats = session.GetStats();
+      held[i].Relink(stats.rtt_median, stats.peer_rtt_median);
+      session.SetFixedDelay(held[i].Delay(chosen[i]));
+    }
+    match.Play(1);
+  }
+}
+}  // namespace
+
+// Far from the server (90 ms) against near it (20 ms): the start picks differ (6 and 2), both
+// relink to the real one way (4) within the first seconds, and both machines agree on every frame
+// throughout.
+TEST(OrcaHeldDelay, TwoPeersAtDifferentPicksStayInSync)
+{
+  Config config;
+  Match match(config, 3, 1);
+  match.rtt_samples = true;
+  match.relay_rtt_ms = {90, 20};
+  std::array<Rollback::OnlineMatch::HeldDelay, 2> held;
+  const std::array<std::optional<int>, 2> chosen{};
+  const int a_start = held[0].Start(chosen[0], false, {90, 90, 90});
+  const int b_start = held[1].Start(chosen[1], false, {20, 20, 20});
+  EXPECT_EQ(a_start, 6);
+  EXPECT_EQ(b_start, 2);
+  match.a->session.SetFixedDelay(a_start);
+  match.b->session.SetFixedDelay(b_start);
+  for (Player* p : {match.a.get(), match.b.get()})
+    p->tag_ticks = true;
+  match.a->model_input_delay = a_start;
+  match.b->model_input_delay = b_start;
+  PlayHeld(match, held, chosen, 300);
+  EXPECT_TRUE(held[0].Relinked());
+  EXPECT_TRUE(held[1].Relinked());
+  PlayHeld(match, held, chosen, 900);
+  ExpectClean(match);
+  EXPECT_EQ(match.a->session.Delay(), 4);
+  EXPECT_EQ(match.b->session.Delay(), 4);
+  // A came down once (samples dropped), B went up once (frames filled).
+  EXPECT_EQ(match.b->filled, 1);
+  EXPECT_EQ(match.a->filled, 0);
+  EXPECT_GT(Match::CheckSamples(*match.a, *match.b), 1000);
+  EXPECT_GT(Match::CheckSamples(*match.b, *match.a), 1000);
+  EXPECT_GT(match.CompareConfirmed(), 1000);
+}
+
+// One player set a delay of 2, the other's is picked: each keeps its own all match, and both
+// machines agree.
+TEST(OrcaHeldDelay, AChosenAndAPickedDelayStayInSync)
+{
+  Config config;
+  Match match(config, 3, 1);
+  match.rtt_samples = true;
+  match.relay_rtt_ms = {90, 90};
+  std::array<Rollback::OnlineMatch::HeldDelay, 2> held;
+  const std::array<std::optional<int>, 2> chosen{std::nullopt, 2};
+  const int a_start = held[0].Start(chosen[0], false, {90, 90, 90});
+  const int b_start = held[1].Start(chosen[1], false, {90, 90, 90});
+  EXPECT_EQ(a_start, 6);
+  EXPECT_EQ(b_start, 2);
+  match.a->session.SetFixedDelay(a_start);
+  match.b->session.SetFixedDelay(b_start);
+  for (Player* p : {match.a.get(), match.b.get()})
+    p->tag_ticks = true;
+  match.a->model_input_delay = a_start;
+  match.b->model_input_delay = b_start;
+  PlayHeld(match, held, chosen, 1200);
+  ExpectClean(match);
+  EXPECT_TRUE(held[0].Relinked());
+  EXPECT_FALSE(held[1].Relinked());
+  EXPECT_EQ(match.a->session.Delay(), 6);
+  EXPECT_EQ(match.b->session.Delay(), 2);
+  EXPECT_EQ(match.a->filled + match.b->filled, 0);
+  EXPECT_GT(Match::CheckSamples(*match.a, *match.b), 1000);
+  EXPECT_GT(Match::CheckSamples(*match.b, *match.a), 1000);
+  EXPECT_GT(match.CompareConfirmed(), 1000);
 }
 
 TEST(OrcaDoubles, SuccessiveBatchesKeepTheUnconfirmedStartGate)

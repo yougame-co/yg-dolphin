@@ -3,10 +3,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <random>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifndef _WIN32
@@ -22,6 +25,7 @@
 #include "Common/MemArena.h"
 #include "Core/MemTools.h"
 #include "Core/Rollback/Cow.h"
+#include "Core/Rollback/FrameHash.h"
 #include "Core/Rollback/Rollback.h"
 #include "Core/Rollback/UndoLog.h"
 
@@ -186,10 +190,14 @@ TEST(OrcaUndoLog, RandomRingMatchesFullCopies)
 class CowMemory
 {
 public:
-  CowMemory()
+  // Sizes in host pages, or in bytes (rounded up to pages) when `bytes` is set.
+  explicit CowMemory(std::size_t first = 16, std::size_t second = 24, bool bytes = false)
   {
     m_page = Rollback::Cow::PageSize();
-    m_sizes = {16 * m_page, 24 * m_page};
+    const auto size = [this, bytes](std::size_t n) {
+      return bytes ? (n + m_page - 1) / m_page * m_page : n * m_page;
+    };
+    m_sizes = {size(first), size(second)};
     m_arena.GrabSHMSegment(m_sizes[0] + m_sizes[1], "orca-cow-test");
     for (int a = 0; a < 2; ++a)
     {
@@ -258,6 +266,11 @@ public:
 
   u8* View(int area, int view) { return m_views[area][view]; }
   std::size_t Size(int area) const { return m_sizes[area]; }
+  // Where a physical address (as Arm maps the areas) sits in Copy().
+  std::size_t Offset(u32 physical) const
+  {
+    return physical >= 0x10000000 ? m_sizes[0] + (physical - 0x10000000) : physical;
+  }
 
 private:
   Common::MemArena m_arena;
@@ -286,8 +299,19 @@ TEST(OrcaCow, WriteFaultsRestoreAndChecksum)
       {
         const std::size_t target = rng() % ring.size();
         std::size_t changed = 0;
-        ASSERT_TRUE(Rollback::Cow::Restore(ring[target].first,
-                                           [&changed](u32, u32 length) { changed += length; }));
+        // Each changed block is reported before it is overwritten, with both versions.
+        const std::vector<u8> live_before = memory.Copy();
+        bool reported_ok = true;
+        ASSERT_TRUE(Rollback::Cow::Restore(
+            ring[target].first,
+            [&](u32 physical, u32 length, const u8* live, const u8* saved) {
+              changed += length;
+              const std::size_t at = memory.Offset(physical);
+              reported_ok &= std::memcmp(live, &live_before[at], length) == 0 &&
+                             std::memcmp(saved, &ring[target].second[at], length) == 0 &&
+                             std::memcmp(live, saved, length) != 0;
+            }));
+        EXPECT_TRUE(reported_ok) << "step " << step;
         ASSERT_EQ(memory.Copy(), ring[target].second) << "step " << step;
         ring.resize(target + 1);
         hashes.resize(target + 1);
@@ -311,7 +335,7 @@ TEST(OrcaCow, WriteFaultsRestoreAndChecksum)
     std::thread writer([&memory] { std::memset(memory.View(1, 0), 0x5a, 3 * 4096); });
     writer.join();
     ASSERT_EQ(memory.View(1, 1)[100], 0x5a);
-    ASSERT_TRUE(Rollback::Cow::Restore(before, [](u32, u32) {}));
+    ASSERT_TRUE(Rollback::Cow::Restore(before, [](u32, u32, const u8*, const u8*) {}));
     EXPECT_EQ(memory.Copy(), at_before);
 
     // Snapshots with nothing written let every page go cold (read-only) again.
@@ -346,9 +370,9 @@ TEST(OrcaCow, WriteFaultsRestoreAndChecksum)
                          9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
     std::memcpy(memory.View(1, 1) + page - 16, wide, sizeof(wide));
     EXPECT_EQ(memory.View(1, 0)[page + 15], 9);
-    ASSERT_TRUE(Rollback::Cow::Restore(cold, [](u32, u32) {}));
+    ASSERT_TRUE(Rollback::Cow::Restore(cold, [](u32, u32, const u8*, const u8*) {}));
     EXPECT_EQ(memory.Copy(), at_cold);
-    ASSERT_TRUE(Rollback::Cow::Restore(before, [](u32, u32) {}));
+    ASSERT_TRUE(Rollback::Cow::Restore(before, [](u32, u32, const u8*, const u8*) {}));
     EXPECT_EQ(memory.Copy(), at_before);
 
     Rollback::Cow::Disarm(&memory);
@@ -356,6 +380,151 @@ TEST(OrcaCow, WriteFaultsRestoreAndChecksum)
     memory.View(0, 0)[0] = 1;
     memory.View(1, 1)[0] = 2;
     EXPECT_FALSE(Rollback::Cow::Has(before));
+  }
+  EMM::UninstallExceptionHandler();
+}
+
+std::vector<Rollback::FrameHash::Area> HashAreas(const Rollback::Cow::Touched& touched)
+{
+  std::vector<Rollback::FrameHash::Area> areas;
+  for (const Rollback::Cow::Area& area : touched.areas)
+    areas.push_back({area.alias, area.physical_address, area.size});
+  return areas;
+}
+
+// What copy-on-write reports as touched is enough for the per-frame hash: through writes on open
+// and protected pages, snapshots that re-protect, and restores, the incremental hash always equals
+// one from scratch, and the audit never finds a missed write.
+TEST(OrcaCow, TouchedPagesKeepTheFrameHashExact)
+{
+  if (!EMM::IsExceptionHandlerSupported())
+    GTEST_SKIP() << "no fault handler on this platform";
+  EMM::InstallExceptionHandler();
+  {
+    CowMemory memory;
+    ASSERT_TRUE(memory.Arm());
+    Rollback::FrameHash hash;
+    Rollback::Cow::Touched touched;
+    u64 generation = 0;
+    const auto update = [&] {
+      EXPECT_TRUE(Rollback::Cow::TakeTouched(&memory, &touched));
+      const auto areas = HashAreas(touched);
+      const bool fresh = touched.generation != generation;
+      generation = touched.generation;
+      return std::pair{hash.Update(areas, fresh ? nullptr : &touched.ranges),
+                       Rollback::FrameHash::Full(areas)};
+    };
+    EXPECT_FALSE(Rollback::Cow::TakeTouched(&hash, &touched));
+    std::mt19937 rng(31);
+    std::vector<u64> ring;
+    for (int step = 0; step < 600; ++step)
+    {
+      const int writes = static_cast<int>(rng() % 20);
+      for (int w = 0; w < writes; ++w)
+        memory.Write(rng);
+      if (step % 9 == 8 && ring.size() > 1)
+      {
+        const std::size_t target = rng() % ring.size();
+        ASSERT_TRUE(Rollback::Cow::Restore(ring[target], [](u32, u32, const u8*, const u8*) {}));
+        ring.resize(target + 1);
+      }
+      else if (step % 2 == 0)
+      {
+        if (ring.size() == 6)
+        {
+          Rollback::Cow::Drop(ring.front());
+          ring.erase(ring.begin());
+        }
+        ring.push_back(Rollback::Cow::Snapshot());
+      }
+      // Several frames in a row with nothing written let pages go cold.
+      if (step % 100 == 50)
+      {
+        for (int i = 0; i < 260; ++i)
+          ring.push_back(Rollback::Cow::Snapshot());
+        for (std::size_t i = 0; i + 6 < ring.size(); ++i)
+          Rollback::Cow::Drop(ring[i]);
+        ring.erase(ring.begin(), ring.end() - 6);
+      }
+      const auto [incremental, full] = update();
+      ASSERT_EQ(incremental, full) << "step " << step;
+    }
+    EXPECT_EQ(hash.AuditMisses(), 0u);
+
+    // Tracking started again: a new generation, so the caller hashes everything.
+    Rollback::Cow::Disarm(&memory);
+    EXPECT_FALSE(Rollback::Cow::TakeTouched(&memory, &touched));
+    memory.View(0, 0)[5] ^= 0xff;
+    ASSERT_TRUE(memory.Arm());
+    const u64 before = generation;
+    const auto [incremental, full] = update();
+    EXPECT_NE(generation, before);
+    EXPECT_EQ(incremental, full);
+    Rollback::Cow::Disarm(&memory);
+  }
+  EMM::UninstallExceptionHandler();
+}
+
+// The per-frame hash's whole cost on Wii-sized RAM (24 MB + 64 MB) under copy-on-write, a snapshot
+// every frame: taking the touched pages, hashing them and the audit, by how much a frame writes.
+TEST(OrcaCow, FrameHashCostPerFrame)
+{
+  if (!EMM::IsExceptionHandlerSupported())
+    GTEST_SKIP() << "no fault handler on this platform";
+  EMM::InstallExceptionHandler();
+  {
+    CowMemory memory(24 << 20, 64 << 20, true);
+    ASSERT_TRUE(memory.Arm());
+    Rollback::FrameHash hash;
+    Rollback::Cow::Touched touched;
+    ASSERT_TRUE(Rollback::Cow::TakeTouched(&memory, &touched));
+    auto start = std::chrono::steady_clock::now();
+    hash.Update(HashAreas(touched), nullptr);
+    std::printf("[ FRAMEHASH ] copy-on-write, %zu KB pages: first full hash %.2f ms\n",
+                Rollback::Cow::PageSize() / 1024,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                    .count());
+    std::mt19937 rng(17);
+    std::vector<u64> ring;
+    for (const std::size_t kb : {64u, 256u, 1024u, 4096u})
+    {
+      constexpr int FRAMES = 120;
+      double total_ms = 0;
+      std::size_t ranges = 0;
+      for (int frame = 0; frame < FRAMES; ++frame)
+      {
+        // Writes 4 KB apart, mostly in a working set that stays the same (as a game's do).
+        for (std::size_t w = 0; w < kb / 4; ++w)
+        {
+          const int area = rng() % 3 == 0 ? 0 : 1;
+          const std::size_t span = std::min<std::size_t>(memory.Size(area), 8 * kb * 1024);
+          const std::size_t offset = (rng() % (span / 4096)) * 4096 + rng() % 4096;
+          memory.View(area, 0)[offset] ^= 1;
+        }
+        if (ring.size() == 8)
+        {
+          Rollback::Cow::Drop(ring.front());
+          ring.erase(ring.begin());
+        }
+        ring.push_back(Rollback::Cow::Snapshot());
+        start = std::chrono::steady_clock::now();
+        ASSERT_TRUE(Rollback::Cow::TakeTouched(&memory, &touched));
+        hash.Update(HashAreas(touched), &touched.ranges);
+        total_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                              start)
+                        .count();
+        ranges += touched.ranges.size();
+      }
+      std::printf("[ FRAMEHASH ] copy-on-write, ~%zu KB written a frame: %.3f ms a frame "
+                  "(%zu KB read last frame, %zu ranges a frame)\n",
+                  kb, total_ms / FRAMES, hash.LastBlocks() * Rollback::FrameHash::BLOCK / 1024,
+                  ranges / FRAMES);
+    }
+    ASSERT_TRUE(Rollback::Cow::TakeTouched(&memory, &touched));
+    EXPECT_EQ(hash.Update(HashAreas(touched), &touched.ranges),
+              Rollback::FrameHash::Full(HashAreas(touched)));
+    EXPECT_EQ(hash.AuditMisses(), 0u);
+    Rollback::Cow::Disarm(&memory);
   }
   EMM::UninstallExceptionHandler();
 }

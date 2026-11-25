@@ -210,6 +210,16 @@ std::size_t JitInterface::GetBlockCount() const
   return 0;
 }
 
+bool JitInterface::HasCompiledCode(u32 physical_address, u32 length) const
+{
+  return m_jit && m_jit->GetBlockCache()->HasCode(physical_address, length);
+}
+
+u64 JitInterface::CodeGeneration()
+{
+  return JitBaseBlockCache::CodeGeneration();
+}
+
 bool JitInterface::HandleFault(uintptr_t access_address, SContext* ctx)
 {
   // Prevent nullptr dereference on a crash with no JIT present
@@ -344,6 +354,7 @@ void JitInterface::CompileExceptionCheck(ExceptionType type)
         return;
     }
     exception_addresses->insert(ppc_state.pc);
+    JitBaseBlockCache::NoteCodeChanged();
 
     // Invalidate the JIT block so that it gets recompiled with the external exception check
     // included.

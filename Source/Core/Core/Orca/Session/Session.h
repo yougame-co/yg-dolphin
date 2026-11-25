@@ -59,6 +59,20 @@ constexpr size_t MAX_DELAY_NOTES = 16;
 constexpr int SPARED_FRAMES = 4;
 // Windows of the adaptive delay's history (Session::AdaptDelay): the last 45 seconds.
 constexpr int NEED_WINDOWS = 45;
+// Per-frame state checks (Packet::frame_checks). The format this build sends and compares: a peer
+// sending another is never compared, so builds that hash differently can't false-alarm. Then the
+// most a packet may carry (two coalesced packets' worth), the most a sender puts in one, and how
+// many already-sent ones each packet repeats, and how many frames of checks are kept.
+constexpr int FRAME_CHECK_VERSION = 1;
+constexpr int MAX_FRAME_CHECKS_IN_PACKET = 16;
+constexpr int FRAME_CHECKS_SENT = 8;
+constexpr int FRAME_CHECKS_REPEATED = 3;
+constexpr int FRAME_CHECK_HISTORY = 300;
+// Desync recovery (Session::Recover): the most times one session goes back, and how long the
+// reference player waits for another to go back before calling the desync final (it may stall
+// meanwhile, so wall time).
+constexpr int MAX_RECOVERIES = 3;
+constexpr double RECOVERY_WAIT_MS = 5000;
 using Pads = std::array<Pad, MAX_SEATS>;
 
 // What the session needs from the emulator. Frames count from 0. "The state at the start of frame
@@ -79,6 +93,17 @@ public:
   // A hash of the saved state at the start of `frame`, for desync detection (nullopt if not saved).
   // Only asked every Config::checksum_every frames; it may be computed at Save time.
   virtual std::optional<u64> SnapshotChecksum(int frame) = 0;
+  // A hash of the current state as the start of `frame`, cheap enough for every frame: asked at
+  // every boundary before anything else there (re-runs included, once per frame run). Machines in
+  // the same state must agree on it whatever their platform. nullopt: this machine can't, and
+  // sends no per-frame checks.
+  virtual std::optional<u64> FrameChecksum([[maybe_unused]] int frame) { return std::nullopt; }
+  // Desync recovery: keep the snapshot of `frame`, just saved, beyond the snapshots a rollback
+  // needs (the two newest kept frames are held; a load before a kept frame drops it like any later
+  // snapshot). False if this machine can't. Asked for every checksum frame.
+  virtual bool Keep([[maybe_unused]] int frame) { return false; }
+  // Whether a snapshot of `frame` is held, so Load(frame) would succeed.
+  virtual bool HasSnapshot([[maybe_unused]] int frame) const { return false; }
   // After a stall: restart frame pacing from now, so the emulator doesn't race to make up the time.
   virtual void ResetPacing() = 0;
   // What one Save costs on this machine, smoothed, in ms (0: not measured). Picks
@@ -151,6 +176,17 @@ struct Packet
   std::optional<int> rtt;
   std::optional<int> checksum_frame;
   u64 checksum = 0;
+  // Per-frame checks: the low 32 bits of the sender's Game::FrameChecksum at the start of frames
+  // frame_checks_first, frame_checks_first + 1, ..., all final. Compared only when
+  // frame_check_version is this build's FRAME_CHECK_VERSION. Empty: nothing new to report, or an
+  // older build.
+  int frame_check_version = 0;
+  int frame_checks_first = 0;
+  std::vector<u32> frame_checks;
+  // Desync recovery: how many times the sender went back to the reference player's state (-1: it
+  // never does, an older build or recovery off). Its checks and checksums from before a recovery
+  // are dropped once a packet from after it arrives.
+  int recoveries = -1;
 
   // Drop-in (see SeatPlan): which seats are plugged in when. Only the host's roster counts.
   std::optional<std::array<SeatPlan, MAX_SEATS>> roster;
@@ -219,6 +255,14 @@ struct Config
   // Players exchange a state checksum every this many confirmed frames (a full RAM hash costs a few
   // ms, so not every frame).
   int checksum_every = 60;
+  // Also exchange a cheap check of every final frame (Game::FrameChecksum), so a desync shows
+  // within a frame or two of being final instead of up to checksum_every frames later. Off, the
+  // packets are exactly what builds without it send; online matches turn it on.
+  bool frame_checks = false;
+  // On a desync, a player other than the reference (Session::ReferenceSeat) goes back to the last
+  // frame it agreed on with the reference and re-runs from there, instead of ending the session.
+  // Needs frame_checks on both sides; online matches turn it on.
+  bool recover_desyncs = false;
   // Most inputs repeated in one packet.
   int max_pads_per_packet = 16;
   // Predicted frames per snapshot, 1 to MAX_SNAPSHOT_EVERY. 0 picks from Game::SaveMs each
@@ -279,6 +323,14 @@ struct Stats
   int snapshot_every = 1;
   int stalls = 0;
   int checksums_matched = 0;
+  // Per-frame checks that matched another player's.
+  int frame_checks_matched = 0;
+  // Desync recovery: times this player went back to the reference's state, and times another
+  // player did so after disagreeing with this one (only the reference counts those).
+  int recoveries = 0;
+  int peer_recoveries = 0;
+  // The newest difference recovery handled, for the log.
+  std::string last_mismatch;
   int confirmed_frame = -1;
   // The current input delay, whether the player chose it (Config::fixed_delay), and how the
   // adaptive one got there: raises (for the link or the others' stalls), lowers, and raises that
@@ -448,6 +500,22 @@ private:
   bool ApplyGroups(const Packet& packet);
   void AddCoPads(Packet* packet) const;
   void AddPeerChecksum(int seat, const Packet& packet);
+  void AddPeerFrameChecks(int seat, const Packet& packet);
+  void AddFrameChecks(Packet* packet);
+  void RecordFrameCheck(int frame);
+  void CheckFrameChecks();
+  // Desync recovery. The reference player's state is the right one: the host, or with no host the
+  // lowest seat in play.
+  int ReferenceSeat() const;
+  bool RecoversDesyncs() const;
+  // Whether this player compares its state with `seat`'s: the reference compares with everyone;
+  // with a reference that recovers, others compare only with it.
+  bool Compares(int seat) const;
+  void NotePeerRecoveries(int seat, const Packet& packet);
+  // A check or checksum of `frame` differs from `seat`'s: recover, wait for `seat` to, or end the
+  // session with `error`.
+  void OnMismatch(int seat, int frame, const std::string& error);
+  Step Recover(int bad_frame);
   void SendPacket();
   Pads PadsFor(int frame);
   bool NeedsSnapshot(int frame) const;
@@ -525,6 +593,34 @@ private:
   std::map<std::pair<int, int>, u64> m_peer_checksums;
   int m_last_checksum_frame = 0;
   std::optional<int> m_pending_checksum;
+  // Per-frame checks: this machine's (Game::FrameChecksum at each frame's start, as this history
+  // ran it), the frame the last one was taken at since the last load (so a repeated boundary
+  // doesn't take it again), the newest final frame whose check went out, and each player's
+  // received ones not yet compared (low 32 bits).
+  std::map<int, u64> m_frame_checks;
+  int m_frame_checked = -1;
+  int m_checks_sent = -1;
+  std::array<std::map<int, u32>, MAX_SEATS> m_peer_frame_checks;
+  // Per seat: the newest frame its check already matched, so a check repeated in later packets
+  // is compared and counted once.
+  std::array<int, MAX_SEATS> m_peer_checks_matched{-1, -1, -1, -1};
+  // Desync recovery: whether this machine takes frame checks; the newest frame this player's check
+  // matched the reference's; a recovery due at the next step (the first differing frame, -1: none);
+  // recoveries so far and the frame the last one was for; the kept snapshots (Game::Keep).
+  bool m_hashing = false;
+  int m_agreed = -1;
+  int m_recover_at = -1;
+  std::string m_recover_error;
+  int m_recoveries = 0;
+  int m_recovered_bad = -1;
+  std::set<int> m_kept;
+  // Per seat: the recoveries it last reported (Packet::recoveries), and on the reference, the time
+  // (Game::NowMs) by which a player that disagreed must have recovered (< 0: not waiting), why, and
+  // how many times it was waited for.
+  std::array<int, MAX_SEATS> m_peer_recoveries{-1, -1, -1, -1};
+  std::array<double, MAX_SEATS> m_await_until{-1, -1, -1, -1};
+  std::array<std::string, MAX_SEATS> m_await_error;
+  std::array<int, MAX_SEATS> m_awaited{};
   int m_last_sent_newest = -1;
   bool m_stalling = false;
   // The frame last saved since the last load (-1: none), so a repeated boundary on a stalled or

@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <utility>
@@ -14,6 +15,7 @@
 #include "Common/CommonTypes.h"
 #include "Core/CoreTiming.h"
 #include "Core/Orca/Session/Session.h"
+#include "Core/Rollback/FrameHash.h"
 #include "Core/Rollback/Rollback.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -44,8 +46,16 @@ public:
   void SetPads(int frame, const Orca::Net::Pads& pads) override;
   void SetResimulating(bool resimulating) override;
   std::optional<u64> SnapshotChecksum(int frame) override;
+  std::optional<u64> FrameChecksum(int frame) override;
+  bool Keep(int frame) override { return m_ring.Keep(frame); }
+  bool HasSnapshot(int frame) const override { return m_ring.Has(frame); }
   void ResetPacing() override;
   double SaveMs() const override { return m_save_ms; }
+  // The per-frame hash (FrameHash.h): its smoothed cost in ms, the RAM it read last time in KB, and
+  // the writes its audit found untracked.
+  double FrameHashMs() const { return m_hash_ms; }
+  std::size_t FrameHashKb() const { return m_frame_hash.LastBlocks() * FrameHash::BLOCK / 1024; }
+  u64 FrameHashAuditMisses() const { return m_frame_hash.AuditMisses(); }
 
   // What port `port` (0-3) reports this frame. The local pad also comes from the session, so both
   // machines see the same bytes.
@@ -72,6 +82,10 @@ private:
   SnapshotRing m_ring;
   // Smoothed wall time of one Save; 0 until measured. Saves that allocate are skipped.
   double m_save_ms = 0;
+  // The per-frame RAM hash, the copy-on-write generation it follows, and its smoothed cost.
+  FrameHash m_frame_hash;
+  u64 m_hash_generation = 0;
+  double m_hash_ms = 0;
   std::array<GCPadStatus, Orca::Net::MAX_SEATS> m_pads;
   bool m_unthrottled;
   bool m_resimulating = false;

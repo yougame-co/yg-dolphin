@@ -89,9 +89,9 @@ u64 RoomGeneration();
 // In a ranked set whose opponent stopped sending inputs (15 s stalled, or silent), this player
 // claims the set. Does nothing outside a ranked room's live match.
 void ReportStall();
-// The app's "delay auto|1..6": this player's input delay in frames, or nullopt for adaptive. Any
-// thread, never blocks. Persists across sessions, and applies only while the app's caps include
-// "delay".
+// The app's "delay auto|1..6": this player's input delay in frames, or nullopt for Orca's own pick
+// (Rollback/OnlineMatch.h HeldDelay). Any thread, never blocks. Persists across sessions, and
+// applies only while the app's caps include "delay".
 void SetChosenDelay(std::optional<int> frames);
 std::optional<int> ChosenDelay();
 // The app's "direct on|off": whether this player allows direct links to other players. On by
