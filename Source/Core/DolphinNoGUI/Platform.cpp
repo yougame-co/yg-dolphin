@@ -600,6 +600,16 @@ void Platform::ProcessEmbedCommands()
       else
         Embed::Out("unsupported perf");
     }
+    else if (cmd == "port-toasts")
+    {
+      // The app's own overlay over the game announces joins and leaves, so Orca's would repeat them.
+      std::string value;
+      in >> value;
+      if (value == "on" || value == "off")
+        Orca::UX::SetPortToasts(value == "on");
+      else
+        Embed::Out("unsupported port-toasts");
+    }
     else if (cmd == "controls")
     {
       // The player's in-game controls from the page (UX/NameTags.h): their tag gets them at the
