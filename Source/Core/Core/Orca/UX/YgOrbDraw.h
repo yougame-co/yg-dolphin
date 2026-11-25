@@ -18,6 +18,9 @@ namespace Orca::UX::YgOrb
 {
 // The button's bounds including its dot and badge; empty (min == max) when off.
 Kit::Box ButtonBox(const Model::View& view);
+// Whether any of the button is on the display. The page parks a hidden button (idle, covered or
+// cut) outside the view, still placed, so a placed button can be out of sight.
+bool ButtonShown(const Model::View& view);
 // Draws the button with its blink ring (or the green listening pulse), held-seat dot and unread
 // badge.
 void DrawButton(ImDrawList* dl, const Model::View& view);
