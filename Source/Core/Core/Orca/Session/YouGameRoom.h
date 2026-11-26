@@ -433,8 +433,13 @@ struct CupCarry
 {
   std::vector<std::string> winners;
   std::string digest;
+  // Each carried game's report id number (the N of "g<N>"), when every game names one.
+  std::optional<std::vector<int>> reports;
 };
 std::optional<CupCarry> CupCarriedGames(std::string_view ticket, bool* refused = nullptr);
+// The `carried` field of a cup set's game report: the games this room's tally played on from,
+// none after a 0-0 start, or nothing to send when a carried game's report id is unknown.
+std::string CupCarriedEcho(const CupCarry* carry, bool agreed);
 
 // A ranked game's `game-start` for the room's match (exposed for tests):
 // {"t":"game-start","matchId":"<match>","id":"g<start>"}, the id the game's `game-report` carries.

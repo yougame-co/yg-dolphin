@@ -1497,11 +1497,37 @@ TEST(OrcaRoom, ACupTicketCarriesGamesFromALostRoom)
   EXPECT_FALSE(refused);
   EXPECT_EQ(five->winners, (std::vector<std::string>{"u-a", "u-b", "u-a"}));
   EXPECT_EQ(five->digest, "ec3c49506a5cedf8");
+  // Report ids that are not "g<N>" carry the games but name none of them.
+  EXPECT_FALSE(one->reports);
+  EXPECT_FALSE(five->reports);
   // None carried: {"tr":{"rules":{"bestOf":3}}}, and not a cup ticket at all.
   EXPECT_FALSE(CupCarriedGames("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjN9fX0.sig", &refused));
   EXPECT_FALSE(refused);
   EXPECT_FALSE(CupCarriedGames("loopback-fixture-1", &refused));
   EXPECT_FALSE(refused);
+}
+
+TEST(OrcaRoom, ACupGameReportEchoesTheGamesItsSetCarried)
+{
+  bool refused = true;
+  // {"bestOf":5,"played":[{"winner":"u-a","report":"g4512"},{"winner":"u-b","report":"g9031"}]}
+  auto named = CupCarriedGames("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjUsInBsYXllZCI6W3sid2lubmVyIjoidS1hIiwicmVwb3J0IjoiZzQ1MTIifSx7Indpbm5lciI6InUtYiIsInJlcG9ydCI6Imc5MDMxIn1dfX19.sig", &refused);
+  ASSERT_TRUE(named);
+  EXPECT_FALSE(refused);
+  ASSERT_TRUE(named->reports);
+  EXPECT_EQ(*named->reports, (std::vector<int>{4512, 9031}));
+  EXPECT_EQ(CupCarriedEcho(&*named, true), ",\"carried\":[4512,9031]");
+  // Not agreed with the opponent, or nothing carried: the set started at 0-0.
+  EXPECT_EQ(CupCarriedEcho(&*named, false), ",\"carried\":[]");
+  EXPECT_EQ(CupCarriedEcho(nullptr, false), ",\"carried\":[]");
+  // The second game's id is "g-1": the same winners, the digest unchanged, no echo to send.
+  auto unnamed = CupCarriedGames("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjUsInBsYXllZCI6W3sid2lubmVyIjoidS1hIiwicmVwb3J0IjoiZzQ1MTIifSx7Indpbm5lciI6InUtYiIsInJlcG9ydCI6ImctMSJ9XX19fQ.sig", &refused);
+  ASSERT_TRUE(unnamed);
+  EXPECT_FALSE(refused);
+  EXPECT_EQ(unnamed->winners, named->winners);
+  EXPECT_EQ(unnamed->digest, named->digest);
+  EXPECT_FALSE(unnamed->reports);
+  EXPECT_EQ(CupCarriedEcho(&*unnamed, true), "");
 }
 
 TEST(OrcaRoom, ACarriedListTheSiteNeverSignsPlaysFromZero)
@@ -1577,6 +1603,8 @@ void CupGame(std::vector<RoomTestStep>* steps, int at, int start, const char* ra
 struct CupSent
 {
   std::vector<std::string> reports;
+  // Each report's `carried` echo as sent, "none" when it had none.
+  std::vector<std::string> carried;
   std::vector<std::pair<size_t, std::string>> finishes;
 };
 
@@ -1590,7 +1618,11 @@ CupSent SentBy(const std::vector<RoomTestSnapshot>& trace)
       if (!picojson::parse(message, wire).empty())
         continue;
       if (message.get("t").to_str() == "game-report")
+      {
         out.reports.push_back(message.get("id").to_str());
+        out.carried.push_back(message.contains("carried") ? message.get("carried").serialize() :
+                                                            std::string("none"));
+      }
       if (message.get("t").to_str() == "finish")
         out.finishes.emplace_back(i, message.contains("winner") ? message.get("winner").to_str() :
                                                                   std::string("void"));
@@ -1610,6 +1642,8 @@ TEST(OrcaRoom, ACupBestOfThreeReportsEachGameAndFinishesOnTheSet)
   const auto trace = TraceRoomForTest(TraceOptions(), steps);
   const CupSent sent = SentBy(trace);
   EXPECT_EQ(sent.reports, (std::vector<std::string>{"g120", "g360", "g600"}));
+  // A set from 0-0 carried no games, and every report says so.
+  EXPECT_EQ(sent.carried, (std::vector<std::string>{"[]", "[]", "[]"}));
   ASSERT_EQ(sent.finishes.size(), 1u);
   EXPECT_GE(sent.finishes[0].first, before_last);
   EXPECT_EQ(sent.finishes[0].second, "me");

@@ -4020,9 +4020,12 @@ struct YouGameRoom::Impl
       return;
     const bool ranked = room_queue == "ranked";
     bool cup;
+    std::string carried;
     {
       std::lock_guard lock(mutex);
       cup = CupSet();
+      if (cup)
+        carried = CupCarriedEcho(cup_carry ? &*cup_carry : nullptr, carry_agreed);
     }
     // A set's games (a ranked set's, a cup set's) are each a game report; the set's end is the
     // match's final (OnGameResult).
@@ -4091,8 +4094,8 @@ struct YouGameRoom::Impl
       sent_detail[id] = r.detail;
     const std::string text =
         set_games ?
-            fmt::format("{{\"t\":\"game-report\",\"matchId\":{},\"id\":\"{}\",{}}}",
-                        JsonString(match), id, outcome) :
+            fmt::format("{{\"t\":\"game-report\",\"matchId\":{},\"id\":\"{}\",{}{}}}",
+                        JsonString(match), id, outcome, carried) :
             fmt::format("{{\"t\":\"finish\",\"matchId\":{},{}}}", JsonString(match), outcome);
     NOTICE_LOG_FMT(NETPLAY, "Orca room: report {}", text);
     SendMatchReport(match, set_games ? id : "$final", HarnessReport(text));
@@ -7124,6 +7127,8 @@ std::optional<CupCarry> CupCarriedGames(std::string_view ticket, bool* refused)
   if (games.empty() || games.size() >= static_cast<size_t>(*wins * 2 - 1))
     return refuse();
   CupCarry carry;
+  std::vector<int> reports;
+  bool all_reports = true;
   std::map<std::string, int> count;
   for (const auto& game : games)
   {
@@ -7137,7 +7142,26 @@ std::optional<CupCarry> CupCarriedGames(std::string_view ticket, bool* refused)
     if (id.empty() || id.size() > 64 || ++count[id] >= *wins)
       return refuse();
     carry.winners.push_back(id);
+    // The report id only names the game for the echo; the winners alone decide the carry.
+    const auto report = g.find("report");
+    const std::string* r = report != g.end() && report->second.is<std::string>() ?
+                               &report->second.get<std::string>() :
+                               nullptr;
+    int number = -1;
+    if (r && r->size() >= 2 && r->size() <= 11 && (*r)[0] == 'g' &&
+        std::all_of(r->begin() + 1, r->end(), [](char ch) { return ch >= '0' && ch <= '9'; }))
+    {
+      const long long v = std::stoll(r->substr(1));
+      if (v < (1LL << 31))
+        number = static_cast<int>(v);
+    }
+    if (number < 0)
+      all_reports = false;
+    else
+      reports.push_back(number);
   }
+  if (all_reports)
+    carry.reports = std::move(reports);
   if (count.size() > 2)
     return refuse();
   std::string joined;
@@ -7147,6 +7171,18 @@ std::optional<CupCarry> CupCarriedGames(std::string_view ticket, bool* refused)
   for (size_t i = 0; i < 8; ++i)
     carry.digest += fmt::format("{:02x}", digest[i]);
   return carry;
+}
+
+std::string CupCarriedEcho(const CupCarry* carry, bool agreed)
+{
+  if (!agreed || !carry)
+    return ",\"carried\":[]";
+  if (!carry->reports)
+    return "";
+  std::string list;
+  for (const int n : *carry->reports)
+    list += fmt::format("{}{}", list.empty() ? "" : ",", n);
+  return ",\"carried\":[" + list + "]";
 }
 
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
