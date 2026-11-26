@@ -11,7 +11,9 @@
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/Status.h"
 #include "Common/ScopeGuard.h"
+#include "Core/Core.h"
 #include "Core/Orca/UX/ControllerSource.h"
+#include "Core/Orca/UX/TextEntry.h"
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/GCAdapter.h"
@@ -123,6 +125,30 @@ TEST_F(OrcaVirtualPadOnly, PagePadSurvivesFocusLossOnlyWhenEnabled)
     ASSERT_TRUE(Orca::UX::LocalPad(true).has_value());
     EXPECT_EQ(Orca::UX::LocalPad(true)->button, PAD_BUTTON_A);
   }
+}
+
+TEST_F(OrcaVirtualPadOnly, TypingIntoAScreenNeutralizesEveryPad)
+{
+  const ScopedEnv stdio("YOUGAME_STDIO", "1");
+  const ScopedEnv mode("ORCA_VIRTUAL_PAD_ONLY", "1");
+  SendVirtualPad();
+  const Common::ScopeGuard stop([] { Orca::UX::TextEntry::SetCapturing(false); });
+  Orca::UX::TextEntry::SetCapturing(true);
+  // The gate still open, as on the screen's first frame, and the page's pad would pass it anyway.
+  ControlReference::SetInputGate(true);
+  auto pad = Orca::UX::LocalPad(true);
+  ASSERT_TRUE(pad.has_value());
+  EXPECT_EQ(pad->button, 0);
+  EXPECT_EQ(pad->stickX, 128);
+  // Background input on (no focus required): the gate still closes while a screen captures.
+  Core::UpdateInputGate(false);
+  EXPECT_FALSE(ControlReference::GetInputGate());
+  Orca::UX::TextEntry::SetCapturing(false);
+  Core::UpdateInputGate(false);
+  EXPECT_TRUE(ControlReference::GetInputGate());
+  pad = Orca::UX::LocalPad(true);
+  ASSERT_TRUE(pad.has_value());
+  EXPECT_EQ(pad->button, PAD_BUTTON_A);
 }
 
 TEST_F(OrcaVirtualPadOnly, ReportsModeOnceAndIsSilentWhenUnset)

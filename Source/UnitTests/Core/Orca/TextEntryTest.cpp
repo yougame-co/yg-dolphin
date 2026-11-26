@@ -1,0 +1,243 @@
+// Copyright 2026 YouGame
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include <gtest/gtest.h>
+#include <imgui.h>
+#include <imgui_internal.h>
+namespace ImStb
+{
+#include <imstb_textedit.h>
+}
+
+#include "Core/Orca/UX/TextEntry.h"
+
+namespace TE = Orca::UX::TextEntry;
+
+namespace
+{
+std::u32string Typed(const TE::Drained& events)
+{
+  std::u32string text;
+  for (const TE::Event& event : events)
+  {
+    if (event.key == TE::Key::NoKey)
+      text += event.point;
+  }
+  return text;
+}
+
+struct Capture
+{
+  Capture() { TE::SetCapturing(true); }
+  ~Capture() { TE::SetCapturing(false); }
+};
+}  // namespace
+
+TEST(OrcaTextEntry, NothingQueuesWhileNotCapturing)
+{
+  TE::SetCapturing(false);
+  TE::Press(TE::Key::Enter, false);
+  TE::Type("abc");
+  TE::TypeUtf16('x');
+  EXPECT_FALSE(TE::Capturing());
+  TE::SetCapturing(true);
+  EXPECT_TRUE(TE::Drain().empty());
+  TE::SetCapturing(false);
+}
+
+TEST(OrcaTextEntry, ClosingDropsWhatWasNotDrained)
+{
+  {
+    Capture capture;
+    TE::Type("secret");
+  }
+  Capture capture;
+  EXPECT_TRUE(TE::Drain().empty());
+}
+
+TEST(OrcaTextEntry, KeysAndTextInOrder)
+{
+  Capture capture;
+  TE::Type("a");
+  TE::Press(TE::Key::Tab, true);
+  TE::Type("b");
+  const TE::Drained events = TE::Drain();
+  ASSERT_EQ(events.size(), 3u);
+  EXPECT_EQ(events[0].point, U'a');
+  EXPECT_EQ(events[1].key, TE::Key::Tab);
+  EXPECT_TRUE(events[1].shift);
+  EXPECT_EQ(events[2].point, U'b');
+  EXPECT_TRUE(TE::Drain().empty());
+}
+
+TEST(OrcaTextEntry, Utf8DecodesAndDropsWhatCantBeTyped)
+{
+  Capture capture;
+  TE::Type("h\xC3\xA9\xE2\x82\xAC\xF0\x9F\x8E\xAE");  // h é € 🎮
+  EXPECT_EQ(Typed(TE::Drain()), U"hé€\U0001F3AE");
+  TE::Type("\x01\t\r\x7F");                // control characters
+  TE::Type("\xC0\xAF");                    // overlong '/'
+  TE::Type("\xED\xA0\x80");                // a surrogate
+  TE::Type("\xEF\x9C\x80");                // U+F700, a macOS function key
+  TE::Type("\xC2\x85");                    // C1 control
+  TE::Type("\xE2\x82");                    // cut short
+  EXPECT_EQ(Typed(TE::Drain()), U"");
+  TE::Type("\xFFok");
+  EXPECT_EQ(Typed(TE::Drain()), U"ok");
+}
+
+TEST(OrcaTextEntry, Utf16JoinsSurrogatePairs)
+{
+  Capture capture;
+  TE::TypeUtf16(0xD83C);
+  TE::TypeUtf16(0xDFAE);
+  TE::TypeUtf16(0xDFAE);  // a low half alone
+  TE::TypeUtf16(0x08);    // backspace's character
+  TE::TypeUtf16(U'z');
+  EXPECT_EQ(Typed(TE::Drain()), U"\U0001F3AEz");
+}
+
+TEST(OrcaTextEntry, PlatformKeys)
+{
+  EXPECT_EQ(TE::KeyFromWin32(0x09), TE::Key::Tab);
+  EXPECT_EQ(TE::KeyFromWin32(0x0D), TE::Key::Enter);
+  EXPECT_EQ(TE::KeyFromWin32(0x1B), TE::Key::Escape);
+  EXPECT_EQ(TE::KeyFromWin32(0x08), TE::Key::Backspace);
+  EXPECT_EQ(TE::KeyFromWin32('A'), TE::Key::NoKey);
+  EXPECT_EQ(TE::KeyFromMac(0x30), TE::Key::Tab);
+  EXPECT_EQ(TE::KeyFromMac(0x4C), TE::Key::Enter);
+  EXPECT_EQ(TE::KeyFromMac(0x33), TE::Key::Backspace);
+  EXPECT_EQ(TE::KeyFromMac(0x00), TE::Key::NoKey);  // A
+  EXPECT_EQ(TE::KeyFromX11(0xFE20), TE::Key::Tab);
+  EXPECT_EQ(TE::KeyFromX11(0xFF0D), TE::Key::Enter);
+  EXPECT_EQ(TE::KeyFromX11(0xFF1B), TE::Key::Escape);
+  EXPECT_EQ(TE::KeyFromX11('a'), TE::Key::NoKey);
+}
+
+TEST(OrcaTextEntry, FieldHoldsOneLineAndWipes)
+{
+  TE::Field<4> field;
+  EXPECT_EQ(field.View(), "");
+  field.Set("abcdef");
+  EXPECT_EQ(field.View(), "abc");
+  field.Set("x");
+  EXPECT_EQ(field.View(), "x");
+  EXPECT_EQ(field.text[1], '\0');
+  field.Wipe();
+  for (const char c : field.text)
+    EXPECT_EQ(c, '\0');
+}
+
+// The platform loops' one gate: nothing is kept from the game unless a screen captures, and a
+// release always reaches it.
+TEST(OrcaTextEntry, SwallowsOnlyPressesWhileCapturing)
+{
+  static_assert(!TE::Swallows(false, false));
+  EXPECT_FALSE(TE::Swallows(false, false));
+  EXPECT_FALSE(TE::Swallows(false, true));
+  EXPECT_FALSE(TE::Swallows(true, true));
+  EXPECT_TRUE(TE::Swallows(true, false));
+}
+
+TEST(OrcaTextEntry, WipeBytesZeroesEveryByte)
+{
+  char bytes[9] = "password";
+  TE::WipeBytes(bytes, sizeof(bytes));
+  for (const char c : bytes)
+    EXPECT_EQ(c, '\0');
+  TE::WipeBytes(nullptr, 0);
+}
+
+namespace
+{
+bool Holds(const char* data, std::size_t size, std::string_view text)
+{
+  if (!data || size < text.size())
+    return false;
+  for (std::size_t i = 0; i + text.size() <= size; ++i)
+  {
+    if (std::memcmp(data + i, text.data(), text.size()) == 0)
+      return true;
+  }
+  return false;
+}
+
+template <typename T>
+bool Holds(const ImVector<T>& vector, std::string_view text)
+{
+  return Holds(reinterpret_cast<const char*>(vector.Data),
+               static_cast<std::size_t>(vector.Capacity) * sizeof(T), text);
+}
+
+// One frame with the password field drawn through TextEntry::Input.
+void PasswordFrame(TE::Field<32>& field, bool focus)
+{
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(1280, 720);
+  io.DeltaTime = 1.0f / 60;
+  ImGui::NewFrame();
+  ImGui::SetNextWindowPos(ImVec2(0, 0));
+  ImGui::SetNextWindowSize(io.DisplaySize);
+  ImGui::Begin("##orca-text-entry-test", nullptr, ImGuiWindowFlags_NoDecoration);
+  TE::Input("##pw", field.text, sizeof(field.text), 10, 10, 400, 40, true, focus);
+  ImGui::End();
+  ImGui::Render();
+}
+}  // namespace
+
+// What ImGui keeps of a typed password (the edit buffer, its revert copy, the undo record of
+// deleted text, the last field's text) is zeroed, and the edit ends.
+TEST(OrcaTextEntry, ForgetImGuiTextZeroesImGuisCopies)
+{
+  ImGuiContext* context = ImGui::CreateContext();
+  ImGuiIO& io = ImGui::GetIO();
+  io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
+  io.Fonts->AddFontDefault();
+  const std::size_t failures = ImGuiAssertFailures();
+  TE::Field<32> field;
+  PasswordFrame(field, true);
+  PasswordFrame(field, false);
+  for (const char c : std::string_view("hunter22xy"))
+    io.AddInputCharacter(static_cast<unsigned>(c));
+  PasswordFrame(field, false);
+  // Two backspaces: "xy" goes into the undo record.
+  for (int i = 0; i < 2; ++i)
+  {
+    io.AddKeyEvent(ImGuiKey_Backspace, true);
+    PasswordFrame(field, false);
+    io.AddKeyEvent(ImGuiKey_Backspace, false);
+    PasswordFrame(field, false);
+  }
+  ImGuiContext& g = *context;
+  ASSERT_EQ(field.View(), "hunter22");
+  ASSERT_NE(g.ActiveId, 0u);
+  ASSERT_EQ(g.InputTextState.ID, g.ActiveId);
+  ASSERT_TRUE(Holds(g.InputTextState.TextA, "hunter22"));
+  ASSERT_TRUE(g.InputTextState.Stb);
+  const ImStb::StbUndoState& undo = g.InputTextState.Stb->undostate;
+  ASSERT_GT(undo.undo_point, 0);
+
+  TE::ForgetImGuiText();
+  EXPECT_EQ(g.ActiveId, 0u);
+  EXPECT_EQ(g.InputTextState.ID, 0u);
+  EXPECT_FALSE(Holds(g.InputTextState.TextA, "hunter"));
+  EXPECT_FALSE(Holds(g.InputTextState.TextToRevertTo, "hunter"));
+  EXPECT_FALSE(Holds(g.InputTextDeactivatedState.TextA, "hunter"));
+  for (const char c : undo.undo_char)
+    EXPECT_EQ(c, '\0');
+  EXPECT_EQ(undo.undo_point, 0);
+  EXPECT_EQ(undo.redo_point, IMSTB_TEXTEDIT_UNDOSTATECOUNT);
+
+  // The next frames read the field's own buffer again: wiped, the box is empty.
+  field.Wipe();
+  PasswordFrame(field, true);
+  PasswordFrame(field, false);
+  EXPECT_EQ(field.View(), "");
+  EXPECT_FALSE(Holds(g.InputTextState.TextA, "hunter"));
+  EXPECT_EQ(ImGuiAssertFailures(), failures);
+  ImGui::DestroyContext(context);
+}

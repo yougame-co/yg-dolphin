@@ -40,6 +40,7 @@
 #include "Core/Orca/UX/OrbCombo.h"
 #include "Core/Orca/UX/Controllers.h"
 #include "Core/Orca/UX/OverlayKey.h"
+#include "Core/Orca/UX/TextEntry.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -651,6 +652,10 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
             *from_app, first_run, live || InputCommon::VirtualPadOnly()));
       if (!lead)
         return Orca::Net::EncodePad(Orca::UX::NeutralPad());
+      // A screen holding the keyboard: Dolphin's own pad (keyboard devices included) is neutral
+      // too, from its first frame, before the input gate next moves.
+      if (Orca::UX::TextEntry::Capturing())
+        return Orca::Net::EncodePad(filter(Orca::UX::NeutralPad(), first_run, false));
       g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
       g_controller_interface.UpdateInput();
       const GCPadStatus pad = Pad::GetStatus(0);

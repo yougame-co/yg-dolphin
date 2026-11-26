@@ -5,8 +5,9 @@
 
   python Tools/orca/bundle-key-guard.py <build-dir> <program>
 
-The same three checks orca-package-macos.sh and orca-package-linux.sh make, for the Windows release
-script (on the PC, outside this repo), which has no `strings` or `grep`:
+The same four checks orca-package-macos.sh and orca-package-linux.sh make, for the Windows release
+script (on the PC, outside this repo), which has no `strings` or `grep`. That script runs it after
+the build and before it signs or zips anything:
 
   1. ORCA_BUNDLE_PUBLIC_KEY, when set, is 64 lowercase hex digits and not the TEST key.
   2. <build-dir>/CMakeCache.txt says ORCA_BUNDLE_TRUST_TEST_KEY:BOOL=OFF (configure with
@@ -14,6 +15,8 @@ script (on the PC, outside this repo), which has no `strings` or `grep`:
      older cache can't keep it on).
   3. <program> (e.g. Binaries\\Release\\yg-baiji.exe) doesn't hold the TEST key's text, and holds the
      pinned key's when one is set (Bundle.cpp keeps both as ASCII hex).
+  4. The cache says ORCA_SIGNIN_PREVIEW:BOOL=OFF and <program> doesn't hold ORCA_BO_SIGNIN_PREVIEW:
+     no release carries the sign-in screen's screenshot preview (UX/BrawlOnlineSignIn.cpp).
 
 The STAGING flat-bundle key (public half below) is refused the same way, as ORCA_BUNDLE_PUBLIC_KEY
 and in the program, unless ORCA_STAGING_BUILD=1 marks a staging build (YouGame's staging scripts
@@ -27,6 +30,8 @@ import sys
 
 # The bundle-flat TEST key (Source/Core/Core/Orca/Bundle.cpp).
 TEST_BUNDLE_KEY = "afb9463d5c16f0f617432d76f75f37a8c649e36d7c626088ba00b19dea115a43"
+# The variable only the sign-in screen's screenshot preview reads (ORCA_SIGNIN_PREVIEW builds).
+PREVIEW_ENV = b"ORCA_BO_SIGNIN_PREVIEW"
 # The STAGING flat-bundle key's public half (staging builds only, 2026-10-12; orca-package-macos.sh
 # and orca-package-linux.sh carry the same value).
 STAGING_BUNDLE_KEY = "8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab"
@@ -60,6 +65,8 @@ def main() -> None:
         fail(f"can't read CMakeCache.txt: {e}")
     if "ORCA_BUNDLE_TRUST_TEST_KEY:BOOL=OFF" not in cache:
         fail("CMake's cache still trusts the bundle-flat TEST key (or doesn't name the option)")
+    if "ORCA_SIGNIN_PREVIEW:BOOL=OFF" not in cache:
+        fail("CMake's cache builds the sign-in screen's screenshot preview (or doesn't name the option)")
     try:
         with open(program, "rb") as f:
             data = f.read()
@@ -67,6 +74,8 @@ def main() -> None:
         fail(f"can't read {program}: {e}")
     if not data:
         fail(f"{program} is empty")
+    if PREVIEW_ENV in data:
+        fail("the program carries the sign-in screen's screenshot preview")
     if TEST_BUNDLE_KEY.encode() in data:
         fail("the program trusts the bundle-flat TEST key")
     if not staging and STAGING_BUNDLE_KEY.encode() in data:

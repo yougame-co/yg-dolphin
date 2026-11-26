@@ -172,10 +172,13 @@ cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF -DENABLE_VULKAN=OFF \
   -DENABLE_CLI_TOOL=OFF -DENABLE_TESTS=OFF -DUSE_SANITIZERS=OFF \
   -DORCA_BUNDLE_TRUST_TEST_KEY=OFF -DORCA_BUNDLE_PUBLIC_KEY="$BUNDLE_KEY" \
+  -DORCA_SIGNIN_PREVIEW=OFF \
   -DCMAKE_C_FLAGS="$PREFIX_MAP" -DCMAKE_CXX_FLAGS="$PREFIX_MAP" \
   -DCMAKE_OBJC_FLAGS="$PREFIX_MAP" -DCMAKE_OBJCXX_FLAGS="$PREFIX_MAP" >/dev/null
 grep -q '^ORCA_BUNDLE_TRUST_TEST_KEY:BOOL=OFF$' "$BUILD_DIR/CMakeCache.txt" ||
   fail "CMake's cache still trusts the bundle-flat TEST key"
+grep -q '^ORCA_SIGNIN_PREVIEW:BOOL=OFF$' "$BUILD_DIR/CMakeCache.txt" ||
+  fail "CMake's cache still builds the sign-in screen's screenshot preview"
 cmake --build "$BUILD_DIR" --target dolphin-nogui orca-disc-tool --parallel "$JOBS"
 
 if [ "$RELEASE" = 1 ]; then
@@ -193,6 +196,12 @@ install -m 755 "$BUILD_DIR/Binaries/orca-disc-tool" "$APP/Contents/MacOS/orca-di
 STRINGS_OUT="$(mktemp)"
 strings -a "$EXE" > "$STRINGS_OUT" || { rm -f "$STRINGS_OUT"; fail "strings could not read $EXE"; }
 [ -s "$STRINGS_OUT" ] || { rm -f "$STRINGS_OUT"; fail "strings found nothing in $EXE"; }
+# No release carries the sign-in screen's screenshot preview (the cache check above, and the
+# program itself: only the preview reads ORCA_BO_SIGNIN_PREVIEW).
+if grep -qF ORCA_BO_SIGNIN_PREVIEW "$STRINGS_OUT"; then
+  rm -f "$STRINGS_OUT"
+  fail "the executable carries the sign-in screen's screenshot preview"
+fi
 LEAKS="$(grep -F -e "$ROOT/" -e "$BUILD_DIR/" -e "${HOME:-$ROOT}/" "$STRINGS_OUT" | sort -u | head -n 5 || true)"
 # Flat bundles: never the TEST key, the STAGING key only in a staging build, and the pinned key when
 # there is one (Bundle.cpp keeps them as text).

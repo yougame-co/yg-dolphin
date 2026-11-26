@@ -27,6 +27,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/UX/Controllers.h"
+#include "Core/Orca/UX/TextEntry.h"
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/LocalInput.h"
 
@@ -732,6 +733,10 @@ std::optional<GCPadStatus> LocalPad(int ordinal, bool for_frame)
       Status::Line(line);
     }
   }
+  // A screen holding the keyboard: neutral whatever the gate, background input or
+  // ORCA_VIRTUAL_PAD_ONLY say. Read here because the gate moves only once per frame.
+  if (TextEntry::Capturing())
+    return NeutralPad();
   if (!choice)
     return s_local_count.load(std::memory_order_relaxed) > 1 ?
                std::optional<GCPadStatus>(NeutralPad()) : std::nullopt;

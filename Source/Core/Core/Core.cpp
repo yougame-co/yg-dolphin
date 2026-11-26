@@ -70,6 +70,7 @@
 #include "Core/Orca/BootPhase.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/UX/TextEntry.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/GDBStub.h"
 #include "Core/PowerPC/JitInterface.h"
@@ -1067,6 +1068,13 @@ void DoFrameStep(Core::System& system)
 
 void UpdateInputGate(bool require_focus, bool require_full_focus)
 {
+  // An Orca screen holding the keyboard closes the gate even with background input on: what is
+  // typed into it reaches no emulated device.
+  if (Orca::UX::TextEntry::Capturing())
+  {
+    ControlReference::SetInputGate(false);
+    return;
+  }
   // If the user accepts background input, controls should pass even if an on screen interface is on
   const bool focus_passes =
       !require_focus ||

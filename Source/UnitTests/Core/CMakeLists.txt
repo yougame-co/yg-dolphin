@@ -24,6 +24,10 @@ if(NOT MSVC)
   set_property(SOURCE Orca/BootMemoryTest.cpp APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
 endif()
 add_dolphin_test(OrcaRoomTest Orca/RoomTest.cpp Orca/OfflineReplayTest.cpp)
+# RoomTest.cpp has more sections than MSVC's default object format allows (C1128).
+if(MSVC)
+  set_property(SOURCE Orca/RoomTest.cpp APPEND PROPERTY COMPILE_OPTIONS /bigobj)
+endif()
 add_dolphin_test(OrcaDirectLinkTest Orca/DirectLinkTest.cpp Orca/TurnRetryTest.cpp
   Orca/TurnRetryHarness.c)
 # TURN stays test-only; the production libjuice target keeps NO_SERVER.
@@ -70,6 +74,7 @@ add_dolphin_test(OrcaBootPhaseTest Orca/BootPhaseTest.cpp)
 add_dolphin_test(OrcaBootThrottleTest Orca/BootThrottleTest.cpp)
 add_dolphin_test(OrcaBootAuditTest Orca/BootAuditTest.cpp)
 add_dolphin_test(OrcaBrandingTest Orca/BrandingTest.cpp)
+add_dolphin_test(OrcaBrawlOnlineAccountTest Orca/BrawlOnlineAccountTest.cpp)
 add_dolphin_test(BroadcastRingTest
   Orca/BroadcastRingTest.cpp
   Orca/BroadcastPresentationTest.cpp
@@ -98,6 +103,8 @@ add_dolphin_test(OrcaSearchWaitTest Orca/SearchWaitTest.cpp)
 target_link_libraries(OrcaUXTest PRIVATE imgui)
 add_dolphin_test(OrcaKitTest Orca/KitTest.cpp)
 target_link_libraries(OrcaKitTest PRIVATE imgui)
+add_dolphin_test(OrcaTextEntryTest Orca/TextEntryTest.cpp)
+target_link_libraries(OrcaTextEntryTest PRIVATE imgui)
 add_dolphin_test(OrcaOnlineMenuTest Orca/Games/Brawl/OnlineMenuTest.cpp)
 add_dolphin_test(OrcaGamePatchesTest Orca/GamePatchesTest.cpp)
 add_dolphin_test(OrcaPauseTest Orca/PauseTest.cpp)

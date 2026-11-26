@@ -143,6 +143,8 @@ bool RoomRecovering(std::chrono::steady_clock::time_point now);
 bool RoomEnded();
 // This Orca is in its room: the welcome arrived and the room hasn't ended.
 bool InRoom();
+// A room exists at all: still connecting, in it, recovering, or ended and not yet let go.
+bool HasRoom();
 // A fresh ticket for the room and the keyframe store's URL (YouGameRoom::FreshTicket).
 bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);
 // Host: unplug a friend and tell them why ("desync", "stalled", "network").

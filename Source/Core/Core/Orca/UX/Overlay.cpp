@@ -20,6 +20,7 @@
 
 #include "Common/HookableEvent.h"
 #include "Core/Core.h"
+#include "Core/Orca/UX/BrawlOnlineSignIn.h"
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/OrbCombo.h"
 #include "Core/Orca/UX/QueueApp.h"
@@ -1260,11 +1261,13 @@ void DrawDim()
       IM_COL32(0, 0, 0, static_cast<int>(std::lround(255.0f * std::min(s_dim_shown, 1.0f)))));
 }
 
-// The host overlay: the scene, then the dim, even when the scene returned early.
+// The host overlay: the scene, then the dim, even when the scene returned early, then the Brawl
+// Online sign-in screen when one is open (nothing otherwise).
 void Draw()
 {
   DrawScene();
   DrawDim();
+  BrawlOnlineSignIn::Draw();
 }
 }  // namespace
 

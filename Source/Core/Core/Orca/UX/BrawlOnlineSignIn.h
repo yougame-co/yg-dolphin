@@ -1,0 +1,54 @@
+// Copyright 2026 YouGame
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#pragma once
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <string_view>
+
+namespace Orca::BrawlOnline
+{
+class SignInFlow;
+}
+
+// The Brawl Online sign-in screen, drawn by the overlay over the game: one panel driven by
+// BrawlOnline::SignInFlow (Core/Orca/BrawlOnlineAccount.h) with email and password fields, Sign in,
+// Create account (with a display name), Forgot password?, Cancel, and the "check your email, then
+// press Continue" state. Every network call runs on a worker thread; the video thread only draws
+// and polls.
+//
+// Keyboard only: Tab or the arrows move between items, Enter presses the focused one (in a field,
+// the screen's main button), Escape cancels. While it is open the keyboard is captured
+// (UX/TextEntry.h): the game, Orca's shortcuts and its own keys see none of it, and every pad reads
+// neutral. So it never opens while online play runs (OnlineActive), and closes at the next frame if
+// online play starts under it: neutral pads would reach the other players as real input.
+// Host-only: nothing here reads or writes emulated state.
+namespace Orca::UX::BrawlOnlineSignIn
+{
+// Runs on the video thread once the flow saved user.json, with its path.
+using Done = std::function<void(const std::string& user_json_path)>;
+
+// Opens the screen for the YouGame player `player_id` named `yougame_name`, replacing one already
+// open. When this PC already keeps that player's user.json it opens nothing and returns the path:
+// a player signs in once per PC. Returns empty otherwise (the screen opened, or nothing can open for
+// an empty or dev id). Any thread.
+std::string Open(std::string_view player_id, std::string_view yougame_name, Done done = {});
+// The same on `flow` (BrawlOnline::OpenSignIn's), from its first state. False, opening nothing,
+// for no flow or while online play runs. Any thread.
+bool OpenFlow(std::unique_ptr<BrawlOnline::SignInFlow> flow, Done done = {});
+bool IsOpen();
+// Closes the screen. What was typed is wiped at once (after any Draw in progress), and ImGui's
+// copies of it at the video thread's next Draw. A call in flight finishes on its own and saves
+// nothing (SignInFlow::Cancel). Any thread, the Done callback included.
+void Close();
+// The overlay's draw (video thread, inside the ImGui frame). Nothing while closed.
+void Draw();
+
+// Whether online play runs or is starting: a YouGame room exists (connecting included) or Dolphin
+// netplay runs. Any thread.
+bool OnlineActive();
+// Tests: replaces OnlineActive's answer with `check`'s (nullptr restores it).
+void SetOnlineCheckForTest(bool (*check)());
+}  // namespace Orca::UX::BrawlOnlineSignIn

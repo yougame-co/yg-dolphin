@@ -16,6 +16,7 @@ static constexpr auto X_None = None;
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/TextEntry.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "InputCommon/ControllerInterface/Xlib/XInput2.h"
@@ -27,6 +28,7 @@ static constexpr auto X_None = None;
 #include <cstdlib>
 #include <cstring>
 #include <set>
+#include <string>
 #include <thread>
 
 #include <X11/XKBlib.h>
@@ -516,6 +518,51 @@ void PlatformX11::ProcessEvents()
     XNextEvent(m_display, &event);
     if (event.xany.window == m_window && (event.type == KeyPress || event.type == KeyRelease))
     {
+      // An Orca screen takes typing: its keys go there, and no shortcut, Orca key or game sees a
+      // press (the input gate is closed too). Releases pass, so nothing stays held; a repeat's
+      // paired release and press arrive as one more press.
+      if (const bool capturing = Orca::UX::TextEntry::Capturing())
+      {
+        bool press = event.type == KeyPress;
+        if (!press && XPending(m_display))
+        {
+          XEvent next;
+          XPeekEvent(m_display, &next);
+          if (next.type == KeyPress && next.xkey.keycode == event.xkey.keycode &&
+              next.xkey.time == event.xkey.time)
+          {
+            XNextEvent(m_display, &event);
+            press = true;
+          }
+        }
+        if (Orca::UX::TextEntry::Swallows(capturing, !press))
+        {
+          char latin1[32] = {};
+          KeySym typed = NoSymbol;
+          const int count = XLookupString(&event.xkey, latin1, sizeof(latin1), &typed, nullptr);
+          Orca::UX::TextEntry::Press(Orca::UX::TextEntry::KeyFromX11(typed),
+                                     (event.xkey.state & ShiftMask) != 0);
+          if (!(event.xkey.state & ControlMask))
+          {
+            std::string utf8;
+            for (int i = 0; i < count; ++i)
+            {
+              const auto byte = static_cast<unsigned char>(latin1[i]);
+              if (byte < 0x80)
+              {
+                utf8 += static_cast<char>(byte);
+              }
+              else
+              {
+                utf8 += static_cast<char>(0xC0 | (byte >> 6));
+                utf8 += static_cast<char>(0x80 | (byte & 0x3F));
+              }
+            }
+            Orca::UX::TextEntry::Type(utf8);
+          }
+          continue;
+        }
+      }
       // Traditional X repeat synthesizes release/press with identical timestamp. Keep the
       // original hold alive even when detectable repeat is unavailable on this server.
       if (event.type == KeyRelease && XPending(m_display))

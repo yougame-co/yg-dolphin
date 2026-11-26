@@ -57,6 +57,7 @@
 #include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/TextEntry.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/Rollback/Diag.h"
@@ -198,9 +199,11 @@ void Host_PPCBreakpointsChanged()
 {
 }
 
+// While an Orca screen takes typing (the Brawl Online sign-in), the input gate closes as if the
+// window lost focus, so every pad reads neutral. One atomic load.
 bool Host_UIBlocksControllerState()
 {
-  return false;
+  return Orca::UX::TextEntry::Capturing();
 }
 
 void Host_Message(const HostMessageID id)

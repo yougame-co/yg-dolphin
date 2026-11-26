@@ -309,6 +309,21 @@
 2	socket	Source/Core/Core/NetPlayClient.cpp	enet_peer_timeout(
 77	socket	Source/Core/Core/NetPlayClient.cpp	sf::Packet
 2	app-channel	Source/Core/Core/Orca/Activity.cpp	Status::Line(
+# Brawl Online sign-in: the account client and its kept user.json/session.json (approved for http by orca-lead; file-open needs his OK).
+1	file-open	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	#include fcntl.h
+1	file-open	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	File::CreateFullPath(
+3	file-open	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	File::Delete(
+1	file-open	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	File::ReadFileToString(
+1	file-open	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	File::Rename(
+1	file-open	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	File::WriteStringToFile(
+1	file-open	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	unlink(
+2	file-open	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	open(
+1	http	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	#include Common/HttpRequest.h
+5	http	Source/Core/Core/Orca/BrawlOnlineAccount.cpp	Common::HttpRequest
+# ACCOUNTS_BASE_URL (approved); FORGOT_PASSWORD_URL, the reset page opened in the browser (needs his OK).
+1	http	Source/Core/Core/Orca/BrawlOnlineAccount.h	"https://brawlonline.net"
+1	http	Source/Core/Core/Orca/BrawlOnlineAccount.h	"https://brawlonline.net/login/"
+1	http	Source/Core/Core/Orca/BrawlOnlineAccount.h	"https://"
 1	env	Source/Core/Core/Orca/Bridge.cpp	GetEnv("YOUGAME_STDIO"
 2	env	Source/Core/Core/Orca/Bundle.cpp	GetEnv("ORCA_MOD_DIR"
 2	env	Source/Core/Core/Orca/Bundle.cpp	GetEnv("YOUGAME_GAME"
@@ -552,6 +567,13 @@
 1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.h	ParseRoomJson(
 1	app-channel	Source/Core/Core/Orca/Status.cpp	stdout
 1	env	Source/Core/Core/Orca/ThreadPriority.cpp	GetEnv("ORCA_THREAD_QOS"
+# Brawl Online sign-in screen: Forgot password? opens a constant URL in the system browser (needs orca-lead's OK).
+2	env	Source/Core/Core/Orca/UX/BrawlOnlineSignIn.cpp	environ
+1	env	Source/Core/Core/Orca/UX/BrawlOnlineSignIn.cpp	Orca::GetEnv(
+1	process	Source/Core/Core/Orca/UX/BrawlOnlineSignIn.cpp	#include spawn.h
+1	process	Source/Core/Core/Orca/UX/BrawlOnlineSignIn.cpp	#include sys/wait.h
+1	process	Source/Core/Core/Orca/UX/BrawlOnlineSignIn.cpp	ShellExecuteW(
+1	process	Source/Core/Core/Orca/UX/BrawlOnlineSignIn.cpp	posix_spawnp(
 3	peer-parse	Source/Core/Core/Orca/UX/Chat.cpp	DecodeField(
 1	peer-parse	Source/Core/Core/Orca/UX/Chat.cpp	Parse(
 1	peer-parse	Source/Core/Core/Orca/UX/Chat.h	DecodeField(

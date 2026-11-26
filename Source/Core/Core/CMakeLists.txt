@@ -523,6 +523,8 @@ add_library(core
   Orca/BootMemory.h
   Orca/Branding.cpp
   Orca/Branding.h
+  Orca/BrawlOnlineAccount.cpp
+  Orca/BrawlOnlineAccount.h
   Orca/Bridge.cpp
   Orca/Bridge.h
   Orca/CrashNote.cpp
@@ -605,6 +607,8 @@ add_library(core
   Orca/Games/Brawl/BrawlStages.h
   Orca/Games/Brawl/CharOrder.cpp
   Orca/Games/Brawl/CharOrder.h
+  Orca/UX/BrawlOnlineSignIn.cpp
+  Orca/UX/BrawlOnlineSignIn.h
   Orca/UX/Chat.cpp
   Orca/UX/Chat.h
   Orca/Games/Brawl/CssTitle.cpp
@@ -666,6 +670,8 @@ add_library(core
   Orca/UX/Search.h
   Orca/Games/Brawl/StageCursors.cpp
   Orca/Games/Brawl/StageCursors.h
+  Orca/UX/TextEntry.cpp
+  Orca/UX/TextEntry.h
   Orca/UX/UX.cpp
   Orca/UX/UX.h
   Orca/UX/Widgets.cpp
@@ -955,6 +961,15 @@ endforeach()
 target_include_directories(core PRIVATE "${ORCA_EMBED_DIR}")
 if(ORCA_BUNDLE_TRUST_TEST_KEY)
   set_source_files_properties(Orca/UX/UX.cpp PROPERTIES COMPILE_DEFINITIONS ORCA_BUNDLE_TRUST_TEST_KEY)
+endif()
+# The Brawl Online sign-in screen's screenshot preview (ORCA_BO_SIGNIN_PREVIEW=form|error|verify
+# over canned in-process answers, UX/BrawlOnlineSignIn.cpp). Off, the build holds no code that fakes
+# a sign-in; release scripts and Tools/orca/bundle-key-guard.py refuse it on.
+option(ORCA_SIGNIN_PREVIEW "Build the sign-in screen's screenshot preview (tests only, never a release)" OFF)
+if(ORCA_SIGNIN_PREVIEW)
+  set_property(SOURCE Orca/UX/BrawlOnlineSignIn.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+               ORCA_SIGNIN_PREVIEW)
+  message(WARNING "Orca: the sign-in screen's screenshot preview is built in (ORCA_SIGNIN_PREVIEW): never a release")
 endif()
 # The SD image's SHA-256 uses CNG; GPU diagnostics read process memory.
 if(WIN32)

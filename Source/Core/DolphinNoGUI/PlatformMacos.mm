@@ -10,6 +10,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/OverlayKey.h"
+#include "Core/Orca/UX/TextEntry.h"
 #include "Core/Orca/UX/YgOrb.h"
 #include "Core/State.h"
 #include "Core/System.h"
@@ -874,7 +875,21 @@ void PlatformMacOS::ProcessEvents()
       shortcuts.SetFocus(IsEmbedded() ? IsWindowFocused() :
                                         ([m_window isKeyWindow] && [NSApp isActive]));
       const auto type = [event type];
-      if (type == NSEventTypeKeyDown || type == NSEventTypeKeyUp || type == NSEventTypeFlagsChanged)
+      // An Orca screen takes typing: its keys go there, and no shortcut, Orca key or game sees a
+      // press (the input gate is closed too). Releases pass, so nothing stays held.
+      if (type == NSEventTypeKeyDown &&
+          Orca::UX::TextEntry::Swallows(Orca::UX::TextEntry::Capturing(), false))
+      {
+        const auto flags = [event modifierFlags];
+        Orca::UX::TextEntry::Press(Orca::UX::TextEntry::KeyFromMac([event keyCode]),
+                                   (flags & NSEventModifierFlagShift) != 0);
+        NSString* typed = [event characters];
+        if (typed && !(flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)))
+          Orca::UX::TextEntry::Type([typed UTF8String] ? [typed UTF8String] : "");
+        handled = true;
+      }
+      if (!handled &&
+          (type == NSEventTypeKeyDown || type == NSEventTypeKeyUp || type == NSEventTypeFlagsChanged))
       {
         const auto flags = [event modifierFlags];
         const unsigned mods =

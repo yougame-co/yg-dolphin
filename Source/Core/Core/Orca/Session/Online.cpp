@@ -654,6 +654,11 @@ bool InRoom()
   return room && room->Connected();
 }
 
+bool HasRoom()
+{
+  return Room() != nullptr;
+}
+
 bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error)
 {
   const auto room = Room();

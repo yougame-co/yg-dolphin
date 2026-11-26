@@ -10,6 +10,7 @@
 #include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/OverlayKey.h"
+#include "Core/Orca/UX/TextEntry.h"
 #include "Core/Orca/UX/YgOrb.h"
 #include "Core/System.h"
 
@@ -467,6 +468,15 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
     platform->m_shift_down = held(VK_LSHIFT, VK_RSHIFT);
     platform->m_control_down = held(VK_LCONTROL, VK_RCONTROL);
     platform->m_alt_down = held(VK_LMENU, VK_RMENU);
+    // An Orca screen takes typing: its keys go there, and no shortcut, Orca key or game sees a
+    // press (the input gate is closed too). Releases pass, so nothing stays held. Alt combinations
+    // still reach Windows (Alt+F4).
+    if (Orca::UX::TextEntry::Swallows(Orca::UX::TextEntry::Capturing(), !down))
+    {
+      Orca::UX::TextEntry::Press(Orca::UX::TextEntry::KeyFromWin32(static_cast<unsigned>(wParam)),
+                                 platform->m_shift_down);
+      return msg == WM_SYSKEYDOWN ? DefWindowProc(hwnd, msg, wParam, lParam) : 0;
+    }
     auto& shortcuts = InputCommon::Shortcuts::Get();
     shortcuts.SetFocus(platform->IsWindowFocused());
     const unsigned mods = (platform->m_shift_down ? InputCommon::Shortcuts::Shift : 0u) |
@@ -502,6 +512,14 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
     }
   }
   break;
+
+  case WM_CHAR:
+    if (Orca::UX::TextEntry::Swallows(Orca::UX::TextEntry::Capturing(), false))
+    {
+      Orca::UX::TextEntry::TypeUtf16(static_cast<unsigned>(wParam));
+      return 0;
+    }
+    break;
 
   case WM_SIZE:
   {

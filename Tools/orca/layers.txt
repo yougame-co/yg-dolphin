@@ -88,6 +88,7 @@ engine-sensitive  Source/Core/Core/Orca/Mod.*             # mods-p1: mod.json, t
 engine-sensitive  Source/Core/Core/Orca/Bundle.*          # flat bundles: discovery, mod.sig, the pinned key
 engine-sensitive  Source/Core/Core/Orca/Sandbox.*         # sandbox mode (0.3.39): --sandbox-probe's socket and file checks
 engine-sensitive  Source/Core/Core/Orca/LocalStore.*      # S2: kept seen keys and controls (user files)
+engine-sensitive  Source/Core/Core/Orca/BrawlOnlineAccount.*  # Brawl Online accounts: HTTPS, session token, user.json
 # S5: game data as files: the strict JSON reader, the one-schema interpreter and the ruleset reader
 # (pack bytes once a bundle carries a ruleset), and the schema itself, which is compiled in.
 engine-sensitive  Source/Core/Core/Orca/Engine/{StrictJson,Schema,Ruleset}.*

@@ -140,12 +140,15 @@ cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF -DENABLE_VULKAN=ON \
   -DENABLE_CLI_TOOL=OFF -DENABLE_TESTS=OFF -DUSE_SANITIZERS=OFF \
   -DORCA_BUNDLE_TRUST_TEST_KEY=OFF -DORCA_BUNDLE_PUBLIC_KEY="$BUNDLE_KEY" \
+  -DORCA_SIGNIN_PREVIEW=OFF \
   -DENABLE_ALSA=OFF -DENABLE_PULSEAUDIO=OFF -DENABLE_BLUEZ=OFF -DENABLE_EVDEV=OFF \
   -DENABLE_HWDB=OFF -DCMAKE_DISABLE_FIND_PACKAGE_LIBUDEV=ON -DUSE_SYSTEM_ICONV=ON \
   -DCMAKE_C_FLAGS="-g -ffile-prefix-map=$ROOT=." -DCMAKE_CXX_FLAGS="-g -ffile-prefix-map=$ROOT=." \
   -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" >/dev/null
 grep -q '^ORCA_BUNDLE_TRUST_TEST_KEY:BOOL=OFF$' "$BUILD_DIR/CMakeCache.txt" ||
   fail "CMake's cache still trusts the bundle-flat TEST key"
+grep -q '^ORCA_SIGNIN_PREVIEW:BOOL=OFF$' "$BUILD_DIR/CMakeCache.txt" ||
+  fail "CMake's cache still builds the sign-in screen's screenshot preview"
 grep -q '^USE_PULSE:INTERNAL=1' "$BUILD_DIR/CMakeCache.txt" ||
   fail "Cubeb found no PulseAudio headers (libpulse-dev): Orca would play no sound"
 cmake --build "$BUILD_DIR" --target dolphin-nogui orca-disc-tool --parallel 2
@@ -166,6 +169,12 @@ grep -q "$COMMIT" "$BUILD_DIR/Source/Core/Common/scmrev.h" ||
 STRINGS_OUT="$(mktemp)"
 strings -a "$BIN" >"$STRINGS_OUT" || { rm -f "$STRINGS_OUT"; fail "strings could not read $BIN"; }
 [ -s "$STRINGS_OUT" ] || { rm -f "$STRINGS_OUT"; fail "strings found nothing in $BIN"; }
+# No release carries the sign-in screen's screenshot preview (the cache check above, and the
+# program itself: only the preview reads ORCA_BO_SIGNIN_PREVIEW).
+if grep -qF ORCA_BO_SIGNIN_PREVIEW "$STRINGS_OUT"; then
+  rm -f "$STRINGS_OUT"
+  fail "the program carries the sign-in screen's screenshot preview"
+fi
 if grep -qF "$TEST_BUNDLE_KEY" "$STRINGS_OUT"; then
   rm -f "$STRINGS_OUT"
   fail "the program trusts the bundle-flat TEST key"
