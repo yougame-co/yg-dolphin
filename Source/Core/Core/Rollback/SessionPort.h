@@ -44,6 +44,10 @@ public:
   void SetPads(int frame, const Orca::Net::Pads& pads) override;
   void SetResimulating(bool resimulating) override;
   std::optional<u64> SnapshotChecksum(int frame) override;
+  void OnDesync(int frame) override;
+  // Diag (YG_DESYNC_MAP=1): log the kept checksum maps up to `frame`, once per session.
+  void DumpDesyncMaps(int frame, const char* why);
+  static void ResetDesyncMaps();
   void ResetPacing() override;
   double SaveMs() const override { return m_save_ms; }
 

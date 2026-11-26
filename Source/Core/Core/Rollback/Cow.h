@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -80,6 +81,17 @@ bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>
 void Drop(u64 id);
 // RamChecksum (Rollback.h) of RAM as it was at snapshot `id`, rebuilt from live RAM and the logs.
 std::optional<u64> Checksum(u64 id);
+// DIAGNOSTIC (YG_DESYNC_MAP): XXH3 of each `bucket`-byte block of MEM1 then MEM2 as at snapshot `id`.
+std::optional<std::vector<u64>> BucketHashes(u64 id, std::size_t bucket);
+// DIAGNOSTIC (YG_DESYNC_MAP): `size` bytes at `offset` into MEM1 then MEM2 as at snapshot `id`.
+std::optional<std::vector<u8>> Bytes(u64 id, std::size_t offset, std::size_t size);
+
+// DIAGNOSTIC v12: adds a note to the copy-on-write trace and takes (and clears) the notes; and the
+// recorded page events (all pages) for the given physical pages, the newest `max_lines`.
+void TraceNote(const std::string& line);
+std::vector<std::string> TraceTake();
+std::vector<std::string> TracePageEvents(const std::vector<u32>& physical_pages,
+                                         std::size_t max_lines);
 
 // Called first by the fault handlers. True if `address` is a protected page of tracked RAM; the
 // page is then saved and made writable so the faulting write can be retried.

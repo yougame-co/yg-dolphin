@@ -196,7 +196,10 @@ SnapshotRing::~SnapshotRing()
 void SnapshotRing::Forget(Slot* slot)
 {
   if (slot->cow_id != 0)
+  {
+    Cow::TraceNote(fmt::format("forget f={} id={}", slot->frame, slot->cow_id));
     Cow::Drop(slot->cow_id);
+  }
   slot->cow_id = 0;
   slot->frame = -1;
 }
@@ -300,6 +303,7 @@ bool SnapshotRing::Save(Core::System& system, s64 frame)
   // tracking stopped, so fall back to a full copy.
   if (cow)
     slot->cow_id = Cow::Snapshot();
+  Cow::TraceNote(fmt::format("save f={} id={}", frame, slot->cow_id));
   if (slot->cow_id != 0)
   {
     if (Diag::SnapTime())
@@ -355,6 +359,7 @@ bool SnapshotRing::LoadSlot(Core::System& system, s64 frame, bool redisplay)
   const auto start = std::chrono::steady_clock::now();
   auto& memory = system.GetMemory();
   std::unordered_set<u32> changed_pages;
+  Cow::TraceNote(fmt::format("load f={} id={}", frame, slot->cow_id));
   if (slot->cow_id != 0)
   {
     // The undo logs of this snapshot and every newer one list exactly the pages written since.
@@ -485,6 +490,63 @@ std::optional<u64> SnapshotRing::RamChecksum(s64 frame) const
   if (slot->cow_id != 0)
     return Cow::Checksum(slot->cow_id);
   return Rollback::RamChecksum(slot->mem1, slot->mem2);
+}
+
+std::optional<std::vector<u64>> SnapshotRing::RamBucketHashes(s64 frame, std::size_t bucket) const
+{
+  const Slot* slot = Find(frame);
+  if (!slot || slot->state_size == 0 || bucket == 0)
+    return std::nullopt;
+  std::optional<std::vector<u64>> out;
+  if (slot->cow_id != 0)
+  {
+    out = Cow::BucketHashes(slot->cow_id, bucket);
+  }
+  else
+  {
+    out.emplace();
+    for (const std::vector<u8>* mem : {&slot->mem1, &slot->mem2})
+      for (std::size_t at = 0; at < mem->size(); at += bucket)
+        out->push_back(XXH3_64bits(mem->data() + at, std::min(bucket, mem->size() - at)));
+  }
+  if (out)
+    out->push_back(XXH3_64bits(slot->state.data(), slot->state_size));
+  return out;
+}
+
+std::optional<std::vector<u8>> SnapshotRing::RamBytes(s64 frame, std::size_t offset,
+                                                      std::size_t size) const
+{
+  const Slot* slot = Find(frame);
+  if (!slot || slot->state_size == 0)
+    return std::nullopt;
+  if (slot->cow_id != 0)
+    return Cow::Bytes(slot->cow_id, offset, size);
+  std::vector<u8> out;
+  out.reserve(size);
+  std::size_t start = 0;
+  for (const std::vector<u8>* mem : {&slot->mem1, &slot->mem2})
+  {
+    const std::size_t want = offset + out.size();
+    if (out.size() < size && want < start + mem->size())
+    {
+      const std::size_t at = want - start;
+      const std::size_t n = std::min(size - out.size(), mem->size() - at);
+      out.insert(out.end(), mem->data() + at, mem->data() + at + n);
+    }
+    start += mem->size();
+  }
+  if (out.size() != size)
+    return std::nullopt;
+  return out;
+}
+
+std::span<const u8> SnapshotRing::StateAt(s64 frame) const
+{
+  const Slot* slot = Find(frame);
+  if (!slot || slot->state_size == 0)
+    return {};
+  return {slot->state.data(), slot->state_size};
 }
 
 std::span<const u8> SnapshotRing::LastState() const

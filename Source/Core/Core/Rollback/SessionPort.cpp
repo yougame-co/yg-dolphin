@@ -5,11 +5,25 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <map>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 #include <thread>
 
+#include <xxh3.h>
+
+#include "Common/ChunkFile.h"
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
+#include "Core/HW/Memmap.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Rollback/Diag.h"
@@ -26,12 +40,22 @@ RingPort* s_active = nullptr;
 constexpr std::chrono::microseconds FRAME_PERIOD{16'667};
 }  // namespace
 
+namespace
+{
+bool DesyncMapOn();
+void CaptureLiveRam(Core::System& system, int frame);
+// Diag (YG_DESYNC_MAP=1): where each savestate section ends (DoMarker) in each saved frame's
+// non-RAM state, so a checksum frame's state can be hashed section by section.
+std::map<int, std::vector<std::pair<std::string, std::size_t>>> s_marks;
+}  // namespace
+
 RingPort::RingPort(Core::System& system, int max_rollback, bool unthrottled)
     : m_system(system), m_ring(static_cast<std::size_t>(max_rollback) + 2),
       m_unthrottled(unthrottled)
 {
   // Until the session sets them, every port reads as connected with nothing pressed.
   m_pads.fill(Orca::Net::DecodePad(Orca::Net::Pad{}));
+  ResetDesyncMaps();
   s_active = this;
   if (m_unthrottled)
     Core::SetIsThrottlerTempDisabled(true);
@@ -39,6 +63,8 @@ RingPort::RingPort(Core::System& system, int max_rollback, bool unthrottled)
 
 RingPort::~RingPort()
 {
+  // Diag: the side whose own check never failed logs its maps here, so both sides can be compared.
+  DumpDesyncMaps(std::numeric_limits<int>::max(), "end");
   if (s_active == this)
     s_active = nullptr;
   m_ring.Reset(m_system);
@@ -58,7 +84,31 @@ bool RingPort::Save(int frame)
   if (m_saved_since_run == frame)
     return true;
   const auto start = std::chrono::steady_clock::now();
+  std::vector<std::pair<std::string, const u8*>> marks;
+  if (DesyncMapOn())
+    PointerWrap::s_marker_log = &marks;
   const bool allocated = m_ring.Save(m_system, frame);
+  PointerWrap::s_marker_log = nullptr;
+  CaptureLiveRam(m_system, frame);
+  if (DesyncMapOn() && !marks.empty())
+  {
+    // A save that had to grow its buffer ran twice: keep the last pass's markers.
+    std::size_t from = 0;
+    for (std::size_t i = 1; i < marks.size(); ++i)
+      if (marks[i].first == marks[0].first)
+        from = i;
+    const auto state = m_ring.LastState();
+    auto& out = s_marks[frame];
+    out.clear();
+    for (std::size_t i = from; i < marks.size(); ++i)
+    {
+      const u8* p = marks[i].second;
+      if (p >= state.data() && p <= state.data() + state.size())
+        out.emplace_back(marks[i].first, static_cast<std::size_t>(p - state.data()));
+    }
+    while (s_marks.size() > 64)
+      s_marks.erase(s_marks.begin());
+  }
   double ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   if (Diag::SnapTime())
@@ -132,9 +182,367 @@ void RingPort::SetResimulating(bool resimulating)
   }
 }
 
+namespace
+{
+// DIAGNOSTIC build only (P+ desync study). YG_DESYNC_MAP=1: the session checksum is built from 64 KiB
+// block hashes of the checksummed RAM (MEM1 then MEM2) in the same single pass as the normal one, the
+// last few maps stay in memory, and nothing is logged until a desync, so the timing of a normal run
+// is unchanged. On a desync both machines log their maps (and the non-RAM state hash) for the frames
+// they kept; the logs show the first block that differs.
+bool DesyncMapOn()
+{
+  static const bool s_on = [] {
+    const char* v = std::getenv("YG_DESYNC_MAP");
+    return v && v[0] == '1';
+  }();
+  return s_on;
+}
+constexpr std::size_t MAP_BUCKET = 64 * 1024;
+constexpr std::size_t MAP_KEEP = 32;
+// Only the CPU thread checksums and checks checksums.
+std::map<int, std::vector<u64>> s_maps;
+// Per-section hashes (top 32 bits) of each kept checksum frame's non-RAM state.
+std::map<int, std::vector<std::pair<std::string, u32>>> s_sections;
+// Section sizes, and the bytes (hex; 64-byte block hashes when large) of the I/O and CPU sections
+// that differ between machines, per kept checksum frame.
+std::map<int, std::vector<std::size_t>> s_section_sizes;
+std::map<int, std::vector<std::pair<std::string, std::string>>> s_details;
+bool DetailSection(const std::string& name)
+{
+  return name == "DVDInterface" || name == "IOS::HLE" || name == "ExpansionInterface" ||
+         name == "PowerPC" || name == "AudioInterface" || name == "DSP" ||
+         name == "CoreTimingEvents" || name == "CoreTiming" || name == "IOS";
+}
+std::string Detail(const std::string& name, const u8* data, std::size_t size)
+{
+  std::string out;
+  // The DVD section carries a pending read's request and data: whole, so the two sides' bytes can
+  // be compared.
+  // PowerPC whole too: its icache data and reservation bytes differ between the two sides.
+  const std::size_t whole =
+      name == "DVDInterface" || name == "IOS::HLE" || name == "PowerPC" ? 256 * 1024 : 4096;
+  if (size <= whole)
+  {
+    out.reserve(size * 2);
+    for (std::size_t i = 0; i < size; ++i)
+      out += fmt::format("{:02x}", data[i]);
+    return out;
+  }
+  out = "h64:";
+  for (std::size_t at = 0; at < size; at += 64)
+    out += fmt::format("{:08x}", static_cast<u32>(XXH3_64bits(data + at, std::min<std::size_t>(64, size - at)) >> 32));
+  return out;
+}
+// The RAM bytes of the watched 64 KiB blocks (MEM1 then MEM2; YG_DESYNC_WATCH=first-last, default
+// 676-677 = MEM2 0x11240000..0x1125ffff, where both mapped P+ desyncs differ) per kept frame.
+std::map<int, std::vector<u8>> s_watch;
+std::pair<std::size_t, std::size_t> WatchBlocks()
+{
+  static const std::pair<std::size_t, std::size_t> s_blocks = [] {
+    std::size_t first = 676, last = 677;
+    if (const char* v = std::getenv("YG_DESYNC_WATCH"))
+    {
+      unsigned a = 0, b = 0;
+      if (std::sscanf(v, "%u-%u", &a, &b) == 2 && a <= b && b - a < 16)
+      {
+        first = a;
+        last = b;
+      }
+    }
+    return std::pair{first, last};
+  }();
+  return s_blocks;
+}
+constexpr std::size_t WATCH_DUMP_FRAMES = 3;
+// YG_DESYNC_RAMDIR=<dir>: the whole RAM (MEM1 then MEM2) of the last WATCH_DUMP_FRAMES checksum
+// frames, written there as ram-f<frame>.bin on a dump, so the two sides can be diffed byte for byte.
+const char* RamDumpDir()
+{
+  static const char* s_dir = [] {
+    const char* v = std::getenv("YG_DESYNC_RAMDIR");
+    return v && v[0] ? v : nullptr;
+  }();
+  return s_dir;
+}
+std::map<int, std::vector<u8>> s_ram;
+bool s_maps_logged = false;
+// DIAGNOSTIC v12: the live RAM (MEM1 then MEM2) copied right after the save of each checksum frame
+// (every 60th), to compare with the same frame rebuilt from the snapshot later (s_ram).
+constexpr int LIVE_EVERY = 60;
+std::map<int, std::vector<u8>> s_live;
+void CaptureLiveRam(Core::System& system, int frame)
+{
+  if (!DesyncMapOn() || !RamDumpDir() || frame % LIVE_EVERY != 0)
+    return;
+  auto& memory = system.GetMemory();
+  const std::size_t mem1 = memory.GetRamSize();
+  const std::size_t mem2 = memory.GetEXRAM() ? std::size_t{memory.GetExRamSize()} : 0;
+  std::vector<u8> bytes(mem1 + mem2);
+  std::memcpy(bytes.data(), memory.GetRAM(), mem1);
+  if (mem2)
+    std::memcpy(bytes.data() + mem1, memory.GetEXRAM(), mem2);
+  s_live[frame] = std::move(bytes);
+  while (s_live.size() > WATCH_DUMP_FRAMES)
+    s_live.erase(s_live.begin());
+}
+}  // namespace
+
 std::optional<u64> RingPort::SnapshotChecksum(int frame)
 {
-  return m_ring.RamChecksum(frame);
+  if (!DesyncMapOn())
+    return m_ring.RamChecksum(frame);
+  auto map = m_ring.RamBucketHashes(frame, MAP_BUCKET);
+  if (!map || map->empty())
+    return std::nullopt;
+  // RAM blocks only (the last entry is the non-RAM state hash, kept for the log, not compared).
+  const u64 hash = XXH3_64bits(map->data(), (map->size() - 1) * sizeof(u64));
+  s_maps[frame] = std::move(*map);
+  {
+    const auto [first, last] = WatchBlocks();
+    if (auto bytes = m_ring.RamBytes(frame, first * MAP_BUCKET, (last - first + 1) * MAP_BUCKET))
+      s_watch[frame] = std::move(*bytes);
+    while (s_watch.size() > MAP_KEEP)
+      s_watch.erase(s_watch.begin());
+  }
+  if (RamDumpDir())
+  {
+    auto& memory = m_system.GetMemory();
+    const std::size_t total = std::size_t{memory.GetRamSize()} +
+                              (memory.GetEXRAM() ? std::size_t{memory.GetExRamSize()} : 0);
+    if (auto bytes = m_ring.RamBytes(frame, 0, total))
+    {
+      s_ram[frame] = std::move(*bytes);
+      while (s_ram.size() > WATCH_DUMP_FRAMES)
+        s_ram.erase(s_ram.begin());
+    }
+  }
+  while (s_maps.size() > MAP_KEEP)
+    s_maps.erase(s_maps.begin());
+  if (const auto it = s_marks.find(frame); it != s_marks.end())
+  {
+    const auto state = m_ring.StateAt(frame);
+    std::vector<std::pair<std::string, u32>> sections;
+    std::vector<std::size_t> sizes;
+    std::vector<std::pair<std::string, std::string>> details;
+    std::size_t prev = 0;
+    for (const auto& [name, end] : it->second)
+    {
+      if (end < prev || end > state.size())
+        break;
+      sizes.push_back(end - prev);
+      if (DetailSection(name))
+        details.emplace_back(name, Detail(name, state.data() + prev, end - prev));
+      std::string key = name;
+      std::replace(key.begin(), key.end(), ' ', '_');
+      sections.emplace_back(std::move(key),
+                            static_cast<u32>(XXH3_64bits(state.data() + prev, end - prev) >> 32));
+      prev = end;
+    }
+    if (prev <= state.size())
+      sections.emplace_back("(tail)", static_cast<u32>(XXH3_64bits(state.data() + prev, state.size() - prev) >> 32));
+    s_sections[frame] = std::move(sections);
+    while (s_sections.size() > MAP_KEEP)
+      s_sections.erase(s_sections.begin());
+    s_section_sizes[frame] = std::move(sizes);
+    s_details[frame] = std::move(details);
+    while (s_section_sizes.size() > MAP_KEEP)
+      s_section_sizes.erase(s_section_sizes.begin());
+    while (s_details.size() > MAP_KEEP)
+      s_details.erase(s_details.begin());
+  }
+  return hash;
+}
+
+void RingPort::ResetDesyncMaps()
+{
+  s_maps.clear();
+  s_marks.clear();
+  s_sections.clear();
+  s_section_sizes.clear();
+  s_details.clear();
+  s_watch.clear();
+  s_ram.clear();
+  s_live.clear();
+  s_maps_logged = false;
+}
+
+void RingPort::OnDesync(int frame)
+{
+  DumpDesyncMaps(frame, "desync");
+}
+
+void RingPort::DumpDesyncMaps(int frame, const char* why)
+{
+  if (!DesyncMapOn() || s_maps_logged || s_maps.empty())
+    return;
+  s_maps_logged = true;
+  NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP dump ({}) maps={} first={} last={}", why, s_maps.size(),
+                 s_maps.begin()->first, s_maps.rbegin()->first);
+  constexpr std::size_t PER_LINE = 64;
+  for (const auto& [f, map] : s_maps)
+  {
+    if (f > frame)
+      continue;
+    const u64 ram = XXH3_64bits(map.data(), (map.size() - 1) * sizeof(u64));
+    const std::size_t blocks = map.size() - 1;
+    const std::size_t parts = (blocks + PER_LINE - 1) / PER_LINE;
+    for (std::size_t p = 0; p < parts; ++p)
+    {
+      std::string line;
+      for (std::size_t i = p * PER_LINE; i < std::min(blocks, (p + 1) * PER_LINE); ++i)
+        line += fmt::format("{:08x}", static_cast<u32>(map[i] >> 32));
+      NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} ram={:016x} state={:016x} part {}/{} {}", f, ram,
+                     map.back(), p, parts, line);
+    }
+    if (const auto it = s_sections.find(f); it != s_sections.end())
+    {
+      constexpr std::size_t SEC_PER_LINE = 40;
+      const auto& sections = it->second;
+      const std::size_t sec_parts = (sections.size() + SEC_PER_LINE - 1) / SEC_PER_LINE;
+      for (std::size_t p = 0; p < sec_parts; ++p)
+      {
+        std::string line;
+        for (std::size_t i = p * SEC_PER_LINE; i < std::min(sections.size(), (p + 1) * SEC_PER_LINE);
+             ++i)
+        {
+          const auto sz = s_section_sizes.find(f);
+          const std::size_t size =
+              sz != s_section_sizes.end() && i < sz->second.size() ? sz->second[i] : 0;
+          line += fmt::format(" {}={:08x}:{}", sections[i].first, sections[i].second, size);
+        }
+        NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} sec {}/{}{}", f, p, sec_parts, line);
+      }
+    }
+    if (const auto it = s_details.find(f); it != s_details.end())
+    {
+      constexpr std::size_t CHUNK = 3600;
+      for (const auto& [name, hex] : it->second)
+      {
+        const std::size_t raw_parts = std::max<std::size_t>(1, (hex.size() + CHUNK - 1) / CHUNK);
+        for (std::size_t rp = 0; rp < raw_parts; ++rp)
+        {
+          NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} raw {} {}/{} {}", f, name, rp, raw_parts,
+                         hex.substr(rp * CHUNK, CHUNK));
+        }
+      }
+    }
+  }
+  // The watched blocks' bytes at the last few kept frames at or before `frame`.
+  std::vector<int> watch_frames;
+  for (auto it = s_watch.rbegin(); it != s_watch.rend() && watch_frames.size() < WATCH_DUMP_FRAMES;
+       ++it)
+  {
+    if (it->first <= frame)
+      watch_frames.push_back(it->first);
+  }
+  const auto [first, last] = WatchBlocks();
+  for (const int f : watch_frames)
+  {
+    const auto& bytes = s_watch[f];
+    constexpr std::size_t CHUNK = 1800;  // bytes per line (3600 hex)
+    const std::size_t parts = (bytes.size() + CHUNK - 1) / CHUNK;
+    for (std::size_t p = 0; p < parts; ++p)
+    {
+      std::string hex;
+      hex.reserve(CHUNK * 2);
+      for (std::size_t i = p * CHUNK; i < std::min(bytes.size(), (p + 1) * CHUNK); ++i)
+        hex += fmt::format("{:02x}", bytes[i]);
+      NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP f={} watch {}-{} {}/{} {}", f, first, last, p, parts, hex);
+    }
+  }
+  if (const char* dir = RamDumpDir())
+  {
+    for (const auto& [f, bytes] : s_ram)
+    {
+      if (f > frame)
+        continue;
+      const std::string path = fmt::format("{}/ram-f{}.bin", dir, f);
+      File::IOFile file(path, "wb");
+      const bool ok = file.WriteBytes(bytes.data(), bytes.size());
+      NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP ramdump f={} {} bytes {} {}", f, bytes.size(),
+                     ok ? "written" : "NOT written", path);
+    }
+  }
+  // DIAGNOSTIC v12, only at a desync (clean runs must stay inside the harness's output cap):
+  // 1. selfdiff: each checksum frame as the checksum saw it (rebuilt from the snapshot, s_ram)
+  //    against the live RAM copied right after that frame's save. Any difference means the
+  //    snapshot, not the game, is wrong on this side.
+  // 2. the copy-on-write page events of the pages that differ, and the last notes.
+  const std::vector<std::string> notes = Cow::TraceTake();
+  if (std::string_view(why) != "desync")
+    return;
+  auto& memory = m_system.GetMemory();
+  const std::size_t mem1 = memory.GetRamSize();
+  const auto emu = [mem1](std::size_t off) {
+    return off < mem1 ? 0x80000000u + static_cast<u32>(off) :
+                        0x90000000u + static_cast<u32>(off - mem1);
+  };
+  const auto physical = [mem1](std::size_t off) {
+    return off < mem1 ? static_cast<u32>(off) : 0x10000000u + static_cast<u32>(off - mem1);
+  };
+  std::vector<u32> bad_pages;
+  const std::size_t page = Cow::PageSize() ? Cow::PageSize() : 4096;
+  for (const auto& [f, composed] : s_ram)
+  {
+    if (f > frame)
+      continue;
+    const auto it = s_live.find(f);
+    if (it == s_live.end() || it->second.size() != composed.size())
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP selfdiff f={} no live copy", f);
+      continue;
+    }
+    const std::vector<u8>& live = it->second;
+    if (const char* dir = RamDumpDir())
+    {
+      File::IOFile file(fmt::format("{}/ram-live-f{}.bin", dir, f), "wb");
+      file.WriteBytes(live.data(), live.size());
+    }
+    std::size_t bytes = 0, ranges = 0, rows = 0;
+    std::size_t i = 0;
+    const std::size_t n = live.size();
+    while (i < n)
+    {
+      if (live[i] == composed[i])
+      {
+        ++i;
+        continue;
+      }
+      const std::size_t start = i;
+      while (i < n && live[i] != composed[i])
+        ++i;
+      bytes += i - start;
+      if (ranges++ < 40)
+        NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP selfdiff f={} range {:08x}-{:08x} ({} B)", f, emu(start),
+                       emu(i - 1), i - start);
+      for (std::size_t pg = start / page; pg <= (i - 1) / page; ++pg)
+      {
+        const u32 ph = physical(pg * page);
+        if (bad_pages.size() < 256 && std::find(bad_pages.begin(), bad_pages.end(), ph) == bad_pages.end())
+          bad_pages.push_back(ph);
+      }
+      for (std::size_t row = start & ~std::size_t{15}; row < i && rows < 24; row += 16, ++rows)
+      {
+        std::string a, b;
+        for (std::size_t k = row; k < std::min(row + 16, n); ++k)
+        {
+          a += fmt::format("{:02x}", live[k]);
+          b += fmt::format("{:02x}", composed[k]);
+        }
+        NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP selfdiff f={} {:08x} live {} snap {}", f, emu(row), a, b);
+      }
+    }
+    NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP selfdiff f={} differing bytes {} in {} ranges", f, bytes,
+                   ranges);
+  }
+  const std::vector<std::string> events = Cow::TracePageEvents(bad_pages, 2500);
+  NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP cowevents {} lines", events.size());
+  for (std::size_t i = 0; i < events.size(); ++i)
+    NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP cowev {} {}", i, events[i]);
+  const std::size_t from = notes.size() > 800 ? notes.size() - 800 : 0;
+  NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP cownotes {} of {} lines", notes.size() - from, notes.size());
+  for (std::size_t i = from; i < notes.size(); ++i)
+    NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP cow {} {}", i, notes[i]);
 }
 
 void RingPort::ResetPacing()

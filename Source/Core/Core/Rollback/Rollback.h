@@ -76,9 +76,16 @@ public:
   void Reset(Core::System& system);
   // RamChecksum of the snapshot taken at `frame`, or nullopt if it is not in the ring.
   std::optional<u64> RamChecksum(s64 frame) const;
+  // DIAGNOSTIC (YG_DESYNC_MAP): per-`bucket` hashes of MEM1 then MEM2 at `frame`, plus (last) the
+  // XXH3 of the snapshot's non-RAM state; nullopt if not in the ring.
+  std::optional<std::vector<u64>> RamBucketHashes(s64 frame, std::size_t bucket) const;
 
   // The non-RAM state from the most recent Save, for hashing and diagnostics.
   std::span<const u8> LastState() const;
+  // The non-RAM state of `frame`'s snapshot (empty if not in the ring), for diagnostics.
+  std::span<const u8> StateAt(s64 frame) const;
+  // DIAGNOSTIC: `size` bytes at `offset` into MEM1 then MEM2 as saved for `frame`.
+  std::optional<std::vector<u8>> RamBytes(s64 frame, std::size_t offset, std::size_t size) const;
 
   // Keyframes for mid-game joins. Capture writes what Save would into `image`; call it from the
   // frame-boundary hook. `stop_journal` stops the NAND journal the capture

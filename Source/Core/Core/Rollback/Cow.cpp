@@ -7,8 +7,12 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <thread>
 
 #include <xxh3.h>
 
@@ -134,6 +138,52 @@ u32 PhysicalOf(const Tracker& t, std::size_t page)
          static_cast<u32>((page - t.area_first_page[area]) * t.page_size);
 }
 
+// DIAGNOSTIC v12: every copy-on-write page event (all pages) in a ring of compact records, plus a
+// ring of notes (save/load/forget, snapshot/restore/drop/remap, DVD reads). Both share one sequence
+// so they can be merged. At a desync the side logs the events of the pages where its own composed
+// snapshot differs from the live RAM copied at save time (TracePageEvents), and the last notes.
+constexpr std::size_t COW_NOTES_MAX = 4000;
+constexpr std::size_t COW_EVENT_RING = std::size_t{1} << 22;
+struct PageEvent
+{
+  u64 seq;
+  u32 id;  // the newest snapshot id when it happened
+  u32 page;
+  u16 aux;
+  char kind;
+  u8 view;
+};
+std::mutex s_trace_lock;
+std::deque<std::pair<u64, std::string>> s_trace;
+std::atomic<u64> s_seq{0};
+std::vector<PageEvent> s_events;  // guarded by the tracker lock
+std::size_t s_events_next = 0;
+bool s_events_wrapped = false;
+void TraceLine(std::string line)
+{
+  const u64 seq = s_seq.fetch_add(1, std::memory_order_relaxed);
+  std::lock_guard lock(s_trace_lock);
+  if (s_trace.size() >= COW_NOTES_MAX)
+    s_trace.pop_front();
+  s_trace.emplace_back(seq, std::move(line));
+}
+// Caller holds t.lock.
+void Ev(const Tracker& t, char kind, std::size_t page, std::size_t view, std::size_t aux)
+{
+  if (s_events.empty())
+    s_events.resize(COW_EVENT_RING);
+  const u64 id = t.log ? t.log->NextId() - 1 : 0;
+  s_events[s_events_next] =
+      PageEvent{s_seq.fetch_add(1, std::memory_order_relaxed), static_cast<u32>(id),
+                static_cast<u32>(page), static_cast<u16>(std::min<std::size_t>(aux, 0xffff)), kind,
+                static_cast<u8>(view)};
+  if (++s_events_next == COW_EVENT_RING)
+  {
+    s_events_next = 0;
+    s_events_wrapped = true;
+  }
+}
+
 // Clips the writeable views to the tracked areas, as page ranges. False if one is not
 // page-aligned or there are too many.
 bool BuildViews(const Tracker& t, const std::vector<View>& views, std::vector<ViewInfo>* out)
@@ -233,6 +283,7 @@ void SettleOpenPages(Tracker& t, bool measure)
       t.heat[page] =
           changed ? HEAT_WHILE_CHANGING : static_cast<u8>(t.heat[page] > 0 ? t.heat[page] - 1 : 0);
     }
+    Ev(t, t.heat[page] > 0 ? 's' : 'c', page, 0, t.heat[page] | (t.fault_recorded[page] << 8));
     t.fault_recorded[page] = 0;
     (t.heat[page] > 0 ? hot : cold).push_back(page);
   }
@@ -246,7 +297,9 @@ void CopyHotPages(Tracker& t)
 {
   for (const u32 page : t.open_pages)
   {
-    if (t.log->Record(page, AliasOf(t, page)))
+    const bool recorded = t.log->Record(page, AliasOf(t, page));
+    Ev(t, 'h', page, 0, recorded ? 1 : 0);
+    if (recorded)
       ++t.counters.pages_copied;
   }
 }
@@ -258,7 +311,9 @@ bool OpenPage(Tracker& t, std::size_t v, std::size_t page)
   const u64 bit = u64{1} << v;
   if (t.open_in[page] & bit)
     return false;
-  if (t.log->Record(page, AliasOf(t, page)))
+  const bool recorded = t.log->Record(page, AliasOf(t, page));
+  Ev(t, 'o', page, v, recorded ? 1 : 0);
+  if (recorded)
   {
     ++t.counters.pages_recorded;
     t.fault_recorded[page] = 1;
@@ -401,6 +456,7 @@ u64 Snapshot()
   t.log->Reserve(t.open_pages.size() + RESERVE_PAGES);
   SettleOpenPages(t, true);
   const u64 id = t.log->Open();
+  TraceLine(fmt::format("snapshot id={}", id));
   CopyHotPages(t);
   return id;
 }
@@ -418,8 +474,10 @@ bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>
   std::lock_guard lock(t.lock);
   if (!t.log || !t.log->Has(id))
     return false;
+  TraceLine(fmt::format("restore id={} newest={}", id, t.log->Newest()));
   // Writes go through the private mapping, so protection does not matter here.
   t.log->ForEachPreImage(id, [&](std::size_t page, const u8* pre_image) {
+    Ev(t, 'r', page, 0, std::memcmp(AliasOf(t, page), pre_image, t.page_size) != 0 ? 1 : 0);
     u8* const live = AliasOf(t, page);
     const u32 physical = PhysicalOf(t, page);
     for (std::size_t offset = 0; offset < t.page_size; offset += RESTORE_BLOCK)
@@ -442,7 +500,10 @@ void Drop(u64 id)
   Tracker& t = T();
   std::lock_guard lock(t.lock);
   if (t.log)
+  {
+    TraceLine(fmt::format("drop id={}", id));
     t.log->Drop(id);
+  }
 }
 
 std::optional<u64> Checksum(u64 id)
@@ -484,6 +545,75 @@ std::optional<u64> Checksum(u64 id)
   return hash;
 }
 
+std::optional<std::vector<u64>> BucketHashes(u64 id, std::size_t bucket)
+{
+  Tracker& t = T();
+  std::lock_guard lock(t.lock);
+  if (!t.log || !t.log->Has(id) || bucket == 0 || bucket % t.page_size != 0)
+    return std::nullopt;
+  std::vector<const u8*> pre_images(t.log->PageCount(), nullptr);
+  t.log->ForEachPreImage(id, [&](std::size_t page, const u8* data) { pre_images[page] = data; });
+  std::vector<u64> out;
+  XXH3_state_t* const state = XXH3_createState();
+  const std::size_t per = bucket / t.page_size;
+  for (std::size_t a = 0; a < t.areas.size(); ++a)
+  {
+    const std::size_t first = t.area_first_page[a];
+    const std::size_t count = t.areas[a].size / t.page_size;
+    for (std::size_t i = 0; i < count; ++i)
+    {
+      if (i % per == 0)
+        XXH3_64bits_reset(state);
+      const u8* const pre_image = pre_images[first + i];
+      XXH3_64bits_update(state, pre_image ? pre_image : t.areas[a].alias + i * t.page_size,
+                         t.page_size);
+      if (i % per == per - 1 || i == count - 1)
+        out.push_back(XXH3_64bits_digest(state));
+    }
+  }
+  XXH3_freeState(state);
+  return out;
+}
+
+std::optional<std::vector<u8>> Bytes(u64 id, std::size_t offset, std::size_t size)
+{
+  Tracker& t = T();
+  std::lock_guard lock(t.lock);
+  if (!t.log || !t.log->Has(id) || t.page_size == 0)
+    return std::nullopt;
+  std::vector<const u8*> pre_images(t.log->PageCount(), nullptr);
+  t.log->ForEachPreImage(id, [&](std::size_t page, const u8* data) { pre_images[page] = data; });
+  std::vector<u8> out;
+  out.reserve(size);
+  std::size_t area_start = 0;
+  for (std::size_t a = 0; a < t.areas.size() && out.size() < size; ++a)
+  {
+    const std::size_t area_size = t.areas[a].size;
+    const std::size_t want = offset + out.size();
+    if (want >= area_start + area_size)
+    {
+      area_start += area_size;
+      continue;
+    }
+    std::size_t in_area = want - area_start;
+    while (in_area < area_size && out.size() < size)
+    {
+      const std::size_t page = in_area / t.page_size;
+      const std::size_t in_page = in_area % t.page_size;
+      const std::size_t n = std::min({t.page_size - in_page, area_size - in_area, size - out.size()});
+      const u8* const pre_image = pre_images[t.area_first_page[a] + page];
+      const u8* const src =
+          (pre_image ? pre_image : t.areas[a].alias + page * t.page_size) + in_page;
+      out.insert(out.end(), src, src + n);
+      in_area += n;
+    }
+    area_start += area_size;
+  }
+  if (out.size() != size)
+    return std::nullopt;
+  return out;
+}
+
 bool HandleFault(uintptr_t address)
 {
   if (!s_armed.load(std::memory_order_acquire))
@@ -504,6 +634,7 @@ bool HandleFault(uintptr_t address)
     const std::size_t index = offset / t.page_size;
     const std::size_t in_page = offset % t.page_size;
     const std::size_t last = static_cast<std::size_t>(view.end - view.base) / t.page_size - 1;
+    Ev(t, 'f', view.first_page + index, v, in_page | ((t.open_in[view.first_page + index] >> v & 1) << 15));
     // A store straddling two pages may report an address in either one (arm64 allows that), so if
     // this page is already writable, try a protected neighbour within one access.
     if (OpenPage(t, v, view.first_page + index) ||
@@ -541,7 +672,10 @@ void PrepareHostWrite(const void* ptr, std::size_t size)
     const std::size_t first = static_cast<std::size_t>(start - view.base) / t.page_size;
     const std::size_t last = static_cast<std::size_t>(end - 1 - view.base) / t.page_size;
     for (std::size_t page = first; page <= last; ++page)
+    {
+      Ev(t, 'p', view.first_page + page, v, size);
       OpenPage(t, v, view.first_page + page);
+    }
     return;
   }
 }
@@ -565,6 +699,7 @@ void OnMappingsChanged(Core::System& system)
   if (built && std::equal(rebuilt.begin(), rebuilt.end(), t.views.begin(), t.views.end(), same))
     return;
   ++t.counters.remaps;
+  TraceLine(fmt::format("remap views={}", rebuilt.size()));
   // New views start writable, so protect everything again. Pages already in the newest log just
   // fault once more to reopen.
   t.views = std::move(rebuilt);
@@ -588,6 +723,64 @@ void StopTracking()
   std::lock_guard lock(t.lock);
   UnprotectAll(t);
   ResetLocked(t);
+}
+
+void TraceNote(const std::string& line)
+{
+  TraceLine(line);
+}
+
+std::vector<std::string> TraceTake()
+{
+  std::lock_guard lock(s_trace_lock);
+  std::vector<std::string> out;
+  out.reserve(s_trace.size());
+  for (const auto& [seq, line] : s_trace)
+    out.push_back(fmt::format("#{} {}", seq, line));
+  s_trace.clear();
+  return out;
+}
+
+std::vector<std::string> TracePageEvents(const std::vector<u32>& physical_pages,
+                                         std::size_t max_lines)
+{
+  Tracker& t = T();
+  std::lock_guard lock(t.lock);
+  std::vector<std::string> out;
+  if (t.areas.empty() || s_events.empty())
+    return out;
+  std::vector<u32> pages;
+  for (const u32 physical : physical_pages)
+  {
+    for (std::size_t a = 0; a < t.areas.size(); ++a)
+    {
+      const Area& area = t.areas[a];
+      if (physical >= area.physical_address && physical - area.physical_address < area.size)
+        pages.push_back(static_cast<u32>(t.area_first_page[a] +
+                                         (physical - area.physical_address) / t.page_size));
+    }
+  }
+  std::sort(pages.begin(), pages.end());
+  const std::size_t count = s_events_wrapped ? COW_EVENT_RING : s_events_next;
+  const std::size_t first = s_events_wrapped ? s_events_next : 0;
+  std::vector<const PageEvent*> hits;
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    const PageEvent& e = s_events[(first + i) % COW_EVENT_RING];
+    if (std::binary_search(pages.begin(), pages.end(), e.page))
+      hits.push_back(&e);
+  }
+  // The newest events matter most: keep the last max_lines.
+  const std::size_t skip = hits.size() > max_lines ? hits.size() - max_lines : 0;
+  out.push_back(fmt::format("events {} of {} for {} pages (ring {} of {})", hits.size() - skip,
+                            hits.size(), pages.size(), count, COW_EVENT_RING));
+  for (std::size_t i = skip; i < hits.size(); ++i)
+  {
+    const PageEvent& e = *hits[i];
+    out.push_back(fmt::format("#{} id={} {} p={:08x} v={} aux={:x}", e.seq, e.id, e.kind,
+                              PhysicalOf(t, e.page), e.view, e.aux));
+  }
+  return out;
 }
 
 Counters GetCounters()
