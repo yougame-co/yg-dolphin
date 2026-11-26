@@ -524,6 +524,7 @@ struct RoomTestSnapshot
   bool session_recovering = false;
   std::optional<bool> input_held;
   int seat = -1;
+  std::optional<bool> joining;
   std::vector<int> co_seats;
   std::array<int, MAX_SEATS> local_indices{-1, -1, -1, -1};
   std::array<std::vector<int>, MAX_SEATS> groups;
