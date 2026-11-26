@@ -737,6 +737,8 @@ void MemoryManager::CopyToEmu(u32 address, const void* data, size_t size)
     PanicAlertFmt("Invalid range in CopyToEmu. {:x} bytes to {:#010x}", size, address);
     return;
   }
+  // Open the snapshot-protected pages first, so the copy never faults part way through.
+  Rollback::Cow::PrepareHostWrite(pointer, size);
   memcpy(pointer, data, size);
 }
 
@@ -751,6 +753,7 @@ void MemoryManager::Memset(u32 address, u8 value, size_t size)
     PanicAlertFmt("Invalid range in Memset. {:x} bytes at {:#010x}", size, address);
     return;
   }
+  Rollback::Cow::PrepareHostWrite(pointer, size);
   memset(pointer, value, size);
 }
 

@@ -33,6 +33,7 @@
 #include "Core/FifoPlayer/FifoRecorder.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/System.h"
 
 #include "VideoCommon/AbstractFramebuffer.h"
@@ -2269,13 +2270,16 @@ void TextureCacheBase::CopyRenderTargetToTexture(
   auto& memory = system.GetMemory();
   // Every byte the rows below write, not just num_blocks_y * dstStride (a stride under a row's
   // bytes writes past that).
-  u8* dst = memory.GetPointerForRange(
-      dstAddr, EFBCopyCheckedRange(bytes_per_row, num_blocks_y, dstStride));
+  const u64 checked_range = EFBCopyCheckedRange(bytes_per_row, num_blocks_y, dstStride);
+  u8* dst = memory.GetPointerForRange(dstAddr, checked_range);
   if (dst == nullptr)
   {
     ERROR_LOG_FMT(VIDEO, "Trying to copy from EFB to invalid address {:#010x}", dstAddr);
     return;
   }
+  // Host writes into guest RAM open the snapshot-protected pages first (Rollback::Cow), so no
+  // write below faults part way through.
+  Rollback::Cow::PrepareHostWrite(dst, checked_range);
 
   // Orca: no GPU copy on a skipped frame. A texture-only copy still writes its placeholder, so
   // RAM matches a rendered frame; a copy to RAM leaves the old pixels.
@@ -2590,16 +2594,16 @@ void TextureCacheBase::FlushEFBCopy(TCacheEntry* entry)
   // Copy from texture -> guest memory.
   auto& system = Core::System::GetInstance();
   auto& memory = system.GetMemory();
-  u8* const dst = memory.GetPointerForRange(
-      entry->addr,
-      EFBCopyCheckedRange(entry->pending_efb_copy_width * 4,
-                          entry->pending_efb_copy_height, entry->memory_stride));
+  const u64 checked_range = EFBCopyCheckedRange(
+      entry->pending_efb_copy_width * 4, entry->pending_efb_copy_height, entry->memory_stride);
+  u8* const dst = memory.GetPointerForRange(entry->addr, checked_range);
   if (dst == nullptr)
   {
     ERROR_LOG_FMT(VIDEO, "Trying to flush an EFB copy to invalid address {:#010x}", entry->addr);
     ReleaseEFBCopyStagingTexture(std::move(entry->pending_efb_copy));
     return;
   }
+  Rollback::Cow::PrepareHostWrite(dst, checked_range);
   WriteEFBCopyToRAM(dst, entry->pending_efb_copy_width, entry->pending_efb_copy_height,
                     entry->memory_stride, std::move(entry->pending_efb_copy));
 
