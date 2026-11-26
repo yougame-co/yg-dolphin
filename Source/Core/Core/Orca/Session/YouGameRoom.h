@@ -404,6 +404,10 @@ public:
   // Games with a verdict so far, void and drawn ones included.
   int Games() const { return m_games; }
   void Reset();
+  // Games a cup set already played in a room that was lost (CupCarriedGames), before this room's
+  // first game: their winners count toward the set. False, and nothing changes, once a game was
+  // counted or when the winners would end the set.
+  bool Seed(const std::vector<std::string>& winners);
 
 private:
   std::map<std::string, int> m_wins;
@@ -419,6 +423,18 @@ private:
 // Otherwise the wins a player needs to take the match: 1 (best of 1), 2 (best of 3) or 3 (best of
 // 5). A cup with rules plays under the locked online rules.
 std::optional<int> CupSetWins(std::string_view ticket);
+
+// A cup set's games already played in a lost room (exposed for tests), from the ticket's
+// `tr.rules.played`: [{"winner": "<participant id>", ...}], in order, void and drawn games left
+// out. nullopt with *refused false: none carried. nullopt with *refused true: a list the site never
+// signs (it decides the set, holds a whole set, names a third player or has an unreadable entry),
+// so the room plays from 0-0. `digest` (16 hex) is what both seats compare in their hellos.
+struct CupCarry
+{
+  std::vector<std::string> winners;
+  std::string digest;
+};
+std::optional<CupCarry> CupCarriedGames(std::string_view ticket, bool* refused = nullptr);
 
 // A ranked game's `game-start` for the room's match (exposed for tests):
 // {"t":"game-start","matchId":"<match>","id":"g<start>"}, the id the game's `game-report` carries.

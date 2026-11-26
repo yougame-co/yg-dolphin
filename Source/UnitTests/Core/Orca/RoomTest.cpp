@@ -1478,6 +1478,83 @@ TEST(OrcaRoom, ALongerSetNeedsMoreWinsAndVoidsLater)
   EXPECT_TRUE(ranked.Game("a"));
 }
 
+TEST(OrcaRoom, ACupTicketCarriesGamesFromALostRoom)
+{
+  bool refused = true;
+  // {"tr":{"rules":{"bestOf":3,"played":[{"winner":"u-a","report":"r0"}]}}}
+  auto one = CupCarriedGames(
+      "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjMsInBsYXllZCI6W3sid2lubmVyIjoidS1hIiwicmVwb3J0IjoicjAifV19fX0.sig",
+      &refused);
+  ASSERT_TRUE(one);
+  EXPECT_FALSE(refused);
+  EXPECT_EQ(one->winners, std::vector<std::string>{"u-a"});
+  EXPECT_EQ(one->digest, "1a97cbb840a9577e");
+  // A best of 5 at 2-1: {"bestOf":5,"played":[u-a, u-b, u-a]}.
+  auto five = CupCarriedGames(
+      "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjUsInBsYXllZCI6W3sid2lubmVyIjoidS1hIiwicmVwb3J0IjoicjAifSx7Indpbm5lciI6InUtYiIsInJlcG9ydCI6InIxIn0seyJ3aW5uZXIiOiJ1LWEiLCJyZXBvcnQiOiJyMiJ9XX19fQ.sig",
+      &refused);
+  ASSERT_TRUE(five);
+  EXPECT_FALSE(refused);
+  EXPECT_EQ(five->winners, (std::vector<std::string>{"u-a", "u-b", "u-a"}));
+  EXPECT_EQ(five->digest, "ec3c49506a5cedf8");
+  // None carried: {"tr":{"rules":{"bestOf":3}}}, and not a cup ticket at all.
+  EXPECT_FALSE(CupCarriedGames("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjN9fX0.sig", &refused));
+  EXPECT_FALSE(refused);
+  EXPECT_FALSE(CupCarriedGames("loopback-fixture-1", &refused));
+  EXPECT_FALSE(refused);
+}
+
+TEST(OrcaRoom, ACarriedListTheSiteNeverSignsPlaysFromZero)
+{
+  // bestOf 3: [u-a, u-a] decides the set; [u-a, u-b, u-a] is a whole set. bestOf 1 has no set.
+  // bestOf 5: [u-a, u-b, u-c] names a third player. bestOf 3: an entry without a winner, an empty
+  // winner, "played" not a list, an empty list.
+  for (const char* ticket : {
+           "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjMsInBsYXllZCI6W3sid2lubmVyIjoidS1hIiwicmVwb3J0IjoicjAifSx7Indpbm5lciI6InUtYSIsInJlcG9ydCI6InIxIn1dfX19.sig",
+           "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjMsInBsYXllZCI6W3sid2lubmVyIjoidS1hIiwicmVwb3J0IjoicjAifSx7Indpbm5lciI6InUtYiIsInJlcG9ydCI6InIxIn0seyJ3aW5uZXIiOiJ1LWEiLCJyZXBvcnQiOiJyMiJ9XX19fQ.sig",
+           "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjEsInBsYXllZCI6W3sid2lubmVyIjoidS1hIiwicmVwb3J0IjoicjAifV19fX0.sig",
+           "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjUsInBsYXllZCI6W3sid2lubmVyIjoidS1hIiwicmVwb3J0IjoicjAifSx7Indpbm5lciI6InUtYiIsInJlcG9ydCI6InIxIn0seyJ3aW5uZXIiOiJ1LWMiLCJyZXBvcnQiOiJyMiJ9XX19fQ.sig",
+           "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjMsInBsYXllZCI6W3sicmVwb3J0IjoicjAifV19fX0.sig",
+           "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjMsInBsYXllZCI6W3sid2lubmVyIjoiIiwicmVwb3J0IjoicjAifV19fX0.sig",
+           "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjMsInBsYXllZCI6eyJ3aW5uZXIiOiJ1LWEifX19fQ.sig",
+           "eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjMsInBsYXllZCI6W119fX0.sig",
+       })
+  {
+    bool refused = false;
+    EXPECT_FALSE(CupCarriedGames(ticket, &refused)) << ticket;
+    EXPECT_TRUE(refused) << ticket;
+  }
+}
+
+TEST(OrcaRoom, ASeededSetCountsTheCarriedGames)
+{
+  // Game 3 of a best of 3 at 1-1: the next win takes it.
+  SetTally three(2);
+  ASSERT_TRUE(three.Seed({"a", "b"}));
+  EXPECT_EQ(three.Games(), 2);
+  EXPECT_EQ(three.Wins("a"), 1);
+  const auto end = three.Game("b");
+  ASSERT_TRUE(end);
+  EXPECT_EQ(end->winner, "b");
+  // Never after a game was counted, never a list that would end the set, never empty.
+  SetTally started(2);
+  EXPECT_FALSE(started.Game("a"));
+  EXPECT_FALSE(started.Seed({"b"}));
+  EXPECT_EQ(started.Wins("b"), 0);
+  SetTally decided(2);
+  EXPECT_FALSE(decided.Seed({"a", "a"}));
+  EXPECT_EQ(decided.Games(), 0);
+  EXPECT_FALSE(decided.Seed({}));
+  // Void games after a seed still count toward the limit: best of 3 voids after 7.
+  SetTally voids(2);
+  ASSERT_TRUE(voids.Seed({"a", "b"}));
+  for (int n = 3; n < 7; ++n)
+    EXPECT_FALSE(voids.Game(""));
+  const auto limit = voids.Game("");
+  ASSERT_TRUE(limit);
+  EXPECT_EQ(limit->why, "limit");
+}
+
 namespace
 {
 // A cup match's room trace: its ticket, then a private welcome and the match's start.

@@ -26,6 +26,7 @@
 #include <fmt/format.h>
 #include <picojson.h>
 
+#include "Common/Crypto/SHA1.h"
 #include "Common/HttpRequest.h"
 #include "Common/Logging/Log.h"
 #include "Common/Network.h"
@@ -1495,6 +1496,13 @@ struct YouGameRoom::Impl
   // The casual sitting with this opponent so far: this player's wins and theirs.
   int casual_mine = 0, casual_theirs = 0;
   SetTally tally;
+  // A cup set's games from a lost room (CupCarriedGames): this ticket's (under the mutex), the
+  // opponent's hello digest of theirs by connection, and whether both agreed (I/O thread).
+  std::optional<CupCarry> cup_carry;
+  std::map<std::string, std::string> peer_played;
+  bool carry_settled = false;
+  bool carry_agreed = false;
+  int cup_number_base = 0;
   bool finish_sent = false;
   std::set<std::string> verdicts_seen;
   // Why this side reported a game or the set void, and the detail it sent, by report id ("g<n>",
@@ -3883,6 +3891,70 @@ struct YouGameRoom::Impl
     if (wins)
       NOTICE_LOG_FMT(NETPLAY, "Orca room: cup rules locked, first to {} game{}", *wins,
                      *wins == 1 ? "" : "s");
+    if (wins && *wins > 1 && !cup_carry && match_id.empty())
+    {
+      bool refused = false;
+      cup_carry = CupCarriedGames(t, &refused);
+      if (refused)
+        WARN_LOG_FMT(NETPLAY, "Orca room: the ticket's carried cup games can't be part of this set: from 0-0");
+      else if (cup_carry)
+        NOTICE_LOG_FMT(NETPLAY, "Orca room: the ticket carries {} game(s) from a lost room; they count once the opponent's ticket agrees",
+                       cup_carry->winners.size());
+    }
+  }
+
+  // A carried set's games count for both seats or for neither: only when the opponent's hello
+  // names the same list (its digest). I/O thread.
+  void TrySeedCarry()
+  {
+    if (carry_settled)
+      return;
+    std::optional<CupCarry> carry;
+    bool cup;
+    {
+      std::lock_guard lock(mutex);
+      carry = cup_carry;
+      cup = CupSet();
+    }
+    if (!cup || !carry)
+      return;
+    std::string other;
+    for (const auto& p : Participants())
+    {
+      if (p.connection != me)
+        other = p.connection;
+    }
+    const auto peer = peers.find(other);
+    if (other.empty() || peer == peers.end() || !peer->second.heard)
+      return;
+    carry_settled = true;
+    const auto theirs = peer_played.find(other);
+    carry_agreed = theirs != peer_played.end() && theirs->second == carry->digest;
+    bool seeded = false;
+    if (carry_agreed)
+    {
+      std::lock_guard lock(mutex);
+      // Before this room's first game only; the tally takes the cup's set length (OnStart seeds
+      // its own again).
+      if (tally.Games() == 0 && cup_wins)
+      {
+        tally = SetTally(*cup_wins);
+        seeded = tally.Seed(carry->winners);
+      }
+    }
+    if (!seeded)
+    {
+      carry_agreed = false;
+      WARN_LOG_FMT(NETPLAY, "Orca room: carried cup games not agreed with the opponent's ticket: kept 0-0");
+      return;
+    }
+    cup_number_base = static_cast<int>(carry->winners.size());
+    const std::string mine = MyScoreId();
+    const auto my_wins = std::ranges::count(carry->winners, mine);
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: carried {} game(s) from the lost room, set [{},{}]",
+                   carry->winners.size(), my_wins,
+                   static_cast<long>(carry->winners.size()) - my_wins);
+    mirror_dirty = true;
   }
 
   // A cup match played as a set (best of 3 or 5): each game is a report, and the room's tally of
@@ -3962,7 +4034,7 @@ struct YouGameRoom::Impl
                                fmt::format("g{}", report.start) :
                                fmt::format("{}{}", set_games ? "g" : "c", n);
     if (cup)
-      game_numbers[id] = n;
+      game_numbers[id] = n + cup_number_base;
     if (ranked)
     {
       game_numbers[id] = report.number > 0 ? report.number : n;
@@ -4567,6 +4639,9 @@ struct YouGameRoom::Impl
     {
       std::lock_guard lock(mutex);
       tally = CupSet() ? SetTally(*cup_wins) : SetTally();
+      // Carried games both seats agreed on stay counted when the room's match starts.
+      if (carry_agreed && cup_carry && CupSet())
+        tally.Seed(cup_carry->winners);
     }
     finish_sent = false;
     game_numbers.clear();
@@ -4823,6 +4898,9 @@ struct YouGameRoom::Impl
             std::lock_guard lock(mutex);
             if (doubles)
               d["doubles"] = picojson::value(true);
+            // Optional: a build without carried cup games sends none, so both seats play from 0-0.
+            if (cup_carry && CupSet())
+              d["played"] = picojson::value(cup_carry->digest);
           }
           // Friends-only boot identity enables fresh drop-in/host relaunch.
           if (FriendsRecovery())
@@ -6208,6 +6286,8 @@ struct YouGameRoom::Impl
           End("Your friend is running a different YG Dolphin build or setup", "room_mismatch");
         return;
       }
+      if (const std::string played = Str(d, "played"); played.size() <= 32)
+        peer_played[id] = played;
       const std::string their_run = Str(d, "run");
       // Friends-only new boot/resume can request fresh drop-in; queues never start over.
       const bool new_run = FriendsRecovery() && !peer.run.empty() && !their_run.empty() &&
@@ -6258,6 +6338,7 @@ struct YouGameRoom::Impl
       host_seen = host_seen || peer.drop_in_host;
       if (!was_heard)
         last_hello = {};  // answer at once rather than on the next hello tick
+      TrySeedCarry();
       // A game player: a joiner at a seat other than the host's, or the host itself.
       if (!peer.announced && peer.slot >= 0)
       {
@@ -6948,7 +7029,25 @@ void SetTally::Reset()
   m_ended = false;
 }
 
-std::optional<int> CupSetWins(std::string_view ticket)
+bool SetTally::Seed(const std::vector<std::string>& winners)
+{
+  if (m_ended || m_games != 0 || winners.empty())
+    return false;
+  std::map<std::string, int> wins;
+  for (const auto& id : winners)
+  {
+    if (id.empty() || ++wins[id] >= m_need)
+      return false;
+  }
+  if (static_cast<int>(winners.size()) >= m_limit)
+    return false;
+  m_wins = std::move(wins);
+  m_games = static_cast<int>(winners.size());
+  return true;
+}
+
+// The signed payload's tournament pairing rules (`tr.rules`), or none.
+static std::optional<picojson::object> CupTicketRules(std::string_view ticket)
 {
   // `<base64url payload>.<signature>`: the room service checks the signature; the payload is the
   // site's, as sent to this player.
@@ -6983,13 +7082,71 @@ std::optional<int> CupSetWins(std::string_view ticket)
   const auto rules = pairing.find("rules");
   if (rules == pairing.end() || !rules->second.is<picojson::object>())
     return std::nullopt;
-  const auto& r = rules->second.get<picojson::object>();
+  return rules->second.get<picojson::object>();
+}
+
+static std::optional<int> CupRulesWins(const picojson::object& r)
+{
   if (!r.count("bestOf"))
     return 1;
   const auto best_of = Int(r, "bestOf", 1, 5);
   if (!best_of || *best_of % 2 == 0)
     return std::nullopt;
   return (*best_of + 1) / 2;
+}
+
+std::optional<int> CupSetWins(std::string_view ticket)
+{
+  const auto rules = CupTicketRules(ticket);
+  return rules ? CupRulesWins(*rules) : std::nullopt;
+}
+
+std::optional<CupCarry> CupCarriedGames(std::string_view ticket, bool* refused)
+{
+  if (refused)
+    *refused = false;
+  const auto rules = CupTicketRules(ticket);
+  if (!rules)
+    return std::nullopt;
+  const auto played = rules->find("played");
+  if (played == rules->end())
+    return std::nullopt;
+  const auto refuse = [&] {
+    if (refused)
+      *refused = true;
+    return std::nullopt;
+  };
+  const auto wins = CupRulesWins(*rules);
+  if (!wins || *wins < 2 || !played->second.is<picojson::array>())
+    return refuse();
+  const auto& games = played->second.get<picojson::array>();
+  // Never a whole set, never a decided one: the room plays at least one more game.
+  if (games.empty() || games.size() >= static_cast<size_t>(*wins * 2 - 1))
+    return refuse();
+  CupCarry carry;
+  std::map<std::string, int> count;
+  for (const auto& game : games)
+  {
+    if (!game.is<picojson::object>())
+      return refuse();
+    const auto& g = game.get<picojson::object>();
+    const auto winner = g.find("winner");
+    if (winner == g.end() || !winner->second.is<std::string>())
+      return refuse();
+    const std::string& id = winner->second.get<std::string>();
+    if (id.empty() || id.size() > 64 || ++count[id] >= *wins)
+      return refuse();
+    carry.winners.push_back(id);
+  }
+  if (count.size() > 2)
+    return refuse();
+  std::string joined;
+  for (const auto& id : carry.winners)
+    joined += id + "\n";
+  const auto digest = Common::SHA1::CalculateDigest(joined);
+  for (size_t i = 0; i < 8; ++i)
+    carry.digest += fmt::format("{:02x}", digest[i]);
+  return carry;
 }
 
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
