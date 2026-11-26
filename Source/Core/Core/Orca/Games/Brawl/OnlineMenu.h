@@ -64,6 +64,10 @@ MenuState ReadMenuState(const GuestMemory& memory);
 // Casual, 33 Brawl Online With Friends.
 std::optional<OnlinePick> PickForExitCode(u32 exit_code);
 
+// Whether muMenuMain's ONLINE page (its proc 3, scene +0x35C + 4 * 3) has its cursor (+0x42) on its
+// third button, Brawl Online. The cursor stays there while the page that button opens runs, so it
+// also says which way With Anyone's page was reached. Reads only.
+bool OnlineCursorOnBrawlOnline(const GuestMemory& memory);
 // Whether the main menu shows the Brawl Online page: muMenuMain (scene +0x3D0, the page's proc id)
 // on With Anyone's page (0x1B) while the ONLINE page's proc (scene +0x35C, proc 3) keeps its cursor
 // (+0x42) on its third button. Reads only.

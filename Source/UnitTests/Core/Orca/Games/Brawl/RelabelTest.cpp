@@ -3,7 +3,8 @@
 
 // Texture relabels (UX/Relabel.h): the marks' values, which label a stage turn names, where the
 // marks live (READY TO FIGHT!'s palette in the character select's archive, the stage select's
-// textures in its own), and that a mark is written only over the game's value or another mark.
+// textures in its own, the main menu's With Anyone title and button in its archive and the archive
+// inside it), and that a mark is written only over the game's value or another mark.
 
 #include <initializer_list>
 #include <map>
@@ -78,11 +79,7 @@ constexpr u32 NAMES = 0x80701000;
 constexpr u32 ARCHIVE_OBJECT = 0x934CDD80;
 constexpr u32 IMAGE = 0x92F67FA0;  // 32-byte aligned
 constexpr u32 BRES = IMAGE + 0x60;
-constexpr u32 ROOT = BRES + 0x10;
-constexpr u32 TEXTURES = BRES + 0x100;
-constexpr u32 PALETTES = BRES + 0x200;
-constexpr u32 RESOURCES = BRES + 0x300;  // each a 0x40 header and its data
-constexpr u32 RESOURCE_SIZE = 0x80;
+constexpr u32 RESOURCE_SIZE = 0x80;  // each texture or palette: a 0x40 header and its data
 
 // A bres index group at `group` with the named entries (data offsets from the group), the names
 // written after it, each preceded by its length as the format has it.
@@ -118,6 +115,48 @@ struct Palette
   std::vector<u16> entries;  // RGB5A3
 };
 
+// A bres at `bres` with these textures and palettes; returns its size.
+u32 PutBres(FakeMemory& m, u32 bres, const std::vector<Texture>& textures,
+            const std::vector<Palette>& palettes)
+{
+  const u32 root = bres + 0x10, tex = bres + 0x100, plt = bres + 0x200;
+  const u32 size = 0x300 + RESOURCE_SIZE * static_cast<u32>(textures.size() + palettes.size());
+  m.Fill(bres, size);
+  m.Put32(bres, 0x62726573);
+  m.Put16(bres + 0xC, 0x10);
+  m.Put32(root, 0x726F6F74);
+  PutGroup(m, root + 8,
+           {{"Textures(NW4R)", tex - (root + 8)}, {"Palettes(NW4R)", plt - (root + 8)}});
+  u32 at = bres + 0x300;
+  std::vector<std::pair<std::string_view, u32>> tex_entries, plt_entries;
+  for (const Texture& t : textures)
+  {
+    m.Put32(at, 0x54455830);
+    m.Put32(at + 0x10, 0x40);
+    m.Put16(at + 0x1C, t.width);
+    m.Put16(at + 0x1E, t.height);
+    m.Put32(at + 0x20, t.format);
+    for (size_t i = 0; i < t.first.size(); ++i)
+      m.bytes[at + 0x40 + static_cast<u32>(i)] = t.first[i];
+    tex_entries.emplace_back(t.name, at - tex);
+    at += RESOURCE_SIZE;
+  }
+  for (const Palette& p : palettes)
+  {
+    m.Put32(at, 0x504C5430);
+    m.Put32(at + 0x10, 0x40);
+    m.Put32(at + 0x18, 2);  // RGB5A3
+    m.Put16(at + 0x1C, static_cast<u16>(p.entries.size()));
+    for (size_t i = 0; i < p.entries.size(); ++i)
+      m.Put16(at + 0x40 + 2 * static_cast<u32>(i), p.entries[i]);
+    plt_entries.emplace_back(p.name, at - plt);
+    at += RESOURCE_SIZE;
+  }
+  PutGroup(m, tex, tex_entries);
+  PutGroup(m, plt, plt_entries);
+  return size;
+}
+
 // A scene named `scene` whose archive (at `slot` in the scene object) holds the image `image`
 // with MiscData `file`: a bres with these textures and palettes.
 FakeMemory Screen(std::string_view scene, u32 slot, std::string_view image, u16 file,
@@ -136,48 +175,13 @@ FakeMemory Screen(std::string_view scene, u32 slot, std::string_view image, u16 
   m.Put32(ARCHIVE_OBJECT, 0x934CDCE0);
   m.Put32(ARCHIVE_OBJECT + 0x20, IMAGE);
   // The image: one MiscData entry, the bres.
-  const u32 count = static_cast<u32>(textures.size() + palettes.size());
-  const u32 size = 0x300 + RESOURCE_SIZE * count;
   m.Fill(IMAGE, 0x60);
   m.Put32(IMAGE, 0x41524300);
   m.Put16(IMAGE + 6, 1);
   m.PutString(IMAGE + 0x10, image);
   m.Put16(IMAGE + 0x40, 1);
   m.Put16(IMAGE + 0x42, file);
-  m.Put32(IMAGE + 0x44, size);
-  m.Fill(BRES, size);
-  m.Put32(BRES, 0x62726573);
-  m.Put16(BRES + 0xC, 0x10);
-  m.Put32(ROOT, 0x726F6F74);
-  PutGroup(m, ROOT + 8,
-           {{"Textures(NW4R)", TEXTURES - (ROOT + 8)}, {"Palettes(NW4R)", PALETTES - (ROOT + 8)}});
-  u32 at = RESOURCES;
-  std::vector<std::pair<std::string_view, u32>> tex_entries, plt_entries;
-  for (const Texture& t : textures)
-  {
-    m.Put32(at, 0x54455830);
-    m.Put32(at + 0x10, 0x40);
-    m.Put16(at + 0x1C, t.width);
-    m.Put16(at + 0x1E, t.height);
-    m.Put32(at + 0x20, t.format);
-    for (size_t i = 0; i < t.first.size(); ++i)
-      m.bytes[at + 0x40 + static_cast<u32>(i)] = t.first[i];
-    tex_entries.emplace_back(t.name, at - TEXTURES);
-    at += RESOURCE_SIZE;
-  }
-  for (const Palette& p : palettes)
-  {
-    m.Put32(at, 0x504C5430);
-    m.Put32(at + 0x10, 0x40);
-    m.Put32(at + 0x18, 2);  // RGB5A3
-    m.Put16(at + 0x1C, static_cast<u16>(p.entries.size()));
-    for (size_t i = 0; i < p.entries.size(); ++i)
-      m.Put16(at + 0x40 + 2 * static_cast<u32>(i), p.entries[i]);
-    plt_entries.emplace_back(p.name, at - PALETTES);
-    at += RESOURCE_SIZE;
-  }
-  PutGroup(m, TEXTURES, tex_entries);
-  PutGroup(m, PALETTES, plt_entries);
+  m.Put32(IMAGE + 0x44, PutBres(m, BRES, textures, palettes));
   // The match block's memory, the game's dead code.
   m.Fill(Block::BASE, Block::SIZE, 0x3A);
   return m;
@@ -227,6 +231,41 @@ FakeMemory StageSelect(bool pplus, int line_first = -1, u32 slot = 0x450)
     textures.push_back({"MenSelmapBack07", 128, 16, 0, {static_cast<u8>(line_first)}});
   }
   return Screen("scSelStage", slot, "sc_selmap_en", 20, textures, {});
+}
+
+// The main menu: mu_menumain_en (scene +0xAC0) with its page titles (MiscData 3: WITH ANYONE,
+// first texel 0, Project+'s second 0x6) and the MenuMain_en archive (MiscData 13) whose type 3
+// entry 16 holds With Anyone's second button (Brawl IA4, first texel 0x0F; Project+ RGB5A3 0x0FFF).
+// The ONLINE page's proc (scene +0x35C + 4 * 3) has its cursor (+0x42) at `cursor`.
+constexpr u32 MENU_PROC = 0x80930000;
+FakeMemory MainMenu(bool pplus, u16 cursor)
+{
+  FakeMemory m = Screen("muMenuMain", 0xAC0, "mu_menumain_en", 3,
+                        {{"MenMainTtlJ.12", 120, 16, 0, {static_cast<u8>(pplus ? 0x06 : 0x00)}}},
+                        {});
+  m.Put16(IMAGE + 6, 2);
+  // The second entry, 32-byte aligned after the first's data: the inner archive.
+  const u32 entry = (IMAGE + 0x60 + m.Read32(IMAGE + 0x44) + 31) & ~31u;
+  const u32 inner = entry + 0x20;
+  m.Fill(entry, 0x20);
+  m.Put16(entry, 1);
+  m.Put16(entry + 2, 13);
+  m.Fill(inner, 0x60);
+  m.Put32(inner, 0x41524300);
+  m.Put16(inner + 6, 1);
+  m.PutString(inner + 0x10, "MenuMain_en");
+  m.Put16(inner + 0x40, 3);
+  m.Put16(inner + 0x42, 16);
+  const Texture button =
+      pplus ? Texture{"MenMainWifi23", 160, 80, 5, {0x0F, 0xFF}} :
+              Texture{"MenMainWifi23", 160, 80, 2, {0x0F}};
+  const u32 bres_size = PutBres(m, inner + 0x60, {button}, {});
+  m.Put32(inner + 0x44, bres_size);
+  m.Put32(entry + 4, 0x60 + bres_size);
+  m.Put32(SCENE + 0x35C + 4 * 3, MENU_PROC);
+  m.Fill(MENU_PROC, 0x100);
+  m.Put16(MENU_PROC + 0x42, cursor);
+  return m;
 }
 
 void PutHeader(FakeMemory& m, Block::Mode mode)
@@ -368,4 +407,72 @@ TEST(OrcaRelabel, StageSelectsStaleMarkGoesAndTheLegendIsProjectPlusOwn)
   EXPECT_EQ(FindLine(StageSelect(false, 0x0A)).kind, Slot::Kind::None);
   // The archive in another word of the scene than the game's +0x450: the scan finds it.
   EXPECT_EQ(FindLine(StageSelect(false, -1, 0x1F0)).kind, Slot::Kind::HighNibble);
+}
+
+TEST(OrcaRelabel, TheLowNibblesMark)
+{
+  // An IA4 texel's intensity: the low nibble steps and wraps, the alpha (high nibble) is kept.
+  const Slot low{Slot::Kind::LowNibble, 0, 0xF, 1};
+  EXPECT_EQ(low.ValueFor(0, 0x0F), 0x0F);
+  EXPECT_EQ(low.ValueFor(1, 0x0F), 0x00);
+  EXPECT_EQ(low.ValueFor(1, 0x3F), 0x30);
+  EXPECT_EQ(low.LabelOf(0x00), 1);
+  EXPECT_EQ(low.LabelOf(0x0E), std::nullopt);
+}
+
+TEST(OrcaRelabel, WithAnyoneSaysBrawlOnlineWhenReachedThroughIt)
+{
+  for (const bool pplus : {false, true})
+  {
+    SCOPED_TRACE(pplus);
+    // Reached through With Anyone (the ONLINE page's cursor on its second button): the game's.
+    FakeMemory m = MainMenu(pplus, 1);
+    const Slot title = FindPageTitle(m);
+    const Slot button = FindSecondButton(m);
+    ASSERT_EQ(title.kind, Slot::Kind::HighNibble);
+    ASSERT_EQ(button.kind, pplus ? Slot::Kind::Byte : Slot::Kind::LowNibble);
+    const u8 title_game = pplus ? 0x06 : 0x00;
+    const u8 button_game = pplus ? 0xFF : 0x0F;
+    Shown shown;
+    EXPECT_EQ(Apply(m, {}, &shown), 0);
+    EXPECT_FALSE(shown.brawl_online);
+    // Through Brawl Online (cursor 2): both marked, the title's first texel's high nibble, the
+    // button's transparent first texel's colour.
+    m.Put16(MENU_PROC + 0x42, 2);
+    EXPECT_EQ(Apply(m, {}, &shown), 2);
+    EXPECT_TRUE(shown.brawl_online);
+    EXPECT_EQ(m.Read8(title.address), title_game | 0x10);
+    EXPECT_EQ(m.Read8(button.address), 0x00);
+    if (pplus)
+      EXPECT_EQ(m.Read8(button.address - 1), 0x0F);  // the alpha bits are kept: still transparent
+    EXPECT_EQ(Apply(m, {}, &shown), 0);
+    // Back on With Anyone's way: the game's again.
+    m.Put16(MENU_PROC + 0x42, 1);
+    EXPECT_EQ(Apply(m, {}, &shown), 2);
+    EXPECT_FALSE(shown.brawl_online);
+    EXPECT_EQ(m.Read8(title.address), title_game);
+    EXPECT_EQ(m.Read8(button.address), button_game);
+  }
+}
+
+TEST(OrcaRelabel, WithAnyonesTexturesAreOnlyTheGamesOwn)
+{
+  // A first texel the game never has: not the texture this knows, never written.
+  FakeMemory m = MainMenu(false, 2);
+  const Slot title = FindPageTitle(m);
+  ASSERT_NE(title.kind, Slot::Kind::None);
+  m.bytes[title.address] = 0x50;
+  EXPECT_EQ(FindPageTitle(m).kind, Slot::Kind::None);
+  const Slot button = FindSecondButton(m);
+  ASSERT_NE(button.kind, Slot::Kind::None);
+  m.bytes[button.address] = 0x1F;  // not transparent
+  EXPECT_EQ(FindSecondButton(m).kind, Slot::Kind::None);
+  m.bytes[button.address] = 0x07;
+  EXPECT_EQ(FindSecondButton(m).kind, Slot::Kind::None);
+  // Off the main menu: none.
+  FakeMemory off = MainMenu(true, 2);
+  off.PutString(NAMES, "scSelStage");
+  EXPECT_EQ(FindPageTitle(off).kind, Slot::Kind::None);
+  EXPECT_EQ(FindSecondButton(off).kind, Slot::Kind::None);
+  EXPECT_FALSE(WantedBrawlOnline(off));
 }

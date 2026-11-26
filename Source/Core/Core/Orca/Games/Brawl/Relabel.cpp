@@ -12,6 +12,7 @@
 #include "Core/Orca/Games/Brawl/CharOrder.h"
 #include "Core/Orca/Games/Brawl/MenuText.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/Games/Brawl/PPlus/RankedPPlus.h"
@@ -34,6 +35,10 @@ constexpr u32 ARC_MAGIC = 0x41524300;  // "ARC\0"
 constexpr u32 ARC_NAME = 0x10;
 constexpr u32 ARC_FIRST = 0x40;
 constexpr u32 CSS_FILE = 30;  // character select bres (MiscData 30)
+constexpr u32 MENU_TITLES_FILE = 3;  // mu_menumain_en's MiscData 3: the page titles' bres
+constexpr u32 MENU_MAIN_FILE = 13;   // its MiscData 13: the MenuMain_en archive
+constexpr u16 MENU_MAIN_TYPE = 3;    // whose buttons' bres are entries of type 3
+constexpr u32 WITH_ANYONE_FILE = 16;  // With Anyone's buttons
 constexpr u32 SSS_FILE = 20;  // stage select bres (MiscData 20)
 
 constexpr u32 BRES_MAGIC = 0x62726573;  // "bres"
@@ -55,7 +60,9 @@ constexpr u32 PLT0_DATA = 0x10;
 constexpr u32 PLT0_FORMAT = 0x18;
 constexpr u32 PLT0_COUNT = 0x1C;
 constexpr u32 FORMAT_I4 = 0;
+constexpr u32 FORMAT_IA4 = 2;
 constexpr u32 FORMAT_IA8 = 3;
+constexpr u32 FORMAT_RGB5A3 = 5;
 constexpr u32 PALETTE_RGB5A3 = 2;
 
 constexpr std::string_view TEXTURES = "Textures(NW4R)";
@@ -151,6 +158,26 @@ u32 SssBres(const GuestMemory& m, u32* word = nullptr)
   return 0;
 }
 
+// The main menu's page titles' bres and MenuMain_en's With Anyone bres, while muMenuMain runs.
+u32 MenuTitlesBres(const GuestMemory& m)
+{
+  return Scene(m, "muMenuMain") ? Bres(m, FindMenuArchive(m), MENU_TITLES_FILE) : 0;
+}
+
+u32 WithAnyoneBres(const GuestMemory& m)
+{
+  if (!Scene(m, "muMenuMain"))
+    return 0;
+  const u32 inner = FindArchiveFile(m, FindMenuArchive(m), MENU_MAIN_FILE);
+  if (!Pointer(m, inner) || !m.Valid(inner + ARC_FIRST - 1) || m.Read32(inner) != ARC_MAGIC ||
+      !StringAt(m, inner + ARC_NAME, "MenuMain_en"))
+  {
+    return 0;
+  }
+  const u32 bres = FindArchiveFile(m, inner, WITH_ANYONE_FILE, MENU_MAIN_TYPE);
+  return Pointer(m, bres) && m.Valid(bres + 0x10 - 1) && m.Read32(bres) == BRES_MAGIC ? bres : 0;
+}
+
 // The data of the entry named `name` in the bres index group at `group`, or 0.
 u32 GroupEntry(const GuestMemory& m, u32 group, std::string_view name)
 {
@@ -213,6 +240,8 @@ u16 Slot::ValueFor(int label, u16 now) const
     return static_cast<u16>(game + label);
   case Kind::HighNibble:
     return static_cast<u16>((((game + label) & 0xF) << 4) | (now & 0xF));
+  case Kind::LowNibble:
+    return static_cast<u16>((now & 0xF0) | ((game + label) & 0xF));
   case Kind::Byte:
     return static_cast<u16>((game + label) & 0xFF);
   case Kind::None:
@@ -323,6 +352,31 @@ std::array<Slot, 2> FindLegend(const GuestMemory& m)
   return LegendIn(m, SssBres(m));
 }
 
+Slot FindPageTitle(const GuestMemory& m)
+{
+  // WITH ANYONE's first texel is 0 in both games (Project+'s second is not).
+  const u32 data = TextureData(m, MenuTitlesBres(m), "MenMainTtlJ.12", 120, 16, FORMAT_I4);
+  return data ? Checked({Slot::Kind::HighNibble, data, 0, 1}, m) : Slot{};
+}
+
+Slot FindSecondButton(const GuestMemory& m)
+{
+  // The first texel is transparent white in both games: Brawl's IA4 byte 0x0F (the mark takes its
+  // intensity to 0), Project+'s RGB5A3 0x0FFF (the mark takes its low byte, green and blue, to 0).
+  const u32 bres = WithAnyoneBres(m);
+  if (const u32 data = TextureData(m, bres, "MenMainWifi23", 160, 80, FORMAT_IA4);
+      data && m.Read8(data) >> 4 == 0)
+  {
+    return Checked({Slot::Kind::LowNibble, data, 0xF, 1}, m);
+  }
+  if (const u32 data = TextureData(m, bres, "MenMainWifi23", 160, 80, FORMAT_RGB5A3);
+      data && m.Read8(data) == 0x0F)
+  {
+    return Checked({Slot::Kind::Byte, data + 1, 0xFF, 1}, m);
+  }
+  return {};
+}
+
 Band WantedBand(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
 {
   // Ranked games after the first follow the character order. In Free order the loser is asked
@@ -394,6 +448,11 @@ bool WantedLegend(const GuestMemory& m)
   return header.present && header.mode == Rules::Mode::Ranked && StageCursors::Read(m).has_value();
 }
 
+bool WantedBrawlOnline(const GuestMemory& m)
+{
+  return OnlineCursorOnBrawlOnline(m);
+}
+
 bool BandUp(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
 {
   const Queue::View view = Queue::ReadView(m, ports);
@@ -448,6 +507,14 @@ int Apply(GuestMemory& m, const std::vector<Events::PortInfo>& ports, Shown* sho
     put(legend[0], now.legend ? 1 : 0);
     put(legend[1], now.legend ? 1 : 0);
   }
+  const Slot page_title = FindPageTitle(m);
+  const Slot second_button = FindSecondButton(m);
+  if (page_title.kind != Slot::Kind::None || second_button.kind != Slot::Kind::None)
+  {
+    now.brawl_online = WantedBrawlOnline(m);
+    put(page_title, now.brawl_online ? 1 : 0);
+    put(second_button, now.brawl_online ? 1 : 0);
+  }
   if (shown)
     *shown = now;
   return written;
@@ -471,15 +538,16 @@ Shown Frame(const Core::CPUThreadGuard& guard, bool resimulating,
     NOTICE_LOG_FMT(ROLLBACK, "Orca: relabels: the stage select's archive is its scene's word {} "
                    "(+0x{:x})", word, 4 * word);
   }
-  s_shown.store(0x80000000u | (shown.band_up ? 1u << 14 : 0u) | (u32(shown.band) << 12) |
+  s_shown.store(0x80000000u | (shown.brawl_online ? 1u << 15 : 0u) |
+                    (shown.band_up ? 1u << 14 : 0u) | (u32(shown.band) << 12) |
                     (u32(shown.line) << 4) | (u32(shown.title) << 1) | (shown.legend ? 1u : 0u),
                 std::memory_order_relaxed);
   // Only logged outside re-simulation; a rollback re-run writes the same values again.
   if (written)
   {
-    NOTICE_LOG_FMT(ROLLBACK, "Orca: relabels band {} line {} title {} legend {}",
+    NOTICE_LOG_FMT(ROLLBACK, "Orca: relabels band {} line {} title {} legend {} brawl online {}",
                    static_cast<int>(shown.band), shown.line, static_cast<int>(shown.title),
-                   shown.legend);
+                   shown.legend, shown.brawl_online);
   }
   return shown;
 }
@@ -495,6 +563,7 @@ Shown Current()
   s.title = static_cast<Title>((v >> 1) & 3);
   s.legend = v & 1;
   s.band_up = (v >> 14) & 1;
+  s.brawl_online = (v >> 15) & 1;
   return s;
 }
 }  // namespace Orca::UX::Relabel

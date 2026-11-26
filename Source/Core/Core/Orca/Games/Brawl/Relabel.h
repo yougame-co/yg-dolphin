@@ -17,7 +17,8 @@ class CPUThreadGuard;
 
 // Relabels the game's big menu words with Orca's meaning: READY TO FIGHT! on the character select
 // (PRESS START TO LOCK IN!, ...), STAGE SELECT (whose turn to strike, ban or pick), the mode title
-// (RANKED, CASUAL) and Project+'s stage select legend.
+// (RANKED, CASUAL), Project+'s stage select legend, and the With Anyone page's title and second
+// button when that page was opened through the ONLINE page's Brawl Online button.
 //
 // Orca never draws into the game's art. It changes one invisible value in the texture so that
 // Dolphin's custom-texture hash gives a different name per label, and the Orca texture pack
@@ -65,6 +66,7 @@ struct Slot
     None,
     PaletteEntry,  // u16 RGB5A3 entry: game value + step * label
     HighNibble,    // high nibble of an I4 texel byte: (game value + label) mod 16
+    LowNibble,     // low nibble of a texel byte (an IA4 texel's intensity): (game value + label) mod 16
     Byte,          // IA8 texel intensity byte: game value + label
   };
   Kind kind = Kind::None;
@@ -84,12 +86,21 @@ Slot FindBand(const GuestMemory& memory);
 Slot FindLine(const GuestMemory& memory);
 Slot FindTitle(const GuestMemory& memory);
 std::array<Slot, 2> FindLegend(const GuestMemory& memory);  // Project+: words, buttons
+// The With Anyone page's title (MenMainTtlJ.12, I4 120x16, WITH ANYONE; mark in its first texel)
+// and its second button's label (MenMainWifi23, TEAM BATTLE, which the pack shows as Ranked; Brawl
+// IA4 160x80, mark in a transparent texel's intensity; Project+ RGB5A3, mark in a transparent
+// texel's blue and green). Label 1: BRAWL ONLINE and With Friends.
+Slot FindPageTitle(const GuestMemory& memory);
+Slot FindSecondButton(const GuestMemory& memory);
 
 // What each label should say now (pure).
 Band WantedBand(const GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
 Line WantedLine(const GuestMemory& memory);
 Title WantedTitle(const GuestMemory& memory);
 bool WantedLegend(const GuestMemory& memory);
+// Whether With Anyone's page says Brawl Online: the ONLINE page's cursor is on its Brawl Online
+// button (OnlineMenu.h), which it keeps while the page that button opens runs.
+bool WantedBrawlOnline(const GuestMemory& memory);
 
 // Whether READY TO FIGHT! is on screen (pure).
 bool BandUp(const GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
@@ -109,6 +120,7 @@ struct Shown
   Title title = Title::Game;
   bool legend = false;
   bool band_up = false;  // BandUp, where there is a band to label
+  bool brawl_online = false;  // With Anyone's page title and second button
   bool operator==(const Shown&) const = default;
 };
 

@@ -244,6 +244,33 @@ void ExpectOnlineGates(const std::vector<GamePatch>& patches, u32 module)
     EXPECT_TRUE(GroupApplies(g, Originals(g)));
     EXPECT_TRUE(GroupApplies(caves, Originals(caves)));
   }
+  // Back from With Anyone's page the ONLINE page's init sets its cursor to 1 (With Anyone); the
+  // store branches to a cave that skips it while the cursor is 2 (Brawl Online), then returns.
+  {
+    const auto g = GroupAt(patches, 0x81179BD4 + module);
+    ASSERT_EQ(g.size(), 8u);
+    const std::vector<u32> originals = Originals(g);
+    EXPECT_EQ(std::vector<u32>(originals.begin(), originals.end() - 1),
+              (std::vector<u32>{0x38A00001, 0x3800001B, 0x90BE0664, 0x7FC3F378, 0x38800001,
+                                0xB0BE0042, 0x901E0638}));
+    EXPECT_EQ(BranchTarget(g[7].address, originals[7]), std::optional<u32>(0x806A5770));
+    EXPECT_EQ(originals[7] & 1, 1u);  // bl: lights the cursor's button
+    for (const size_t guard : {0u, 1u, 2u, 3u, 4u, 6u, 7u})
+      EXPECT_EQ(g[guard].value, *g[guard].original) << guard;
+    EXPECT_EQ(BranchTarget(g[5].address, g[5].value), std::optional<u32>(0x806F77C0));
+    EXPECT_EQ(g[5].value & 1, 0u);
+    const auto cave = GroupAt(patches, 0x806F77C0);
+    ASSERT_EQ(cave.size(), 5u);
+    EXPECT_EQ(Originals(cave),
+              (std::vector<u32>{0x9421FFB0, 0x7C0802A6, 0x90010054, 0x39610050, 0x4BCF9B1D}));
+    const std::vector<u32> code{0xA19E0042, 0x280C0002, 0x41820008, 0xB0BE0042};
+    for (size_t i = 0; i < code.size(); ++i)
+      EXPECT_EQ(cave[i].value, code[i]) << i;
+    EXPECT_EQ(BranchTarget(cave[4].address, cave[4].value), std::optional<u32>(g[6].address));
+    EXPECT_EQ(cave[4].value & 1, 0u);
+    EXPECT_TRUE(GroupApplies(g, Originals(g)));
+    EXPECT_TRUE(GroupApplies(cave, Originals(cave)));
+  }
   // G4: sora_scene's exit table, the same in both games: every online code goes to Orca's block
   // (the friend list's old entry), which starts local Versus (sqVsMelee); code 28 untouched.
   {
@@ -597,8 +624,9 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
   // game's texture (Brawl's BRAWL, Project+'s VERSUS) with its palette marked for that mode. And
   // the texture relabels (Relabel.h): READY TO FIGHT!'s three in each game, STAGE SELECT's
   // thirteen in each, the stage select's RANKED and CASUAL in each, Project+'s legend's two, and
-  // the ONLINE page's Brawl Online button in each.
-  EXPECT_EQ(bases.size(), 12u + 6u + 26u + 4u + 2u + 2u);
+  // the ONLINE page's Brawl Online button in each, and With Anyone's page reached through it (its
+  // title and its With Friends row) in each.
+  EXPECT_EQ(bases.size(), 12u + 6u + 26u + 4u + 2u + 2u + 4u);
   std::map<std::pair<u32, u32>, std::set<std::string>> titles;
   for (const auto& [stem, size] : bases)
   {
@@ -671,11 +699,11 @@ TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
         std::filesystem::path(directory + "/").lexically_normal().string());
   };
 
-  // In a session: Orca's fifty-two names are Orca's, wherever else they are; every other name is the
+  // In a session: Orca's fifty-six names are Orca's, wherever else they are; every other name is the
   // player's. Mip level files (<name>_mip<N>) load with their texture, never as one of their own.
   {
     const auto files = by_id(CollectHiresTextureFiles({player, player2}, {orca}));
-    ASSERT_EQ(files.size(), 53u);
+    ASSERT_EQ(files.size(), 57u);
     for (const auto& [id, f] : files)
     {
       SCOPED_TRACE(id);
@@ -700,7 +728,7 @@ TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
     EXPECT_FALSE(files.at(title).has_arbitrary_mipmaps);
   }
   // A session with no pack of the player's: Orca's alone.
-  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 52u);
+  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 56u);
 }
 
 namespace
@@ -1295,7 +1323,7 @@ constexpr const char* TAKEN_OUT[] = {
     "Nintendo WFC",   "(Discontinued)",   "(Project M not compatible!)",
     "(No names)",     "2-on-2",           "Register",
     "registered",     "defeat enemies",   "Home-Run Contest",
-    "10 bosses",      "(2 players)"};
+    "10 bosses",      "(2 players)",      "Smash Service"};
 }  // namespace
 
 TEST(OrcaOnlineMenuText, EveryEditFitsItsSlotAndSaysNothingOfNintendo)
@@ -1322,6 +1350,37 @@ TEST(OrcaOnlineMenuText, EveryEditFitsItsSlotAndSaysNothingOfNintendo)
     EXPECT_TRUE(names_it);
     for (const char* what : TAKEN_OUT)
       EXPECT_EQ(e.text.find(what), std::string_view::npos) << what;
+    // A Brawl Online variant follows the same rules.
+    if (!e.brawl_online.empty())
+    {
+      EXPECT_LE(e.brawl_online.size(), e.original.size());
+      EXPECT_EQ(e.brawl_online.substr(0, 7), e.original.substr(0, 7));
+      EXPECT_EQ(e.brawl_online.back(), '\x13');
+      for (size_t i = 7; i + 1 < e.brawl_online.size(); ++i)
+        EXPECT_GE(static_cast<u8>(e.brawl_online[i]), 0x20) << i;
+      EXPECT_NE(e.brawl_online.find("Brawl Online"), std::string_view::npos);
+      for (const char* what : TAKEN_OUT)
+        EXPECT_EQ(e.brawl_online.find(what), std::string_view::npos) << what;
+    }
+  }
+}
+
+TEST(OrcaOnlineMenuText, TheThirdButtonSaysBrawlOnlineNotOptions)
+{
+  // The ONLINE page's third button opens Brawl Online, so its description (message 20) no longer
+  // speaks of Spectator Mode and the Smash Service. Both games, the same words.
+  for (const char* colour : {BRAWL_COLOUR, PPLUS_COLOUR})
+  {
+    SCOPED_TRACE(colour == BRAWL_COLOUR ? "Brawl" : "Project+");
+    const auto it = std::find_if(MenuTextEdits().begin(), MenuTextEdits().end(),
+                                 [&](const MenuTextEdit& e) {
+                                   return e.file == 5 && e.message == 20 &&
+                                          e.original.substr(0, 7) == colour;
+                                 });
+    ASSERT_NE(it, MenuTextEdits().end());
+    EXPECT_EQ(it->original, std::string(colour) + "About Spectator Mode & the Smash Service.\x13");
+    EXPECT_EQ(it->text, std::string(colour) + "Play on Brawl Online's servers.\x13");
+    EXPECT_TRUE(it->brawl_online.empty());
   }
 }
 
@@ -1611,6 +1670,105 @@ TEST(OrcaOnlineMenuText, WritesNothingUnlessItIsTheMenusOwnText)
     n.Write32(IMAGE + 0x40 + 4, 0xFFFFFF00);
     EXPECT_EQ(FindArchiveFile(n, IMAGE, 5), 0u);
   }
+}
+
+namespace
+{
+// The ONLINE page's proc (muMenuMain proc 3, scene +0x35C + 4 * 3) at 0x80930000, its cursor at +0x42.
+void OnlineCursor(FakeMemory& m, u16 cursor)
+{
+  m.Fill(0x80930000, 0x50);
+  m.Write32(0x80910000 + 0x35C + 3 * 4, 0x80930000);
+  m.Write16(0x80930042, cursor);
+  m.writes = 0;
+}
+}  // namespace
+
+TEST(OrcaOnlineMenuText, WithAnyonesRowsSayBrawlOnlineWhenReachedThroughIt)
+{
+  // With Anyone's page opened from the ONLINE page's third button is Brawl Online's: its rows
+  // (messages 51 and 52) say so while that button keeps the cursor, and With Anyone's words come
+  // back as soon as it leaves, in the same slots.
+  for (const char* colour : {BRAWL_COLOUR, PPLUS_COLOUR})
+  {
+    SCOPED_TRACE(colour == BRAWL_COLOUR ? "Brawl" : "Project+");
+    const MenuTextEdit& casual = Edit(5, 51, colour);
+    const MenuTextEdit& second = Edit(5, 52, colour);
+    EXPECT_NE(casual.brawl_online.find("quick"), std::string_view::npos);
+    EXPECT_NE(second.brawl_online.find("friends on Brawl Online"), std::string_view::npos);
+    std::vector<std::string> five = Placeholders(53);
+    five[51] = std::string(casual.original);
+    five[52] = std::string(second.original);
+    FakeMemory m = MainMenu();
+    const auto where = WriteArchive(m, {{5, five}});
+    const u32 file = where.at(5);
+    const auto slot = [&](u32 message, size_t n) {
+      return Bytes(m, file + m.Read32(file + 4 * message), n);
+    };
+    const auto padded = [](std::string_view text, size_t n) {
+      std::string out(text);
+      out.resize(n, '\0');
+      return out;
+    };
+    const FakeMemory pristine = m;
+
+    // No ONLINE page proc: With Anyone's words.
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 2);
+    EXPECT_EQ(slot(51, casual.original.size()), padded(casual.text, casual.original.size()));
+    EXPECT_EQ(slot(52, second.original.size()), padded(second.text, second.original.size()));
+
+    // The cursor comes onto Brawl Online: both rows swap, once.
+    OnlineCursor(m, 2);
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 2);
+    EXPECT_EQ(slot(51, casual.original.size()), padded(casual.brawl_online, casual.original.size()));
+    EXPECT_EQ(slot(52, second.original.size()), padded(second.brawl_online, second.original.size()));
+    m.writes = 0;
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 0);
+    EXPECT_EQ(m.writes, 0);
+
+    // Back on With Anyone (cursor 1) or With Friends (0): With Anyone's words again.
+    for (const u16 cursor : {u16{1}, u16{0}})
+    {
+      OnlineCursor(m, 2);
+      ApplyMenuText(m, MenuTextEdits());
+      OnlineCursor(m, cursor);
+      EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 2);
+      EXPECT_EQ(slot(51, casual.original.size()), padded(casual.text, casual.original.size()));
+      EXPECT_EQ(slot(52, second.original.size()), padded(second.text, second.original.size()));
+    }
+
+    // Straight from the game's own words to Brawl Online's.
+    m = pristine;
+    OnlineCursor(m, 2);
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 2);
+    EXPECT_EQ(slot(52, second.original.size()), padded(second.brawl_online, second.original.size()));
+
+    // Anything else in the slot is never touched, whichever way the page was reached.
+    m = pristine;
+    m.bytes[file + m.Read32(file + 4 * 52) + 9] ^= 1;
+    OnlineCursor(m, 2);
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 1);
+    EXPECT_NE(slot(52, second.brawl_online.size()), second.brawl_online);
+  }
+}
+
+TEST(OrcaOnlineMenuText, TheBoxTakesTheBrawlOnlineWordsToo)
+{
+  // A box that formatted the Ranked row from the game's own words while the page was reached
+  // through Brawl Online gets Brawl Online's words, as the slot does.
+  const MenuTextEdit& second = Edit(5, 52, BRAWL_COLOUR);
+  std::vector<std::string> five = Placeholders(53);
+  five[52] = std::string(second.original);
+  FakeMemory m = MainMenu();
+  const auto where = WriteArchive(m, {{5, five}});
+  WriteDescription(m, where.at(5), 52, BOX_PREFIX + std::string(second.original));
+  OnlineCursor(m, 2);
+  int in_box = -1;
+  EXPECT_EQ(ApplyMenuText(m, MenuTextEdits(), &in_box), 2);
+  EXPECT_EQ(in_box, 1);
+  const u32 at = BUFFER + static_cast<u32>(BOX_PREFIX.size());
+  EXPECT_EQ(Bytes(m, at, second.brawl_online.size()), second.brawl_online);
+  EXPECT_EQ(m.Read8(at + static_cast<u32>(second.brawl_online.size())), 0);
 }
 
 // Both games boot to the main menu. Brawl's boot goes there through its own

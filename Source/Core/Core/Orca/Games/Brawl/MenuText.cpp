@@ -11,6 +11,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
+#include "Core/Orca/Games/Brawl/OnlineMenu.h"
 
 namespace Orca::UX
 {
@@ -29,7 +30,7 @@ using namespace std::string_view_literals;
 
 // Originals verified byte for byte against each game's mu_menumain archive. Grouped by file so
 // each file is looked up once per frame.
-constexpr std::array<MenuTextEdit, 19> EDITS{{
+constexpr std::array<MenuTextEdit, 21> EDITS{{
     // Footer under the Online button.
     {5, 2, BRAWL "Play different modes while connected to " BRAWL "Nintendo WFC." END END ""sv,
      BRAWL "Play different modes online." END ""sv},
@@ -44,16 +45,25 @@ constexpr std::array<MenuTextEdit, 19> EDITS{{
     // With Anyone (Project+ only).
     {5, 19, PPLUS "Play against random people! (Project M not compatible!)" END ""sv,
      PPLUS "Play against random people!" END ""sv},
-    // With Anyone's first button, now Casual.
+    // The third button, once Options and now Brawl Online.
+    {5, 20, BRAWL "About Spectator Mode & the Smash Service." END ""sv,
+     BRAWL "Play on Brawl Online's servers." END ""sv},
+    {5, 20, PPLUS "About Spectator Mode & the Smash Service." END ""sv,
+     PPLUS "Play on Brawl Online's servers." END ""sv},
+    // With Anyone's first button, now Casual (through Brawl Online, its Casual).
     {5, 51, BRAWL "Go online for a quick brawl with someone, somewhere. (No names)" END ""sv,
-     BRAWL "Go online for a quick brawl with someone, somewhere." END ""sv},
+     BRAWL "Go online for a quick brawl with someone, somewhere." END ""sv,
+     BRAWL "A quick brawl on Brawl Online." END ""sv},
     {5, 51, PPLUS "Go online for a quick fight with someone, somewhere. (No names)" END ""sv,
-     PPLUS "Go online for a quick fight with someone, somewhere." END ""sv},
-    // With Anyone's second button, now Ranked.
+     PPLUS "Go online for a quick fight with someone, somewhere." END ""sv,
+     PPLUS "A quick fight on Brawl Online." END ""sv},
+    // With Anyone's second button, now Ranked; through Brawl Online, With Friends.
     {5, 52, BRAWL "Form a team with someone, somewhere for a 2-on-2 battle!" END ""sv,
-     BRAWL "Brawl someone at your level for a higher rank!" END ""sv},
+     BRAWL "Brawl someone at your level for a higher rank!" END ""sv,
+     BRAWL "Play friends on Brawl Online." END ""sv},
     {5, 52, PPLUS "Form a team with someone, somewhere for a 2-on-2 battle!" END ""sv,
-     PPLUS "Fight someone at your level for a higher rank!" END ""sv},
+     PPLUS "Fight someone at your level for a higher rank!" END ""sv,
+     PPLUS "Play friends on Brawl Online." END ""sv},
     // The With Friends page's buttons. The page is no longer reachable, but every button would
     // lead to the Versus character select, so none may promise another mode or a roster.
     // Friend Roster.
@@ -101,7 +111,6 @@ constexpr u32 ARC_COUNT = 0x6;           // u16 entry count
 constexpr u32 ARC_NAME = 0x10;
 constexpr u32 ARC_FIRST = 0x40;
 constexpr u32 ENTRY_HEADER = 0x20;  // u16 type, u16 index, u32 size, ...; data follows
-constexpr u16 TYPE_MISC = 1;
 constexpr u32 MAX_ENTRIES = 64;
 constexpr u32 MAX_MESSAGES = 1024;
 // Description box offsets (see MenuText.h).
@@ -167,7 +176,7 @@ u32 FindMenuArchive(const GuestMemory& m)
   return 0;
 }
 
-u32 FindArchiveFile(const GuestMemory& m, u32 archive, u32 file)
+u32 FindArchiveFile(const GuestMemory& m, u32 archive, u32 file, u16 file_type)
 {
   if (!Pointer(m, archive) || !m.Valid(archive + ARC_FIRST - 1))
     return 0;
@@ -181,7 +190,7 @@ u32 FindArchiveFile(const GuestMemory& m, u32 archive, u32 file)
     const u16 index = m.Read16(entry + 2);
     const u32 size = m.Read32(entry + 4);
     const u32 data = entry + ENTRY_HEADER;
-    if (type == TYPE_MISC && index == file)
+    if (type == file_type && index == file)
       return m.Valid(data) && (size == 0 || m.Valid(data + size - 1)) ? data : 0;
     // Entries are 32-byte aligned.
     const u64 next = (static_cast<u64>(data) + size + 31) & ~u64{31};
@@ -231,7 +240,8 @@ MenuDescription FindMenuDescription(const GuestMemory& m, u32 messages)
   return {buffer, length, m.Read32(panel + PANEL_MESSAGE)};
 }
 
-int ApplyMenuDescription(GuestMemory& m, u32 messages, std::span<const MenuTextEdit> edits)
+int ApplyMenuDescription(GuestMemory& m, u32 messages, std::span<const MenuTextEdit> edits,
+                         bool through_brawl_online)
 {
   const MenuDescription d = FindMenuDescription(m, messages);
   if (!d.buffer)
@@ -250,8 +260,9 @@ int ApplyMenuDescription(GuestMemory& m, u32 messages, std::span<const MenuTextE
     // Write what the game would have formatted from the rewritten message; the length is
     // unchanged.
     const u32 from = d.buffer + static_cast<u32>(at - now.begin());
+    const std::string_view text = e.Wanted(through_brawl_online);
     for (size_t i = 0; i < e.original.size(); ++i)
-      m.Write8(from + static_cast<u32>(i), i < e.text.size() ? static_cast<u8>(e.text[i]) : 0);
+      m.Write8(from + static_cast<u32>(i), i < text.size() ? static_cast<u8>(text[i]) : 0);
     return 1;
   }
   return 0;
@@ -264,6 +275,7 @@ int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits, int* in_b
   const u32 archive = FindMenuArchive(m);
   if (!archive)
     return 0;
+  const bool brawl_online = OnlineCursorOnBrawlOnline(m);
   int written = 0;
   u32 file_for = ~0u, messages = 0;
   for (const MenuTextEdit& e : edits)
@@ -285,22 +297,33 @@ int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits, int* in_b
     const u32 from = m.Read32(messages + 4 * e.message);
     const u32 to = m.Read32(messages + 4 * (e.message + 1));
     if (to < from || to - from != e.original.size() || e.text.size() > e.original.size() ||
-        !m.Valid(messages + to - 1))
+        e.brawl_online.size() > e.original.size() || !m.Valid(messages + to - 1))
     {
       continue;
     }
     const u32 at = messages + from;
-    bool same = true;
-    for (size_t i = 0; i < e.original.size() && same; ++i)
-      same = m.Read8(at + static_cast<u32>(i)) == static_cast<u8>(e.original[i]);
-    if (!same)
+    // The slot holds the original or one of this edit's replacements, zero-padded.
+    const auto holds = [&](std::string_view text) {
+      for (size_t i = 0; i < e.original.size(); ++i)
+      {
+        if (m.Read8(at + static_cast<u32>(i)) != (i < text.size() ? static_cast<u8>(text[i]) : 0))
+          return false;
+      }
+      return true;
+    };
+    const std::string_view want = e.Wanted(brawl_online);
+    if (holds(want) ||
+        !(holds(e.original) || holds(e.text) || (!e.brawl_online.empty() && holds(e.brawl_online))))
+    {
       continue;
+    }
     for (size_t i = 0; i < e.original.size(); ++i)
-      m.Write8(at + static_cast<u32>(i), i < e.text.size() ? static_cast<u8>(e.text[i]) : 0);
+      m.Write8(at + static_cast<u32>(i), i < want.size() ? static_cast<u8>(want[i]) : 0);
     ++written;
   }
   // Then fix a box that formatted a message before it was rewritten.
-  const int box = ApplyMenuDescription(m, FindArchiveFile(m, archive, DESCRIPTION_FILE), edits);
+  const int box =
+      ApplyMenuDescription(m, FindArchiveFile(m, archive, DESCRIPTION_FILE), edits, brawl_online);
   if (in_box)
     *in_box = box;
   return written + box;

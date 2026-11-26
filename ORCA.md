@@ -1749,8 +1749,12 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
   goes straight to the page. Either row goes to the local Versus character select, prints
   `orca menu online brawlonline casual|friends` and shows a panel over it (`UX/BrawlOnlineEntry.h`)
   saying the test build sends nothing to Brawl Online; B backs out to the With Anyone page. Nothing
-  searches and no network path exists. The page's title and second row still draw the game's own
-  With Anyone / Ranked art.
+  searches and no network path exists. Reached this way the page's title reads BRAWL ONLINE and its
+  second row WITH FRIENDS (`Games/Brawl/Relabel.h` marks the game's With Anyone title and Team Battle
+  textures; Orca's pack holds the new art), and the rows' descriptions name Brawl Online. Reached
+  through With Anyone, the page is unchanged. With Brawl Online highlighted, the ONLINE page says
+  "Play on Brawl Online's servers." instead of the Spectator line. B from its page leaves the
+  ONLINE page's cursor on Brawl Online.
 - **With Anyone** shows CASUAL and RANKED. Either goes to the local Versus character select and Orca
   prints `orca menu online casual|ranked` (with the app's `host` cap; `... local` without).
 - **With Friends** goes straight to the local Versus character select, where friends drop in, and
@@ -1765,7 +1769,8 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
   ONLINE page's B does what the game does after its disconnect window says OK; A on With Friends
   leaves the menu with exit code 25; Spectator is never enabled; Options is enabled and opens the
   With Anyone page, where a cave turns Casual and Ranked into codes 32 and 33 while the ONLINE
-  page's cursor is on its third button; the main menu's exit table sends codes 24-27, 29, 30
+  page's cursor is on its third button, and the ONLINE page's init keeps that cursor on its way
+  back from the page (it would put it on With Anyone); the main menu's exit table sends codes 24-27, 29, 30
   (Casual), 31 (Ranked), 32 and 33 (Brawl Online Casual and With Friends) to Orca's block, which
   starts the local Versus scene. No online scene, network thread or DWC is ever entered.
 - **The back out.** Orca's block keeps the exit code in sqVsMelee's object (`+0x18`, slack in its

@@ -132,7 +132,7 @@ std::optional<OnlinePick> PickForExitCode(u32 exit_code)
   }
 }
 
-bool OnBrawlOnlinePage(const GuestMemory& m)
+bool OnlineCursorOnBrawlOnline(const GuestMemory& m)
 {
   if (ReadSceneName(m) != "muMenuMain")
     return false;
@@ -140,15 +140,21 @@ bool OnBrawlOnlinePage(const GuestMemory& m)
   if (!Pointer(m, manager + MANAGER_SCENE))
     return false;
   const u32 menu = m.Read32(manager + MANAGER_SCENE);
-  if (!Pointer(m, menu + MENU_PAGE) || m.Read32(menu + MENU_PAGE) != PAGE_WITH_ANYONE)
-    return false;
   const u32 procs = menu + MENU_PROCS;
-  if (!Pointer(m, procs + 4 * PAGE_ONLINE))
+  if (!Pointer(m, menu) || !Pointer(m, procs + 4 * PAGE_ONLINE))
     return false;
   const u32 online = m.Read32(procs + 4 * PAGE_ONLINE);
   if (!Pointer(m, online) || !m.Valid(online + PROC_CURSOR + 1))
     return false;
   return m.Read16(online + PROC_CURSOR) == ONLINE_BRAWL_ONLINE;
+}
+
+bool OnBrawlOnlinePage(const GuestMemory& m)
+{
+  if (!OnlineCursorOnBrawlOnline(m))
+    return false;
+  const u32 menu = m.Read32(m.Read32(SCENE_MANAGER) + MANAGER_SCENE);
+  return Pointer(m, menu + MENU_PAGE) && m.Read32(menu + MENU_PAGE) == PAGE_WITH_ANYONE;
 }
 
 bool BrawlOnlineRowCode(u32 code)

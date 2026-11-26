@@ -246,6 +246,27 @@
 806F77B0 80010014 38840002    # addi   r4, r4, 2 (32 Brawl Online Casual, 33 its With Friends)
 806F77B4 7C0803A6 48A9AC00    # b      0x811923B4 (back where the rows join)
 
+# Back from With Anyone's page (B on it), the ONLINE page's init (muProcWifi, previous page 0x1B)
+# puts its cursor on With Anyone (1) before it lights the button.
+# When the player came from Brawl Online the cursor is still 2 (it stays there while With Anyone's
+# page runs), so the cave below keeps it there and Brawl Online stays lit; from With Anyone itself
+# it is 1 and nothing changes. The hook's group guards the whole return path so it only lands on
+# the code it was found in; the cave (sora_scene's free space) is written at boot.
+81179BD4 38A00001 38A00001    # li   r5, 1 (guard)
+81179BD8 3800001B 3800001B    # li   r0, 0x1B (guard)
+81179BDC 90BE0664 90BE0664    # stw  r5, 0x664(r30) (guard)
+81179BE0 7FC3F378 7FC3F378    # mr   r3, r30 (guard)
+81179BE4 38800001 38800001    # li   r4, 1 (guard)
+81179BE8 B0BE0042 4B57DBD8    # sth r5, 0x42(r30) -> b 0x806F77C0 (the cave)
+81179BEC 901E0638 901E0638    # stw  r0, 0x638(r30) (guard)
+81179BF0 4B52BB81 4B52BB81    # bl   0x806A5770 (lights the cursor's button; guard)
+
+806F77C0 9421FFB0 A19E0042    # lhz    r12, 0x42(r30) (the cursor)
+806F77C4 7C0802A6 280C0002    # cmplwi r12, 2 (Brawl Online)
+806F77C8 90010054 41820008    # beq    +8 (keep it)
+806F77CC 39610050 B0BE0042    # sth    r5, 0x42(r30) (With Anyone, as before)
+806F77D0 4BCF9B1D 48A8241C    # b      0x81179BEC (back to the init)
+
 # sqMenuMain::setNext's table (sora_scene, resident; one entry per main-menu exit code, which the
 # menu leaves at [0x805A0060]+0x284): every online code goes to the local Versus character select
 # that Group > Brawl (code 1) opens, through the block below. 24-27 are With Friends' modes

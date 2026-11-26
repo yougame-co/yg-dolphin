@@ -22,8 +22,9 @@ class CPUThreadGuard;
 // descriptions) are message files: a table of u32 offsets, then single-byte text with inline
 // colour codes.
 //
-// A message is only rewritten while its bytes exactly match the game's, in place and never longer
-// (zero-padded). It is a pure function of memory applied every frame on both machines, before
+// A message is only rewritten while its bytes exactly match the game's or one of its own
+// replacements, in place and never longer (zero-padded). A message with a Brawl Online variant
+// swaps between its two replacements as the ONLINE page's cursor comes onto or leaves that button. It is a pure function of memory applied every frame on both machines, before
 // snapshots, so rollback state always includes it. Covered by UX kCompatVersion.
 //
 // The description box draws from its own formatted copy. When the menu opens straight onto a page
@@ -41,6 +42,15 @@ struct MenuTextEdit
   u32 message;                // message index in that file
   std::string_view original;  // the game's original bytes
   std::string_view text;      // replacement, no longer than the original (zero-padded)
+  // With Anyone's rows say this instead while the page was reached through the ONLINE page's
+  // Brawl Online button (OnlineCursorOnBrawlOnline); empty: `text` either way. No longer than the
+  // original either. The slot swaps between the two in place.
+  std::string_view brawl_online = {};
+  // What the slot should say now.
+  std::string_view Wanted(bool through_brawl_online) const
+  {
+    return through_brawl_online && !brawl_online.empty() ? brawl_online : text;
+  }
 };
 
 // Edits for both games; each one only matches its own game's original.
@@ -48,8 +58,8 @@ std::span<const MenuTextEdit> MenuTextEdits();
 
 // The main menu's archive image, or 0 if it isn't loaded.
 u32 FindMenuArchive(const GuestMemory& memory);
-// Address of MiscData `file` in that image, or 0.
-u32 FindArchiveFile(const GuestMemory& memory, u32 archive, u32 file);
+// Address of entry `file` of `type` (1, MiscData, by default) in an archive image, or 0.
+u32 FindArchiveFile(const GuestMemory& memory, u32 archive, u32 file, u16 type = 1);
 // The menu descriptions' message file, which the description box reads from.
 constexpr u32 DESCRIPTION_FILE = 5;
 
@@ -63,7 +73,8 @@ struct MenuDescription
 };
 MenuDescription FindMenuDescription(const GuestMemory& memory, u32 messages);
 // Rewrites the box's copy if it holds an edited original. Returns 1 if it did.
-int ApplyMenuDescription(GuestMemory& memory, u32 messages, std::span<const MenuTextEdit> edits);
+int ApplyMenuDescription(GuestMemory& memory, u32 messages, std::span<const MenuTextEdit> edits,
+                         bool through_brawl_online = false);
 // Rewrites the messages, then the box's copy. Returns the number rewritten; `in_box` gets how many
 // of those were the box's copy.
 int ApplyMenuText(GuestMemory& memory, std::span<const MenuTextEdit> edits,
