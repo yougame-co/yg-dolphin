@@ -13,11 +13,13 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <set>
 #include <span>
+#include <string>
 #include <tuple>
 
 #include "Common/ChunkFile.h"
@@ -726,6 +728,52 @@ void MemoryManager::CopyFromEmu(void* data, u32 address, size_t size) const
   memcpy(data, pointer, size);
 }
 
+// DIAGNOSTIC build only. YG_DIAG_COPY_PREPARE=1 opens the snapshot-protected pages of a host copy
+// into guest RAM before it runs (the copy then never faults part way). YG_DIAG_COPY_VERIFY=1 compares
+// guest RAM with the source after each copy and logs every copy that did not land byte for byte.
+static bool DiagSwitch(const char* name)
+{
+  const char* v = std::getenv(name);
+  return v && v[0] == '1';
+}
+static const bool s_copy_prepare = DiagSwitch("YG_DIAG_COPY_PREPARE");
+static const bool s_copy_verify = DiagSwitch("YG_DIAG_COPY_VERIFY");
+static u64 s_copy_checked = 0, s_copy_bad = 0, s_copy_bad_bytes = 0;
+
+static void VerifyHostCopy(const char* what, u32 address, const u8* dst, const u8* src, u8 fill,
+                           size_t size)
+{
+  ++s_copy_checked;
+  size_t bad = 0, first = size;
+  std::string slots;
+  for (size_t i = 0; i < size; ++i)
+  {
+    const u8 want = src ? src[i] : fill;
+    if (dst[i] == want)
+      continue;
+    if (bad == 0)
+      first = i;
+    ++bad;
+    const size_t slot = (address + i) & ~size_t{15};
+    if (slots.size() < 400 && (i == first || ((address + i - 1) & ~size_t{15}) != slot))
+      slots += fmt::format(" {:x}", slot);
+  }
+  if (bad == 0)
+  {
+    if (s_copy_checked % 20000 == 0)
+      NOTICE_LOG_FMT(MEMMAP, "COW vector audit: copycheck checked={} bad={} badbytes={}",
+                     s_copy_checked, s_copy_bad, s_copy_bad_bytes);
+    return;
+  }
+  ++s_copy_bad;
+  s_copy_bad_bytes += bad;
+  NOTICE_LOG_FMT(MEMMAP,
+                 "COW vector audit: copycheck BAD {} to {:#010x} len {:#x} prepare={}: {} bytes differ, "
+                 "first +{:#x}, 16-byte slots{} (checked={} bad={} badbytes={})",
+                 what, address, size, s_copy_prepare ? 1 : 0, bad, first, slots, s_copy_checked,
+                 s_copy_bad, s_copy_bad_bytes);
+}
+
 void MemoryManager::CopyToEmu(u32 address, const void* data, size_t size)
 {
   if (size == 0)
@@ -737,7 +785,12 @@ void MemoryManager::CopyToEmu(u32 address, const void* data, size_t size)
     PanicAlertFmt("Invalid range in CopyToEmu. {:x} bytes to {:#010x}", size, address);
     return;
   }
+  if (s_copy_prepare)
+    Rollback::Cow::PrepareHostWrite(pointer, size);
   memcpy(pointer, data, size);
+  if (s_copy_verify)
+    VerifyHostCopy("copy", address, static_cast<const u8*>(pointer), static_cast<const u8*>(data), 0,
+                   size);
 }
 
 void MemoryManager::Memset(u32 address, u8 value, size_t size)
@@ -751,7 +804,11 @@ void MemoryManager::Memset(u32 address, u8 value, size_t size)
     PanicAlertFmt("Invalid range in Memset. {:x} bytes at {:#010x}", size, address);
     return;
   }
+  if (s_copy_prepare)
+    Rollback::Cow::PrepareHostWrite(pointer, size);
   memset(pointer, value, size);
+  if (s_copy_verify)
+    VerifyHostCopy("memset", address, static_cast<const u8*>(pointer), nullptr, value, size);
 }
 
 std::string MemoryManager::GetString(u32 em_address, size_t size)
