@@ -5284,15 +5284,16 @@ struct YouGameRoom::Impl
           removed_local.push_back(previous);
       my_seat = seat;
       friends_room = queue_known && (queue == "private" || doubles);
-      // A room nobody else is in, whose host the server made this player, has no game to join.
+      // A room whose first roster names this player its host has no other game to join: the server
+      // never makes a joiner the host, even when another player arrived in the same instant.
       if (role_from_roster && !me.empty())
       {
-        if (joining && my_seat == 0 && host == me && present.empty() && queue == "private")
+        if (joining && my_seat == 0 && host == me && queue == "private")
         {
           joining = false;
-          NOTICE_LOG_FMT(NETPLAY, "Orca room: room {} had nobody in it and made this game its "
-                                  "host, so it hosts instead of joining",
-                         code);
+          NOTICE_LOG_FMT(NETPLAY, "Orca room: room {} made this game its host on arrival ({} other "
+                                  "player(s) present), so it hosts instead of joining",
+                         code, present.size());
         }
         role_from_roster = false;
       }
