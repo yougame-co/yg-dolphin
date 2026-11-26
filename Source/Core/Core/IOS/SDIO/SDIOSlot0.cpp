@@ -22,6 +22,7 @@
 #include "Core/IOS/VersionInfo.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Rollback/Cow.h"
+#include "Core/Rollback/DesyncRing.h"
 #include "Core/System.h"
 
 namespace IOS::HLE
@@ -317,6 +318,9 @@ s32 SDIOSlot0Device::ExecuteCommand(const Request& request, u32 buffer_in, u32 b
                     std::feof(m_card.GetHandle()));
       ret = RET_FAIL;
     }
+    // DIAGNOSTIC v13 (Rollback/DesyncRing.h).
+    Rollback::DesyncRing::Record(Rollback::DesyncRing::Kind::Sdio, req.addr, buffer,
+                                 buffer ? size : 0);
   }
     memory.Write_U32(0x900, buffer_out);
     break;

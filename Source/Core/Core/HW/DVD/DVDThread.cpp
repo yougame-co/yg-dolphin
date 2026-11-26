@@ -27,6 +27,7 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/IOS/ES/Formats.h"
 #include "Core/Rollback/Cow.h"
+#include "Core/Rollback/DesyncRing.h"
 #include "Core/System.h"
 
 #include "DiscIO/Enums.h"
@@ -292,6 +293,9 @@ void DVDThread::FinishRead(u64 id, s64 cycles_late)
           "dvd out={:08x} len={:x} dvd={:x} late={} data={:016x}", request.output_address,
           request.length, request.dvd_offset, cycles_late,
           XXH3_64bits(buffer.data(), buffer.size())));
+      // DIAGNOSTIC v13 (Rollback/DesyncRing.h).
+      Rollback::DesyncRing::Record(Rollback::DesyncRing::Kind::Dvd, request.output_address,
+                                   buffer.data(), request.length);
     }
 
     interrupt = DVD::DIInterruptType::TCINT;

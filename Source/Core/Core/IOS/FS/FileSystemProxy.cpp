@@ -17,6 +17,7 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/IOS/FS/FileSystem.h"
 #include "Core/IOS/Uids.h"
+#include "Core/Rollback/DesyncRing.h"
 #include "Core/System.h"
 
 namespace IOS::HLE
@@ -326,8 +327,12 @@ std::optional<IPCReply> FSDevice::Read(const ReadWriteRequest& request)
   return MakeIPCReply([&](Ticks t) {
     auto& system = GetSystem();
     auto& memory = system.GetMemory();
-    return m_core.Read(request.fd, memory.GetPointerForRange(request.buffer, request.size),
-                       request.size, request.buffer, t);
+    u8* const data = memory.GetPointerForRange(request.buffer, request.size);
+    const s32 result = m_core.Read(request.fd, data, request.size, request.buffer, t);
+    // DIAGNOSTIC v13 (Rollback/DesyncRing.h).
+    Rollback::DesyncRing::Record(Rollback::DesyncRing::Kind::IosFs, request.buffer, data,
+                                 result > 0 ? static_cast<u32>(result) : 0);
+    return result;
   });
 }
 

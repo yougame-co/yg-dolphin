@@ -745,6 +745,8 @@ add_library(core
   PowerPC/SignatureDB/SignatureDB.h
   Rollback/Cow.cpp
   Rollback/Cow.h
+  Rollback/DesyncRing.cpp
+  Rollback/DesyncRing.h
   Rollback/Diag.cpp
   Rollback/Diag.h
   Rollback/Harness.cpp

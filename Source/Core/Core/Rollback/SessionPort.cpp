@@ -24,6 +24,7 @@
 #include "Core/Core.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Rollback/Cow.h"
+#include "Core/Rollback/DesyncRing.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Rollback/Diag.h"
@@ -146,6 +147,9 @@ void RingPort::SetPads(int frame, const Orca::Net::Pads& pads)
 {
   Orca::Net::ReplayRecordingScope::RecordPads(frame, pads);
   // Called once for every frame about to run.
+  // DIAGNOSTIC v13: the frame the RAM write ring tags its entries with (no-op unless
+  // YG_DESYNC_MAP=1).
+  DesyncRing::SetFrame(frame);
   for (std::size_t port = 0; port < pads.size(); ++port)
     m_pads[port] = Orca::Net::DecodePad(pads[port]);
   m_saved_since_run = -1;
@@ -189,6 +193,10 @@ namespace
 // last few maps stay in memory, and nothing is logged until a desync, so the timing of a normal run
 // is unchanged. On a desync both machines log their maps (and the non-RAM state hash) for the frames
 // they kept; the logs show the first block that differs.
+// v13 adds: the watched blocks default to 754-755, and a fixed ring of the EFB-copy, DVD DMA, IOS
+// FS read and SDIO read writes into RAM (DesyncRing.h), tagged with the session frame and logged as
+// "DESYNCMAP ring" lines with the maps: every entry that overlaps a watched block, and every entry
+// from the last 180 frames.
 bool DesyncMapOn()
 {
   static const bool s_on = [] {
@@ -233,13 +241,14 @@ std::string Detail(const std::string& name, const u8* data, std::size_t size)
     out += fmt::format("{:08x}", static_cast<u32>(XXH3_64bits(data + at, std::min<std::size_t>(64, size - at)) >> 32));
   return out;
 }
-// The RAM bytes of the watched 64 KiB blocks (MEM1 then MEM2; YG_DESYNC_WATCH=first-last, default
-// 676-677 = MEM2 0x11240000..0x1125ffff, where both mapped P+ desyncs differ) per kept frame.
+// The RAM bytes of the watched 64 KiB blocks (MEM1 then MEM2; YG_DESYNC_WATCH=first-last) per kept
+// frame. The default, 754-755, is MEM2 0x11720000..0x1173ffff, where the latest P+ desync capture
+// differs; the earlier captures differed in 676-677, MEM2 0x11240000..0x1125ffff.
 std::map<int, std::vector<u8>> s_watch;
 std::pair<std::size_t, std::size_t> WatchBlocks()
 {
   static const std::pair<std::size_t, std::size_t> s_blocks = [] {
-    std::size_t first = 676, last = 677;
+    std::size_t first = 754, last = 755;
     if (const char* v = std::getenv("YG_DESYNC_WATCH"))
     {
       unsigned a = 0, b = 0;
@@ -284,6 +293,69 @@ void CaptureLiveRam(Core::System& system, int frame)
   s_live[frame] = std::move(bytes);
   while (s_live.size() > WATCH_DUMP_FRAMES)
     s_live.erase(s_live.begin());
+}
+// DIAGNOSTIC v13: the RAM write ring (DesyncRing.h) on a dump, on both sides (at most RING_LINES
+// lines): every entry that overlaps a watched block, and every entry from RING_FRAMES frames before
+// `frame` (or the newest frame, for the end-of-session dump) on. Over the cap, the entries furthest
+// from that frame that miss the watched blocks are dropped first. Addresses are guest physical.
+constexpr int RING_FRAMES = 180;
+constexpr std::size_t RING_LINES = 600;
+void LogWriteRing(Core::System& system, int frame)
+{
+  u64 recorded = 0;
+  const std::vector<DesyncRing::Entry> entries = DesyncRing::Entries(&recorded);
+  const int newest = DesyncRing::Frame();
+  const int ref = newest >= 0 ? std::min(frame, newest) : frame;
+  const std::size_t mem1 = system.GetMemory().GetRamSize();
+  const auto [first, last] = WatchBlocks();
+  const u64 watch_lo = static_cast<u64>(first) * MAP_BUCKET;
+  const u64 watch_hi = static_cast<u64>(last + 1) * MAP_BUCKET;
+  // The entry's start as an offset into MEM1 then MEM2, the layout the block numbers count.
+  const auto overlaps_watch = [&](const DesyncRing::Entry& e) {
+    const u32 phys = e.address & 0x1fffffff;
+    u64 off;
+    if (phys >= 0x10000000)
+      off = mem1 + (phys - 0x10000000);
+    else if (phys < mem1)
+      off = phys;
+    else
+      return false;
+    return e.length != 0 && off < watch_hi && off + e.length > watch_lo;
+  };
+  std::vector<std::size_t> watched, recent;
+  for (std::size_t i = 0; i < entries.size(); ++i)
+  {
+    if (overlaps_watch(entries[i]))
+      watched.push_back(i);
+    else if (s64{entries[i].frame} >= s64{ref} - RING_FRAMES)
+      recent.push_back(i);
+  }
+  if (watched.size() > RING_LINES)
+    watched.erase(watched.begin(), watched.end() - RING_LINES);
+  const std::size_t room = RING_LINES - watched.size();
+  if (recent.size() > room)
+  {
+    const auto distance = [&](std::size_t i) {
+      const s64 d = s64{entries[i].frame} - ref;
+      return d < 0 ? -d : d;
+    };
+    std::stable_sort(recent.begin(), recent.end(),
+                     [&](std::size_t a, std::size_t b) { return distance(a) < distance(b); });
+    recent.resize(room);
+  }
+  std::vector<std::size_t> logged = watched;
+  logged.insert(logged.end(), recent.begin(), recent.end());
+  std::sort(logged.begin(), logged.end());
+  NOTICE_LOG_FMT(ROLLBACK,
+                 "DESYNCMAP ring recorded={} held={} newest={} ref={} watch={}-{} logged={} "
+                 "(watched {})",
+                 recorded, entries.size(), newest, ref, first, last, logged.size(), watched.size());
+  for (const std::size_t i : logged)
+  {
+    const DesyncRing::Entry& e = entries[i];
+    NOTICE_LOG_FMT(ROLLBACK, "DESYNCMAP ring f={} kind={} addr={:08x} len={} h={:08x}", e.frame,
+                   DesyncRing::KindName(e.kind), e.address, e.length, e.hash);
+  }
 }
 }  // namespace
 
@@ -363,6 +435,7 @@ void RingPort::ResetDesyncMaps()
   s_watch.clear();
   s_ram.clear();
   s_live.clear();
+  DesyncRing::Reset();
   s_maps_logged = false;
 }
 
@@ -463,6 +536,7 @@ void RingPort::DumpDesyncMaps(int frame, const char* why)
                      ok ? "written" : "NOT written", path);
     }
   }
+  LogWriteRing(m_system, frame);
   // DIAGNOSTIC v12, only at a desync (clean runs must stay inside the harness's output cap):
   // 1. selfdiff: each checksum frame as the checksum saw it (rebuilt from the snapshot, s_ram)
   //    against the live RAM copied right after that frame's save. Any difference means the

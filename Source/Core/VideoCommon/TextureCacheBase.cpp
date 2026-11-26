@@ -33,6 +33,7 @@
 #include "Core/FifoPlayer/FifoRecorder.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Rollback/DesyncRing.h"
 #include "Core/System.h"
 
 #include "VideoCommon/AbstractFramebuffer.h"
@@ -2288,6 +2289,11 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       else
         UninitializeEFBMemory(dst, dstStride, bytes_per_row, num_blocks_y);
     }
+    // DIAGNOSTIC v13 (Rollback/DesyncRing.h).
+    Rollback::DesyncRing::RecordRows(copy_to_ram ? Rollback::DesyncRing::Kind::EfbSkip :
+                                                   Rollback::DesyncRing::Kind::EfbZero,
+                                     dstAddr, copy_to_ram ? nullptr : dst, bytes_per_row,
+                                     num_blocks_y, dstStride);
     return;
   }
 
@@ -2448,6 +2454,9 @@ void TextureCacheBase::CopyRenderTargetToTexture(
         // Immediately flush it.
         WriteEFBCopyToRAM(dst, bytes_per_row / sizeof(u32), num_blocks_y, dstStride,
                           std::move(staging_texture));
+        // DIAGNOSTIC v13 (Rollback/DesyncRing.h).
+        Rollback::DesyncRing::RecordRows(Rollback::DesyncRing::Kind::Efb, dstAddr, dst,
+                                         bytes_per_row, num_blocks_y, dstStride);
       }
       else
       {
@@ -2469,6 +2478,9 @@ void TextureCacheBase::CopyRenderTargetToTexture(
     {
       UninitializeEFBMemory(dst, dstStride, bytes_per_row, num_blocks_y);
     }
+    // DIAGNOSTIC v13 (Rollback/DesyncRing.h).
+    Rollback::DesyncRing::RecordRows(Rollback::DesyncRing::Kind::EfbZero, dstAddr, dst,
+                                     bytes_per_row, num_blocks_y, dstStride);
   }
 
   // Invalidate all textures, if they are either fully overwritten by our efb copy, or if they
@@ -2602,6 +2614,10 @@ void TextureCacheBase::FlushEFBCopy(TCacheEntry* entry)
   }
   WriteEFBCopyToRAM(dst, entry->pending_efb_copy_width, entry->pending_efb_copy_height,
                     entry->memory_stride, std::move(entry->pending_efb_copy));
+  // DIAGNOSTIC v13 (Rollback/DesyncRing.h).
+  Rollback::DesyncRing::RecordRows(Rollback::DesyncRing::Kind::Efb, entry->addr, dst,
+                                   entry->pending_efb_copy_width * 4,
+                                   entry->pending_efb_copy_height, entry->memory_stride);
 
   // If the EFB copy was invalidated (e.g. the bloom case mentioned in InvalidateTexture), we don't
   // need to do anything more. The entry will be automatically deleted by smart pointers
