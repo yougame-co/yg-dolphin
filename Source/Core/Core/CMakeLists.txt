@@ -971,6 +971,22 @@ if(ORCA_SIGNIN_PREVIEW)
                ORCA_SIGNIN_PREVIEW)
   message(WARNING "Orca: the sign-in screen's screenshot preview is built in (ORCA_SIGNIN_PREVIEW): never a release")
 endif()
+# Whether the Brawl Online account sign-in can reach Brawl Online's real servers
+# (Orca/BrawlOnlineAccount.h). Off, the default and every release and staging build: only the
+# in-process stand-in is compiled in, no host or URL of the service is in the program, and its links
+# are kept apart from real ones. Public, so the unit tests see the same switch. The package scripts
+# and Tools/orca/bundle-key-guard.py refuse a program built with it on, and a packaging, pinned-key
+# or staging configuration refuses it here.
+option(ORCA_BO_LIVE "Let the Brawl Online sign-in reach Brawl Online's real servers (never a release yet)" OFF)
+if(ORCA_BO_LIVE)
+  if(ORCA_MACOS_BUNDLE OR NOT "${ORCA_BUNDLE_PUBLIC_KEY}" STREQUAL "" OR
+     "$ENV{ORCA_STAGING_BUILD}" STREQUAL "1")
+    message(FATAL_ERROR "ORCA_BO_LIVE=ON is refused in a packaging, pinned-key or staging build "
+                        "(ORCA_MACOS_BUNDLE, ORCA_BUNDLE_PUBLIC_KEY, ORCA_STAGING_BUILD=1)")
+  endif()
+  target_compile_definitions(core PUBLIC ORCA_BO_LIVE)
+  message(WARNING "Orca: the Brawl Online sign-in talks to the real Brawl Online servers (ORCA_BO_LIVE)")
+endif()
 # The SD image's SHA-256 uses CNG; GPU diagnostics read process memory.
 if(WIN32)
   target_link_libraries(core PRIVATE bcrypt psapi advapi32)

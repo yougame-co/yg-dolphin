@@ -13,6 +13,7 @@
 
 #include <imgui.h>
 
+#ifdef ORCA_BO_LIVE
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
@@ -21,6 +22,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 extern char** environ;
+#endif
 #endif
 
 #include "Core/NetPlayProto.h"
@@ -46,11 +48,18 @@ using Screen = BO::SignInFlow::Screen;
 using TextEntry::Key;
 
 constexpr std::string_view TITLE = "Sign in to Brawl Online";
+#ifdef ORCA_BO_LIVE
 constexpr std::string_view NOTE =
     "Your password goes only to Brawl Online's servers. YouGame remembers the link on this PC.";
 constexpr std::string_view WORKING = "Talking to Brawl Online...";
 constexpr std::string_view BROWSER =
     "Brawl Online's page is opening in your browser: press \"Forgot your password?\" there.";
+#else
+// A build without ORCA_BO_LIVE runs on the in-process stand-in (BrawlOnline::MakeTestTransport):
+// the screen says so, and has no Forgot password? (no page of the service is in the program).
+constexpr std::string_view NOTE = "Test build: nothing is sent to Brawl Online.";
+constexpr std::string_view WORKING = "Working...";
+#endif
 
 // Sizes, in overlay units.
 constexpr float PANEL_MAX_WIDTH = 76;
@@ -87,8 +96,12 @@ std::vector<Item> ItemsOf(Screen screen)
   case Screen::CheckEmail:
     return {Item::Continue, Item::Switch, Item::Cancel};
   default:
+#ifdef ORCA_BO_LIVE
     return {Item::Email,  Item::Password, Item::Primary,
             Item::Switch, Item::Forgot,   Item::Cancel};
+#else
+    return {Item::Email, Item::Password, Item::Primary, Item::Switch, Item::Cancel};
+#endif
   }
 }
 
@@ -222,6 +235,7 @@ void Run(const std::shared_ptr<Session>& session, Job job)
   }).detach();
 }
 
+#ifdef ORCA_BO_LIVE
 // Opens Brawl Online's password page in the system browser. Only BrawlOnline::FORGOT_PASSWORD_URL
 // (IsResetPageUrl): anything else is refused. The constant goes to the opener as one argument with
 // no shell between.
@@ -246,6 +260,7 @@ void OpenInBrowser(std::string_view url)
 #endif
   }).detach();
 }
+#endif
 
 // The heap copy a worker wipes, so moving it between threads leaves no copy behind.
 std::shared_ptr<std::string> Secret(std::string_view text)
@@ -294,10 +309,12 @@ void Activate(const std::shared_ptr<Session>& s, Item item, Screen screen)
       s->flow->ShowSignIn();
     s->Publish();
     return;
+#ifdef ORCA_BO_LIVE
   case Item::Forgot:
     OpenInBrowser(BO::FORGOT_PASSWORD_URL);
     s->note = std::string(BROWSER);
     return;
+#endif
   case Item::Continue:
     s->note.clear();
     Run(s, [](BO::SignInFlow& flow) { flow.Continue(); });
@@ -574,6 +591,11 @@ void OpenPreview()
 }
 #endif
 }  // namespace
+
+std::string_view Note()
+{
+  return NOTE;
+}
 
 bool OnlineActive()
 {

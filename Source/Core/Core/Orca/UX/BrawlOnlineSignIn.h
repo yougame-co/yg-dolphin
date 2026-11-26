@@ -15,9 +15,9 @@ class SignInFlow;
 
 // The Brawl Online sign-in screen, drawn by the overlay over the game: one panel driven by
 // BrawlOnline::SignInFlow (Core/Orca/BrawlOnlineAccount.h) with email and password fields, Sign in,
-// Create account (with a display name), Forgot password?, Cancel, and the "check your email, then
-// press Continue" state. Every network call runs on a worker thread; the video thread only draws
-// and polls.
+// Create account (with a display name), Forgot password? (live builds only), Cancel, and the
+// "check your email, then press Continue" state. Every network call runs on a worker thread; the
+// video thread only draws and polls.
 //
 // Keyboard only: Tab or the arrows move between items, Enter presses the focused one (in a field,
 // the screen's main button), Escape cancels. While it is open the keyboard is captured
@@ -45,6 +45,10 @@ bool IsOpen();
 void Close();
 // The overlay's draw (video thread, inside the ImGui frame). Nothing while closed.
 void Draw();
+
+// The plain line under the title. In a build without ORCA_BO_LIVE it says the screen is a test
+// build's and sends nothing to Brawl Online.
+std::string_view Note();
 
 // Whether online play runs or is starting: a YouGame room exists (connecting included) or Dolphin
 // netplay runs. Any thread.

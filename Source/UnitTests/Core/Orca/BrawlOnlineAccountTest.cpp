@@ -374,9 +374,10 @@ TEST(BrawlOnlineAccount, StorePaths)
 
   const auto plain = BO::Store::For("b3a1c2d4-uuid_ok", user);
   ASSERT_TRUE(plain);
-  EXPECT_EQ(plain->Folder(), "/u/User/Online/brawlonline/b3a1c2d4-uuid_ok/");
-  EXPECT_EQ(plain->UserJsonPath(), "/u/User/Online/brawlonline/b3a1c2d4-uuid_ok/user.json");
-  EXPECT_EQ(plain->SessionPath(), "/u/User/Online/brawlonline/b3a1c2d4-uuid_ok/session.json");
+  const std::string folder = user + std::string(BO::STORE_FOLDER);
+  EXPECT_EQ(plain->Folder(), folder + "b3a1c2d4-uuid_ok/");
+  EXPECT_EQ(plain->UserJsonPath(), folder + "b3a1c2d4-uuid_ok/user.json");
+  EXPECT_EQ(plain->SessionPath(), folder + "b3a1c2d4-uuid_ok/session.json");
 
   // Separators, dots and the like never leave the player's folder, and two ids that sanitize
   // alike still get different folders.
@@ -392,7 +393,7 @@ TEST(BrawlOnlineAccount, StorePaths)
     const auto store = BO::Store::For(id, user);
     ASSERT_TRUE(store) << id;
     EXPECT_NE(store->UserJsonPath(), user + "Online/user.json") << id;
-    EXPECT_EQ(store->Folder().rfind(user + "Online/brawlonline/", 0), 0u) << id;
+    EXPECT_EQ(store->Folder().rfind(folder, 0), 0u) << id;
   }
   // Every folder is the user folder, the fixed part and one [A-Za-z0-9_-] segment of at most 81.
   for (const char* id : {"..", "a b", "a\nb", "\xC3\xA9t\xC3\xA9", "C:", "x\\..\\y", "luis@yougame.co"})
@@ -406,7 +407,7 @@ TEST(BrawlOnlineAccount, StorePaths)
                   c == '-' || c == '_')
           << id;
     }
-    EXPECT_EQ(BO::Store::For(id, user)->Folder(), user + "Online/brawlonline/" + segment + "/");
+    EXPECT_EQ(BO::Store::For(id, user)->Folder(), folder + segment + "/");
   }
   // Names Windows keeps for devices get the hash too, in any case.
   for (const char* id : {"CON", "con", "Nul", "PRN", "AUX", "COM1", "com9", "LPT0", "lpt3"})
@@ -418,7 +419,7 @@ TEST(BrawlOnlineAccount, StorePaths)
   EXPECT_EQ(BO::SanitizePlayerId("CONSOLE"), "CONSOLE");
   EXPECT_EQ(BO::SanitizePlayerId("COM10"), "COM10");
   // The user folder's trailing separator is added when missing.
-  EXPECT_EQ(BO::Store::For("p1", "/u/User")->Folder(), "/u/User/Online/brawlonline/p1/");
+  EXPECT_EQ(BO::Store::For("p1", "/u/User")->Folder(), folder + "p1/");
 }
 
 TEST(BrawlOnlineAccount, StoreWritesAndReads)
@@ -610,10 +611,12 @@ TEST(BrawlOnlineAccount, FlowKeptSessionExpiredGoesToSignIn)
   EXPECT_EQ(log->sent[0].token, TOKEN);
 }
 
+#ifdef ORCA_BO_LIVE
 TEST(BrawlOnlineAccount, BaseUrlIsBrawlOnlinesDefault)
 {
   EXPECT_EQ(BO::ACCOUNTS_BASE_URL, "https://brawlonline.net");
 }
+#endif
 
 TEST(BrawlOnlineAccount, FailureLogLineLeavesOutTheMessage)
 {
@@ -667,6 +670,7 @@ TEST(BrawlOnlineAccount, OpenSignInSkipsWhenStored)
   EXPECT_TRUE(log->sent.empty());
 }
 
+#ifdef ORCA_BO_LIVE
 TEST(BrawlOnlineAccount, ForgotPasswordIsOnBrawlOnlinesHost)
 {
   EXPECT_EQ(BO::FORGOT_PASSWORD_URL.rfind(BO::ACCOUNTS_BASE_URL, 0), 0u);
@@ -683,6 +687,63 @@ TEST(BrawlOnlineAccount, OnlyTheResetPageOpensInABrowser)
   EXPECT_FALSE(BO::IsResetPageUrl("https://example.com/"));
   EXPECT_FALSE(BO::IsResetPageUrl("file:///etc/passwd"));
 }
+#endif
+
+// Links live builds and test builds make never share a folder, either way round.
+TEST(BrawlOnlineAccount, TestLinksAreKeptApartFromLiveOnes)
+{
+  const std::string live(BO::LIVE_STORE_FOLDER);
+  const std::string test(BO::TEST_STORE_FOLDER);
+  EXPECT_NE(live, test);
+  EXPECT_NE(test.rfind(live, 0), 0u);
+  EXPECT_NE(live.rfind(test, 0), 0u);
+  EXPECT_EQ(BO::STORE_FOLDER, BO::LIVE ? BO::LIVE_STORE_FOLDER : BO::TEST_STORE_FOLDER);
+  const auto store = BO::Store::For("player-1", "/u/User/");
+  ASSERT_TRUE(store);
+  EXPECT_EQ(store->Folder(), "/u/User/" + std::string(BO::STORE_FOLDER) + "player-1/");
+#ifndef ORCA_BO_LIVE
+  EXPECT_FALSE(BO::LIVE);
+  EXPECT_EQ(store->Folder().rfind("/u/User/" + live, 0), std::string::npos);
+#endif
+}
+
+#ifndef ORCA_BO_LIVE
+// Without ORCA_BO_LIVE the screen runs on the stand-in: a sign-in completes in-process, and the
+// link it makes is saved in the test folder, never where a live build looks.
+TEST(BrawlOnlineAccount, TestBuildSignInSavesInTheTestFolder)
+{
+  UserFolder dir;
+  auto flow = BO::OpenSignIn("player-1", "luis", BO::MakeTransport(), dir.Path());
+  ASSERT_TRUE(flow);
+  flow->Start();
+  std::string password = "anything-at-all";
+  flow->SubmitSignIn("a@b.co", password);
+  EXPECT_TRUE(password.empty());
+  ASSERT_EQ(flow->CurrentScreen(), BO::SignInFlow::Screen::Done) << flow->Message();
+  const std::string saved = flow->UserJsonPath();
+  EXPECT_EQ(saved, dir.Path() + std::string(BO::TEST_STORE_FOLDER) + "player-1/user.json");
+  EXPECT_TRUE(File::Exists(saved));
+  EXPECT_FALSE(File::Exists(dir.Path() + std::string(BO::LIVE_STORE_FOLDER)));
+  std::string text;
+  ASSERT_TRUE(File::ReadFileToString(saved, text));
+  EXPECT_NE(text.find("\"LUIS#000\""), std::string::npos) << text;
+}
+
+// A new account on the stand-in asks for the email once, then Continue finishes it.
+TEST(BrawlOnlineAccount, TestBuildMakeAccountThenContinue)
+{
+  UserFolder dir;
+  auto flow = BO::OpenSignIn("player-2", "luis", BO::MakeTestTransport(), dir.Path());
+  ASSERT_TRUE(flow);
+  flow->Start();
+  std::string password = "longenough";
+  flow->SubmitMakeAccount("a@b.co", password, "Luis");
+  EXPECT_EQ(flow->CurrentScreen(), BO::SignInFlow::Screen::CheckEmail);
+  flow->Continue();
+  ASSERT_EQ(flow->CurrentScreen(), BO::SignInFlow::Screen::Done) << flow->Message();
+  EXPECT_EQ(flow->UserJsonPath().rfind(dir.Path() + std::string(BO::TEST_STORE_FOLDER), 0), 0u);
+}
+#endif
 
 namespace
 {
@@ -717,6 +778,16 @@ TEST(BrawlOnlineSignInScreen, NeverOpensWhileOnline)
   EXPECT_FALSE(Screen::IsOpen());
   EXPECT_FALSE(Orca::UX::TextEntry::Capturing());
   EXPECT_TRUE(log->sent.empty());
+}
+
+// A build without ORCA_BO_LIVE says on the screen, in one plain line, that nothing leaves it.
+TEST(BrawlOnlineSignInScreen, TestBuildLineShows)
+{
+#ifdef ORCA_BO_LIVE
+  EXPECT_EQ(Screen::Note().find("Test build"), std::string_view::npos);
+#else
+  EXPECT_EQ(Screen::Note(), "Test build: nothing is sent to Brawl Online.");
+#endif
 }
 
 // Online play that starts under an open screen closes it at the next frame, keyboard released.

@@ -25,6 +25,23 @@
 // user.json, so a player signs in once per PC.
 namespace Orca::BrawlOnline
 {
+// Whether this build can reach Brawl Online's real servers: CMake's ORCA_BO_LIVE, OFF by default
+// and in every release and staging build. Off, the real HTTPS client is not compiled in, no host or
+// URL of the service is in the program, the screen runs on an in-process stand-in
+// (MakeTestTransport) that sends nothing anywhere, and the links it makes are kept in a folder of
+// their own (STORE_FOLDER), so a live build never reads one as a real link.
+#ifdef ORCA_BO_LIVE
+inline constexpr bool LIVE = true;
+#else
+inline constexpr bool LIVE = false;
+#endif
+
+// The store's folder under Dolphin's User folder: real links, the stand-in's, and this build's.
+inline constexpr std::string_view LIVE_STORE_FOLDER = "Online/brawlonline/";
+inline constexpr std::string_view TEST_STORE_FOLDER = "Online/brawlonline-test-build/";
+inline constexpr std::string_view STORE_FOLDER = LIVE ? LIVE_STORE_FOLDER : TEST_STORE_FOLDER;
+
+#ifdef ORCA_BO_LIVE
 // The accounts API's base URL: defaultServiceUrls.accountsApi in Brawl Online's launcher
 // (common/product.ts), the same host its launcher talks to by default. Paths start with /v1.
 inline constexpr std::string_view ACCOUNTS_BASE_URL = "https://brawlonline.net";
@@ -39,6 +56,10 @@ constexpr bool IsResetPageUrl(std::string_view url)
   return url == FORGOT_PASSWORD_URL && url.substr(0, 8) == "https://";
 }
 static_assert(IsResetPageUrl(FORGOT_PASSWORD_URL));
+// Text only a live build holds (logged when its transport is made). The package scripts and
+// Tools/orca/bundle-key-guard.py refuse a program that carries it.
+inline constexpr std::string_view LIVE_BUILD_MARKER = "ORCA_BO_LIVE_TRANSPORT";
+#endif
 
 // Brawl Online's own rules (common/src/codes.rs, accounts password.rs).
 inline constexpr std::size_t DISPLAY_NAME_MAX = 15;  // code points
@@ -68,8 +89,19 @@ public:
   virtual HttpResult Get(const std::string& path, const std::string& token) = 0;
 };
 
+#ifdef ORCA_BO_LIVE
 // The production transport: Common::HttpRequest against ACCOUNTS_BASE_URL, TLS verified.
 std::unique_ptr<Transport> MakeHttpTransport();
+#else
+// The stand-in a build without ORCA_BO_LIVE runs on: answers made in-process, as the accounts API
+// would give them, and nothing sent anywhere. Any email and password sign in; a new account asks
+// for its email once, then counts as verified at Continue; user.json holds a play key that is not
+// one.
+std::unique_ptr<Transport> MakeTestTransport();
+#endif
+// The transport this build signs in through: MakeHttpTransport when live, MakeTestTransport
+// otherwise.
+std::unique_ptr<Transport> MakeTransport();
 
 // ---- Results ----
 
@@ -204,7 +236,7 @@ bool ValidCodeStart(std::string_view code_start);
 bool ValidDisplayName(std::string_view name);
 bool ValidPassword(std::string_view password);
 
-// ---- The store: <User>/Online/brawlonline/<player>/{user.json,session.json} ----
+// ---- The store: <User>/<STORE_FOLDER><player>/{user.json,session.json} ----
 
 // `player_id` as one path segment: [A-Za-z0-9_-] kept, anything else '_', at most 64 characters,
 // with a hash of the original appended whenever a character was replaced or cut, or the result is a
@@ -310,7 +342,7 @@ private:
 // the id is empty or a dev id. `user_dir` as for Store::For.
 std::string UserJsonPath(std::string_view player_id, std::string user_dir = {});
 
-// The screen for the YouGame player `player_id` named `yougame_name`, on the production transport.
+// The screen for the YouGame player `player_id` named `yougame_name`, on MakeTransport's transport.
 // Nothing for an empty or dev id, and nothing once this PC holds the player's user.json
 // (UserJsonPath is then not empty). Call Start on a worker thread to show its first state.
 std::unique_ptr<SignInFlow> OpenSignIn(std::string_view player_id, std::string_view yougame_name);

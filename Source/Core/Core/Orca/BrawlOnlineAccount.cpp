@@ -23,7 +23,9 @@
 
 #include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
+#ifdef ORCA_BO_LIVE
 #include "Common/HttpRequest.h"
+#endif
 #include "Common/Logging/Log.h"
 #include "Core/Orca/SafeJson.h"
 
@@ -32,7 +34,9 @@ namespace Orca::BrawlOnline
 namespace
 {
 constexpr std::string_view REDACTED = "[redacted]";
+#ifdef ORCA_BO_LIVE
 constexpr auto HTTP_TIMEOUT = std::chrono::seconds(15);
+#endif
 
 // ---- UTF-8 ----
 
@@ -455,6 +459,7 @@ bool StartsWithDev(std::string_view id)
 
 // ---- The production transport ----
 
+#ifdef ORCA_BO_LIVE
 class HttpTransport final : public Transport
 {
 public:
@@ -509,8 +514,123 @@ private:
 
 std::unique_ptr<Transport> MakeHttpTransport()
 {
+  INFO_LOG_FMT(NETPLAY, "Brawl Online: {}", LIVE_BUILD_MARKER);
   return std::make_unique<HttpTransport>();
 }
+
+std::unique_ptr<Transport> MakeTransport()
+{
+  return MakeHttpTransport();
+}
+#else
+// ---- The stand-in (builds without ORCA_BO_LIVE) ----
+
+// Answers the five calls the client makes the way the accounts API does, from memory. Nothing it
+// is given leaves the process, and it never reads the email or the password.
+class TestTransport final : public Transport
+{
+public:
+  HttpResult Post(const std::string& path, const std::string& json_body,
+                  const std::string& token) override
+  {
+    if (path == "/v1/auth/login")
+      return {200, SessionAnswer(true)};
+    if (path == "/v1/auth/signup")
+    {
+      if (std::string name = Field(json_body, "displayName"); !name.empty())
+        m_display_name = std::move(name);
+      // A new account asks for its email once; Continue then finds it verified.
+      return {201, SessionAnswer(false)};
+    }
+    if (path == "/v1/me/netplay" && token == TOKEN)
+    {
+      if (!m_connect_code.empty())
+        return {409, R"({"error":{"code":"code_already_set","message":"Already set."}})"};
+      m_connect_code = Field(json_body, "codeStart") + "#000";
+      return {200, "{}"};
+    }
+    return Unknown(token);
+  }
+
+  HttpResult Get(const std::string& path, const std::string& token) override
+  {
+    if (token != TOKEN)
+      return Unknown(token);
+    if (path == "/v1/me")
+      return {200, MeAnswer(true)};
+    if (path == "/v1/me/user-json")
+    {
+      if (m_connect_code.empty())
+        return {409, R"({"error":{"code":"not_activated","message":"Not activated."}})"};
+      std::string body = R"({"uid":")" + std::string(UID) + R"(","playKey":")" +
+                         std::string(PLAY_KEY) + R"(","connectCode":)";
+      body.reserve(body.size() + 6 * (m_connect_code.size() + m_display_name.size()) + 64);
+      AppendJsonString(body, m_connect_code);
+      body.append(",\"displayName\":");
+      AppendJsonString(body, m_display_name);
+      body.append(R"(,"latestVersion":"test-build"})");
+      return {200, std::move(body)};
+    }
+    return {404, R"({"error":{"code":"not_found","message":"Not found."}})"};
+  }
+
+private:
+  static constexpr std::string_view TOKEN = "test-build-session";
+  static constexpr std::string_view UID = "00000000-0000-4000-8000-000000000000";
+  static constexpr std::string_view PLAY_KEY = "test-build-not-a-play-key";
+
+  static HttpResult Unknown(const std::string& token)
+  {
+    if (token.empty() || token != TOKEN)
+      return {401, R"({"error":{"code":"unauthorized","message":"Signed out."}})"};
+    return {404, R"({"error":{"code":"not_found","message":"Not found."}})"};
+  }
+
+  // A string field of a request body the client wrote; empty when absent.
+  static std::string Field(const std::string& json_body, const char* key)
+  {
+    picojson::value json;
+    if (!Json::ParseWholeJson(json_body, &json).empty() || !json.is<picojson::object>())
+      return {};
+    return StringField(json.get<picojson::object>(), key);
+  }
+
+  std::string MeAnswer(bool verified) const
+  {
+    std::string body = R"({"uid":")" + std::string(UID) + R"(","emailVerified":)" +
+                       (verified ? "true" : "false") +
+                       R"(,"emailVerificationRequired":true,"displayName":)";
+    body.reserve(body.size() + 6 * (m_display_name.size() + m_connect_code.size()) + 64);
+    AppendJsonString(body, m_display_name);
+    body.append(",\"connectCode\":");
+    if (m_connect_code.empty())
+      body.append("null");
+    else
+      AppendJsonString(body, m_connect_code);
+    body.append("}");
+    return body;
+  }
+
+  std::string SessionAnswer(bool verified) const
+  {
+    return R"({"sessionToken":")" + std::string(TOKEN) + R"(","user":)" + MeAnswer(verified) + "}";
+  }
+
+  std::string m_display_name = "Player";
+  std::string m_connect_code;
+};
+}  // namespace
+
+std::unique_ptr<Transport> MakeTestTransport()
+{
+  return std::make_unique<TestTransport>();
+}
+
+std::unique_ptr<Transport> MakeTransport()
+{
+  return MakeTestTransport();
+}
+#endif
 
 // ---- Errors ----
 
@@ -947,7 +1067,7 @@ std::optional<Store> Store::For(std::string_view player_id, std::string user_dir
     return std::nullopt;
   if (user_dir.back() != '/' && user_dir.back() != '\\')
     user_dir.push_back('/');
-  Store store(user_dir + "Online/brawlonline/" + segment + "/");
+  Store store(user_dir + std::string(STORE_FOLDER) + segment + "/");
   // The game's own Online/user.json belongs to whoever runs Dolphin outside YouGame.
   if (store.UserJsonPath() == user_dir + "Online/user.json")
     return std::nullopt;
@@ -1211,7 +1331,7 @@ std::string UserJsonPath(std::string_view player_id, std::string user_dir)
 
 std::unique_ptr<SignInFlow> OpenSignIn(std::string_view player_id, std::string_view yougame_name)
 {
-  return OpenSignIn(player_id, yougame_name, MakeHttpTransport(), {});
+  return OpenSignIn(player_id, yougame_name, MakeTransport(), {});
 }
 
 std::unique_ptr<SignInFlow> OpenSignIn(std::string_view player_id, std::string_view yougame_name,
