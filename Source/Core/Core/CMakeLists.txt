@@ -607,6 +607,8 @@ add_library(core
   Orca/Games/Brawl/BrawlStages.h
   Orca/Games/Brawl/CharOrder.cpp
   Orca/Games/Brawl/CharOrder.h
+  Orca/UX/BrawlOnlineEntry.cpp
+  Orca/UX/BrawlOnlineEntry.h
   Orca/UX/BrawlOnlineSignIn.cpp
   Orca/UX/BrawlOnlineSignIn.h
   Orca/UX/Chat.cpp

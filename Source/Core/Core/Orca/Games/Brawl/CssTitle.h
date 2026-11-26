@@ -53,8 +53,8 @@ enum class Title : u8
 
 std::string_view TitleName(Title title);
 
-// The main-menu pick Orca stores at sqVsMelee +0x18. 0 if sqVsMelee isn't running or the word
-// isn't a menu code (e.g. the heap fill 0xCCCCCCCC).
+// The main-menu pick Orca stores at sqVsMelee +0x18 (24-33). 0 if sqVsMelee isn't running or the
+// word isn't a menu code (e.g. the heap fill 0xCCCCCCCC).
 u32 ReadPick(const GuestMemory& memory);
 
 // What the title should say. `players` is the number of ports plugged in.

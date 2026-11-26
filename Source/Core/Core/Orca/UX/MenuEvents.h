@@ -15,21 +15,32 @@ enum class OnlinePick
   Casual,
   Ranked,
   Friends,
+  // The ONLINE page's Brawl Online button (its page opened), and that page's two rows. A test build
+  // sends nothing to Brawl Online: each row ends on the local character select under a note
+  // (UX/BrawlOnlineEntry.h).
+  BrawlOnline,
+  BrawlOnlineCasual,
+  BrawlOnlineFriends,
 };
 
+// Casual or Ranked: a pick the app's queue can search.
+bool QueuePick(OnlinePick pick);
+
 // The words after "orca menu" on stdout: "online casual" or "online ranked" when the app's queue
-// searches ("host" capability), with " local" appended when nothing searches; "online friends".
+// searches ("host" capability), with " local" appended when nothing searches; "online friends";
+// "online brawlonline", "online brawlonline casual", "online brawlonline friends".
 std::string_view MenuEventText(OnlinePick pick, bool queue = false);
 
 // Prints "orca menu online ..." for a pick ("... local" without the app's "host") and starts what
-// it means: the queue's own character select (with "queue2"), the search, or neither (Friends).
+// it means: the queue's own character select (with "queue2"), the search, or neither (Friends and
+// the Brawl Online picks).
 // `arm` false prints the line alone, marked "kept": a host that keeps its friends because the app
 // can't search that queue now (PickSearchable), so the app says why and cancels, and nothing of the
 // queue reaches the friends' game.
 void AnnounceOnlinePick(OnlinePick pick, bool arm = true);
 
 // Whether the app can search this pick's queue right now ("pick-casual", "pick-ranked":
-// Orca::Status PICK_CAPS); never Friends. Any thread.
+// Orca::Status PICK_CAPS); never Friends or a Brawl Online pick. Any thread.
 bool PickSearchable(OnlinePick pick);
 
 // Back on the main menu while searching (or matched but still alone): ends the search and the

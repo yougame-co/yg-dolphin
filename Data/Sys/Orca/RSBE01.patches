@@ -52,9 +52,10 @@
 # by Orca's UX, UX/MenuText.h). Every way on from it leaves through the game's own exit to the local
 # Versus character select; Orca reads which (UX/OnlineMenu.h) and tells the app. Nintendo's servers
 # are never asked for: the connection window (muWifiCnctWndTask), which creates the network
-# interface task, checks the save's Wi-Fi data and then connects, is never created; the Spectator
-# and Options buttons (Options runs WiiConnect24 jobs) never show on the ONLINE page (the game
-# hides them without a connection: nteGlobal's button flags) and nothing here shows them.
+# interface task, checks the save's Wi-Fi data and then connects, is never created; With Anyone's
+# Spectator never shows (the game hides it without a connection: nteGlobal's button flags). The
+# ONLINE page's third button (Options, which ran WiiConnect24 jobs) shows as Brawl Online and opens
+# With Anyone's page instead of its own, whose rows leave with codes of their own (32, 33).
 #
 # Found under the harness (ORCA_UX_PROBE watches, RAM dumps and Dolphin's disassembler) with
 # sora_menu_main.rel loaded at 0x81163780 (text at 0x8116384C); Project+'s own copy of the module
@@ -84,7 +85,8 @@
 #   frames later, the procs no longer running meanwhile), the same sound (0x800742B0 with 0x13),
 #   return 0. The code sits in the window code B no longer reaches (below), and 25 takes the usual
 #   way: Orca's block to the local Versus character select, `orca menu online friends`, FRIENDS on
-#   the character select's title. With Anyone (0x1B) and Options (0x1C, never shown) are as before.
+#   the character select's title. With Anyone (0x1B) is as before; Options (0x1C) opens With
+#   Anyone's page too (0x1B) as Brawl Online, its own page (WiiConnect24 jobs) never runs.
 # - B would open the same window in mode 1, "Disconnect from Nintendo WFC?", and go back once it
 #   closed. Instead what the game does when that window returns: the back animation (0x806A5A58),
 #   next proc 0 (the top page), sub-state 3, return 1.
@@ -97,7 +99,7 @@
 81179F10 3800001B 3800001B    # li   r0, 0x1B (With Anyone; guard)
 81179F14 901D0634 901D0634    # (guard)
 81179F18 4800000C 4800000C    # (guard)
-81179F1C 3800001C 3800001C    # li   r0, 0x1C (Options; guard)
+81179F1C 3800001C 3800001B    # li r0, 0x1C -> 0x1B (Brawl Online: With Anyone's page)
 81179F20 901D0634 901D0634    # (guard)
 81179F24 7FA3EB78 7FA3EB78    # mr   r3, r29 (into the page; guard)
 81179F28 38800001 38800001    # (guard)
@@ -137,7 +139,7 @@
 8117A110 3800001B 3800001B    # (guard)
 8117A114 901D0634 901D0634    # (guard)
 8117A118 4800000C 4800000C    # (guard)
-8117A11C 3800001C 3800001C    # (guard)
+8117A11C 3800001C 3800001B    # li r0, 0x1C -> 0x1B
 8117A120 901D0634 901D0634    # (guard)
 8117A124 7FA3EB78 7FA3EB78    # (guard)
 8117A128 38800001 38800001    # (guard)
@@ -173,11 +175,13 @@
 
 # The ONLINE page's third button (Options, proc 28: muProcOptWifi, which runs WiiConnect24 jobs)
 # and With Anyone's Spectator (exit code 29) show only when nteGlobal says the service allows them
-# (isEnableButton 0x8014FEDC, flags 0x20/0x40 and 0x10). Without a connection it never does; here
-# the answer is always no, so neither button is drawn or can take the cursor whatever that data
-# holds. muProcWifi's init (0x811799B8):
+# (isEnableButton 0x8014FEDC, flags 0x20/0x40 and 0x10). Without a connection it never does. Here
+# the third button's answer is always yes, whatever that data holds: it shows as Brawl Online (the
+# texture pack's label; A opens With Anyone's page, above, never proc 28) and the game gives the
+# cursor its way down to it. Spectator's answer is always no, so it is never drawn and never takes
+# the cursor. muProcWifi's init (0x811799B8):
 81179A04 38600020 38600020    # li r3, 0x20 (guard)
-81179A08 4AFD64D5 38600000    # bl isEnableButton -> li r3, 0
+81179A08 4AFD64D5 38600001    # bl isEnableButton -> li r3, 1 (Options shows: Brawl Online)
 81179A0C 28030001 28030001    # (guard)
 81179A10 4082000C 4082000C    # (guard)
 81179A14 38000001 38000001    # (guard)
@@ -189,15 +193,68 @@
 81191D80 4AFBE15D 38600000    # bl isEnableButton -> li r3, 0
 81191D84 7C7F1B78 7C7F1B78    # mr r31, r3 (guard)
 
+# Brawl Online (the ONLINE page's third button) opens With Anyone's page (muProcWifiAnybody, proc
+# 0x1B) and its rows leave the menu with their own codes: A on Casual (30) or Ranked (31) takes
+# the cave below, which adds 2 while the ONLINE page's cursor is on Brawl Online (its proc,
+# scene +0x35C + 4 * 3, cursor at +0x42, 2: it stays there while With Anyone's page runs). From
+# With Anyone itself (cursor 1) nothing changes. Two copies of the press (two input paths), each
+# its own group; the cave (sora_scene's free space, Games/Brawl/FreeSpace.h) is written at boot.
+8119215C 3880001D 3880001D    # li   r4, 29 (Spectator; guard)
+81192160 48000018 48000018    # (guard)
+81192164 3880001E 4B5655E4    # li r4, 30 -> b 0x806F7748 (Casual: the cave)
+81192168 48000010 48000010    # (guard)
+8119216C 3880001F 4B5655E4    # li r4, 31 -> b 0x806F7750 (Ranked: the cave)
+81192170 48000008 48000008    # (guard)
+81192174 3880002A 3880002A    # li   r4, 42 (guard)
+81192178 2C04002A 2C04002A    # cmpwi r4, 42 (where every row joins; guard)
+
+81192398 3880001D 3880001D    # li   r4, 29 (Spectator; guard)
+8119239C 48000018 48000018    # (guard)
+811923A0 3880001E 4B5653E0    # li r4, 30 -> b 0x806F7780 (Casual: the cave)
+811923A4 48000010 48000010    # (guard)
+811923A8 3880001F 4B5653E0    # li r4, 31 -> b 0x806F7788 (Ranked: the cave)
+811923AC 48000008 48000008    # (guard)
+811923B0 3880002A 3880002A    # li   r4, 42 (guard)
+811923B4 2C04002A 2C04002A    # cmpwi r4, 42 (where every row joins; guard)
+
+806F7748 9421FFF0 3880001E    # li     r4, 30 (Casual)
+806F774C 7C0802A6 48000008    # b      +8
+806F7750 3CA0805A 3880001F    # li     r4, 31 (Ranked)
+806F7754 3C80805A 3D80805A    # lis    r12, 0x805A
+806F7758 90010014 818C0060    # lwz    r12, 0x60(r12) (the scene manager)
+806F775C 93E1000C 818C0004    # lwz    r12, 0x4(r12) (the scene: muMenuMain)
+806F7760 3BE00000 818C0368    # lwz    r12, 0x368(r12) (its proc 3: the ONLINE page)
+806F7764 93E30008 280C0000    # cmplwi r12, 0
+806F7768 93E3000C 41820014    # beq    +0x14 (no ONLINE page: as before)
+806F776C 80A5FFAC A18C0042    # lhz    r12, 0x42(r12) (its cursor)
+806F7770 88A50110 280C0002    # cmplwi r12, 2 (Brawl Online)
+806F7774 7C0500D0 40820008    # bne    +8
+806F7778 7C002B78 38840002    # addi   r4, r4, 2 (32 Brawl Online Casual, 33 its With Friends)
+806F777C 54000FFE 48A9A9FC    # b      0x81192178 (back where the rows join)
+806F7780 98030010 3880001E    # li     r4, 30 (Casual, second copy)
+806F7784 806400E0 48000008    # b      +8
+806F7788 4B955889 3880001F    # li     r4, 31 (Ranked)
+806F778C 4B93588D 3D80805A    # lis    r12, 0x805A
+806F7790 3C808070 818C0060    # lwz    r12, 0x60(r12) (the scene manager)
+806F7794 3884497C 818C0004    # lwz    r12, 0x4(r12) (the scene: muMenuMain)
+806F7798 4B935C5D 818C0368    # lwz    r12, 0x368(r12) (its proc 3: the ONLINE page)
+806F779C 3CA08071 280C0000    # cmplwi r12, 0
+806F77A0 3C808071 41820014    # beq    +0x14 (no ONLINE page: as before)
+806F77A4 9065A7D0 A18C0042    # lhz    r12, 0x42(r12) (its cursor)
+806F77A8 93E4A7D4 280C0002    # cmplwi r12, 2 (Brawl Online)
+806F77AC 83E1000C 40820008    # bne    +8
+806F77B0 80010014 38840002    # addi   r4, r4, 2 (32 Brawl Online Casual, 33 its With Friends)
+806F77B4 7C0803A6 48A9AC00    # b      0x811923B4 (back where the rows join)
+
 # sqMenuMain::setNext's table (sora_scene, resident; one entry per main-menu exit code, which the
 # menu leaves at [0x805A0060]+0x284): every online code goes to the local Versus character select
 # that Group > Brawl (code 1) opens, through the block below. 24-27 are With Friends' modes
 # (sqNetFriendList), 29 Spectator (sqNetAnyWatch), 30 With Anyone's Basic Brawl (sqNetAnyOkiraku),
 # 31 its Team Battle (sqNetAnyTeamMelee): none of them is ever entered, so no online scene, no
 # network thread, no DWC. The code itself stays as the menu wrote it: Orca reads it (30 Casual, 31
-# Ranked, 24-27 Friends). 28 is a guard; 24-27 already point at the block's address (the friend
-# list's entry, which the block replaces). Project+ keeps Brawl's sora_scene, so its file has the
-# same groups.
+# Ranked, 24-27 Friends; 32 and 33, below, Brawl Online's rows). 28 is a guard; 24-27 already point
+# at the block's address (the friend list's entry, which the block replaces). Project+ keeps
+# Brawl's sora_scene, so its file has the same groups.
 80701A04 806DC8C8 806DC8C8    # code 24 (guard: the block below)
 80701A08 806DC8C8 806DC8C8    # code 25 (guard)
 80701A0C 806DC8C8 806DC8C8    # code 26 (guard)
@@ -206,6 +263,17 @@
 80701A18 806DC8E0 806DC8C8    # code 29 (sqNetAnyWatch)
 80701A1C 806DC8F8 806DC8C8    # code 30 (sqNetAnyOkiraku)
 80701A20 806DC910 806DC8C8    # code 31 (sqNetAnyTeamMelee)
+
+# Brawl Online's rows (With Anyone's page opened from the ONLINE page's third button: the cave
+# below) leave the menu with 32 and 33, which the game never uses: their entries are setNext's
+# default (0x806DC940, nothing). They go to the same block. A toggled group, only while setNext's
+# bound (0x806DC5E0, `cmplwi r0, 41`, then bgt to the default) still covers them; code 34 is a
+# guard.
+when 806DC5E0 == 28000029               # cmplwi r0, 41
+80701A24 806DC940 806DC8C8    # code 32 (Brawl Online Casual)
+80701A28 806DC940 806DC8C8    # code 33 (Brawl Online With Friends)
+80701A2C 806DC928 806DC928    # code 34 (guard)
+end
 
 # Back out of that character select to where the player was, as the game does when it comes back
 # from an online mode. sqVsMelee (sora_scene) leaves its character select for the menu in one place,
@@ -220,16 +288,19 @@
 # (A on With Friends leaves the menu at once, above). So the block that starts sqVsMelee for an
 # online code keeps that code in the sequence object, at +0x18 (sqVsMelee is 0x18 bytes in a
 # 0x20-byte block; +0x18 to +0x1F keep the heap's fill through boots, menus and whole matches, in
-# both games), and the back out takes it, once: an online code (24-31) goes back as its argument
-# (With Friends' 24-27 as 30, the ONLINE page on With Friends; 29-31 -> 27-29), anything else (0,
+# both games), and the back out takes it, once: an online code (24-33) goes back as its argument
+# (With Friends' 24-27 as 30, the ONLINE page on With Friends; 29-31 -> 27-29; Brawl Online's 32
+# and 33 as 31, the ONLINE page on With Anyone, next to Brawl Online: no mode puts the cursor on
+# the third button), anything else (0,
 # the heap's fill, a code already used) is 1 as before. Group > Brawl never sets it, so from there B
 # still opens Group. A match in between keeps it: the results come back through sqPrizeCheck, which
 # restarts sqVsMelee with 255 and leaves the object alone. Emulated code and memory only: both
 # players run it, a rollback re-runs it, a drop-in keyframe carries the object.
 #
-# sqMenuMain::setNext's entries for codes 24-31 (0x806DC8C8 to 0x806DC924: the friend list's,
+# sqMenuMain::setNext's entries for codes 24-31 (0x806DC8C8 to 0x806DC927: the friend list's,
 # Spectator's, Basic Brawl's and Team Battle's blocks, which the table above no longer reaches): the
-# block, then the back out's helper. r18 is the scene manager, r19 the sequence names (0x807017B0,
+# block, then the back out's helper (r6 the code: r3 and r4 already hold setNextSequence's
+# arguments). r18 is the scene manager, r19 the sequence names (0x807017B0,
 # +48 "sqVsMelee"), r15 sqMenuMain, r30 its next state.
 806DC8C8 80B20284 7E439378    # mr     r3, r18
 806DC8CC 7E439378 38930030    # addi   r4, r19, 48 ("sqVsMelee", as Group > Brawl)
@@ -240,19 +311,21 @@
 806DC8E0 7E439378 90030018    # stw    r0, 0x18(r3) (kept for the back out)
 806DC8E4 38930170 93CF0008    # stw    r30, 0x8(r15)
 806DC8E8 38A00000 480000E8    # b      0x806DC9D0 (setNext's loop, as every entry)
-806DC8EC 4B950D55 80AF0018    # helper: lwz r5, 0x18(r15) (r15 is sqVsMelee there)
+806DC8EC 4B950D55 80CF0018    # helper: lwz r6, 0x18(r15) (r15 is sqVsMelee there)
 806DC8F0 93CF0008 38000000    # li     r0, 0
 806DC8F4 480000DC 900F0018    # stw    r0, 0x18(r15) (used once)
-806DC8F8 7E439378 3805FFE8    # subi   r0, r5, 24
-806DC8FC 38930180 28000007    # cmplwi r0, 7
-806DC900 38A00000 41810018    # bgt    0x806DC918 (not an online code)
-806DC904 4B950D3D 38A5FFFE    # subi   r5, r5, 2
-806DC908 93CF0008 28000004    # cmplwi r0, 4
-806DC90C 480000C4 4C800020    # bgelr  (29-31: With Anyone, 27-29)
-806DC910 7E439378 38A0001E    # li     r5, 30 (24-27: the ONLINE page on With Friends)
-806DC914 38930190 4E800020    # blr
-806DC918 38A00000 38A00001    # li     r5, 1 (Group, as before)
-806DC91C 4B950D25 4E800020    # blr
+806DC8F8 7E439378 3806FFE8    # subi   r0, r6, 24
+806DC8FC 38930180 38A00001    # li     r5, 1 (Group, as before)
+806DC900 38A00000 28000009    # cmplwi r0, 9
+806DC904 4B950D3D 4D810020    # bgtlr  (not an online code)
+806DC908 93CF0008 38A0001F    # li     r5, 31
+806DC90C 480000C4 28000008    # cmplwi r0, 8
+806DC910 7E439378 4C800020    # bgelr  (32-33, Brawl Online: the ONLINE page on With Anyone)
+806DC914 38930190 38A6FFFE    # subi   r5, r6, 2
+806DC918 38A00000 28000004    # cmplwi r0, 4
+806DC91C 4B950D25 4C800020    # bgelr  (29-31: With Anyone, 27-29)
+806DC920 93CF0008 38A0001E    # li     r5, 30 (24-27: the ONLINE page on With Friends)
+806DC924 480000AC 4E800020    # blr
 
 # sqVsMelee::setNext's state 16 (0x806DCE34): the argument comes from the helper.
 806DCE34 806F0014 806F0014    # lwz    r3, 0x14(r15) (guard)

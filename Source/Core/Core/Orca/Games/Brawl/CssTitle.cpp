@@ -153,7 +153,7 @@ u32 ReadPick(const GuestMemory& m)
   if (!Named(m, sequence, "sqVsMelee") || !Pointer(m, sequence + SEQUENCE_PICK))
     return 0;
   const u32 code = m.Read32(sequence + SEQUENCE_PICK);
-  return code >= 24 && code <= 31 ? code : 0;
+  return code >= 24 && code <= 33 ? code : 0;
 }
 
 Title Wanted(const GuestMemory& m, int players)

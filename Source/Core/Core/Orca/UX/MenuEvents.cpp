@@ -11,6 +11,11 @@
 
 namespace Orca::UX
 {
+bool QueuePick(OnlinePick pick)
+{
+  return pick == OnlinePick::Casual || pick == OnlinePick::Ranked;
+}
+
 std::string_view MenuEventText(OnlinePick pick, bool queue)
 {
   switch (pick)
@@ -21,6 +26,12 @@ std::string_view MenuEventText(OnlinePick pick, bool queue)
     return queue ? "online ranked" : "online ranked local";
   case OnlinePick::Friends:
     return "online friends";
+  case OnlinePick::BrawlOnline:
+    return "online brawlonline";
+  case OnlinePick::BrawlOnlineCasual:
+    return "online brawlonline casual";
+  case OnlinePick::BrawlOnlineFriends:
+    return "online brawlonline friends";
   }
   return {};
 }
@@ -39,12 +50,12 @@ void AnnounceOnlinePick(OnlinePick pick, bool arm)
   Orca::Status::Menu(MenuEventText(pick, queue));
   // With `queue2` the app searches once the player is ready on the queue's own character select
   // (Games/Brawl/Queue.h, UX/QueueApp.h). Without it, the search starts at the pick.
-  if (queue && pick != OnlinePick::Friends && Orca::Status::Cap("queue2"))
+  if (queue && QueuePick(pick) && Orca::Status::Cap("queue2"))
   {
     Search::End();
     QueueApp::Begin(pick == OnlinePick::Ranked);
   }
-  else if (queue && pick != OnlinePick::Friends)
+  else if (queue && QueuePick(pick))
   {
     QueueApp::End();
     Search::Begin(pick == OnlinePick::Ranked);
@@ -65,6 +76,9 @@ bool PickSearchable(OnlinePick pick)
   case OnlinePick::Ranked:
     return Orca::Status::Cap("pick-ranked");
   case OnlinePick::Friends:
+  case OnlinePick::BrawlOnline:
+  case OnlinePick::BrawlOnlineCasual:
+  case OnlinePick::BrawlOnlineFriends:
     break;
   }
   return false;

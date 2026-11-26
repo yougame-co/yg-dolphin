@@ -61,6 +61,12 @@ LABELS = [
          style="pplus"),
     dict(name="tex1_160x80_5b8f52ac0127b2a8_5", lines=["RANKED"], box=(24, 14, 136, 66),
          style="pplus"),
+    # The ONLINE page's Options button, which Orca shows as Brawl Online (MenMainWifi03 in Brawl,
+    # Project+'s own art): one texture used only on that page.
+    dict(name="tex1_128x32_7fcf56f65c20d5c9_2", lines=["Brawl Online"], box=(4, 3, 123, 28),
+         style="brawl"),
+    dict(name="tex1_128x32_e98c94392863af40_5", lines=["BRAWL ONLINE"], box=(11, 1, 117, 31),
+         style="pplus"),
     # The character select's mode title (MenSelchrPanelRule3.1), one per mode. Orca marks the mode
     # in an invisible palette entry (UX/CssTitle.h), so each mode hashes to its own name. Brawl's
     # uses the gold of its other rule titles; Project+'s the mint of its VERSUS.

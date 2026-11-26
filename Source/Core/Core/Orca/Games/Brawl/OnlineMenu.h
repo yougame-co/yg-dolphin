@@ -22,8 +22,13 @@ class CPUThreadGuard;
 
 // The game's own Online menu. Patches (Data/Sys/Orca/<profile>.patches) make Brawl's Wi-Fi button
 // and Project+'s Play Online open an offline ONLINE page. Each choice leaves the main menu for the
-// local Versus character select with an exit code: 30 Casual, 31 Ranked, 25 With Friends. This
-// file reads that pick and prints it on stdout ("orca menu online casual local", ...) for the app.
+// local Versus character select with an exit code: 30 Casual, 31 Ranked, 25 With Friends (24-27:
+// the With Friends codes the game's own Wi-Fi pages use). Its third button, Brawl Online, opens With
+// Anyone's page again, whose two rows then leave with 32 (Brawl Online Casual) and 33 (Brawl Online
+// With Friends): the patch adds 2 while the ONLINE page's cursor is on its third button. This file
+// reads that pick and prints it on stdout ("orca menu online casual local", ...) for the app, and
+// prints "orca menu online brawlonline" when the Brawl Online page opens (UX/BrawlOnlineEntry.h: the
+// sign-in screen the first time on this PC, and the panel on its rows' character select).
 //
 // Picks are read only on first runs, never on rollback re-runs, and announced only while this game
 // plays alone. A Casual or Ranked pick made while it isn't alone (friends in it or about to land)
@@ -55,8 +60,16 @@ struct MenuState
 
 MenuState ReadMenuState(const GuestMemory& memory);
 
-// The pick an exit code stands for, if any.
+// The pick an exit code stands for, if any: 24-27 Friends, 30 Casual, 31 Ranked, 32 Brawl Online
+// Casual, 33 Brawl Online With Friends.
 std::optional<OnlinePick> PickForExitCode(u32 exit_code);
+
+// Whether the main menu shows the Brawl Online page: muMenuMain (scene +0x3D0, the page's proc id)
+// on With Anyone's page (0x1B) while the ONLINE page's proc (scene +0x35C, proc 3) keeps its cursor
+// (+0x42) on its third button. Reads only.
+bool OnBrawlOnlinePage(const GuestMemory& memory);
+// Whether a main menu exit code is a Brawl Online row's (32, 33). Pure.
+bool BrawlOnlineRowCode(u32 code);
 
 // The current scene's name ("" when unreadable).
 std::string ReadSceneName(const GuestMemory& memory);
@@ -107,7 +120,8 @@ std::optional<OnlinePick> CssPick();
 // OnlineMatch.cpp TakeLobbyPickNow) still stands: on the way out of the main menu with that pick's
 // exit code, or on the character select it opened. Anywhere else it is stale. CPU thread.
 bool PickStands(OnlinePick pick);
-// The Casual or Ranked pick (30, 31) a main menu exit code stands for. Pure.
+// The Casual or Ranked pick (30, 31) a main menu exit code stands for; never With Friends or a
+// Brawl Online row (32, 33), which no queue searches. Pure.
 std::optional<OnlinePick> QueuePickForCssCode(u32 code);
 
 // Frame hook: reads the menu and prints "orca menu ...". Reads emulated memory only.

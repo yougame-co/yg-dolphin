@@ -32,6 +32,8 @@
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/BrawlGame.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
+#include "Core/Orca/UX/BrawlOnlineEntry.h"
+#include "Core/Orca/UX/BrawlOnlineSignIn.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "VideoCommon/HiresTextures.h"
 
@@ -137,11 +139,16 @@ void ExpectOnlineGates(const std::vector<GamePatch>& patches, u32 module)
     EXPECT_EQ(*g[0].original, 0x3800001Au);
     EXPECT_EQ(BranchTarget(g[0].address, g[0].value), std::optional<u32>(g[26].address));
     EXPECT_EQ(g[0].value & 1, 0u);  // b, not bl
-    // With Anyone (0x1B) and Options (0x1C) still go into their pages: guards up to B's path.
+    // With Anyone (0x1B) still goes into its page; Options (0x1C), shown as Brawl Online, goes
+    // into With Anyone's page too. Guards up to B's path.
     EXPECT_EQ(*g[3].original, 0x3800001Bu);
     EXPECT_EQ(*g[6].original, 0x3800001Cu);
+    EXPECT_EQ(g[6].value, 0x3800001Bu);  // li r0, 0x1B
     for (size_t i = 1; i < 17; ++i)
-      EXPECT_EQ(g[i].value, *g[i].original) << i;
+    {
+      if (i != 6)
+        EXPECT_EQ(g[i].value, *g[i].original) << i;
+    }
     // B's path.
     EXPECT_EQ(g[17].address, 0x81179F48u + copy + module);
     EXPECT_EQ(g[17].value, 0x7FA3EB78u);  // mr r3, r29
@@ -179,27 +186,63 @@ void ExpectOnlineGates(const std::vector<GamePatch>& patches, u32 module)
     EXPECT_TRUE(GroupApplies(g, Originals(g)));
     EXPECT_FALSE(GroupApplies(g, Values(g)));
   }
-  // The ONLINE page's Options (proc 28) and With Anyone's Spectator (code 29) never show: their
-  // isEnableButton checks (0x8014FEDC) answer no.
-  for (const auto& [at, words, calls] : std::vector<std::tuple<u32, size_t, std::vector<size_t>>>{
-           {0x81179A04, 8, {1, 7}}, {0x81191D7C, 3, {1}}})
+  // The ONLINE page's Options button (proc 28) always shows, as Brawl Online; its other check and
+  // With Anyone's Spectator (code 29) never do. Each isEnableButton check (0x8014FEDC) has its
+  // answer: li r3, 1 or li r3, 0.
+  using Calls = std::vector<std::pair<size_t, u32>>;
+  for (const auto& [at, words, calls] : std::vector<std::tuple<u32, size_t, Calls>>{
+           {0x81179A04, 8, {{1, 0x38600001}, {7, 0x38600000}}}, {0x81191D7C, 3, {{1, 0x38600000}}}})
   {
     SCOPED_TRACE(at);
     const auto g = GroupAt(patches, at + module);
     ASSERT_EQ(g.size(), words);
     for (size_t i = 0; i < g.size(); ++i)
     {
-      const bool call = std::find(calls.begin(), calls.end(), i) != calls.end();
-      if (call)
+      const auto call = std::find_if(calls.begin(), calls.end(),
+                                     [i](const std::pair<size_t, u32>& c) { return c.first == i; });
+      if (call != calls.end())
       {
         EXPECT_EQ(BranchTarget(g[i].address, *g[i].original), std::optional<u32>(0x8014FEDC));
-        EXPECT_EQ(g[i].value, 0x38600000u);  // li r3, 0
+        EXPECT_EQ(g[i].value, call->second) << i;
       }
       else
       {
         EXPECT_EQ(g[i].value, *g[i].original);  // a guard
       }
     }
+  }
+  // Brawl Online's two rows are With Anyone's page's: its Casual and Ranked (two copies) branch to a
+  // cave in sqNetAnyWatch's dead code (Games/Brawl/FreeSpace.h), which adds 2 to the code (32, 33)
+  // while the ONLINE page's cursor is on Brawl Online, then joins the rows again.
+  for (const auto& [at, cave] :
+       std::vector<std::pair<u32, u32>>{{0x8119215C, 0x806F7748}, {0x81192398, 0x806F7780}})
+  {
+    SCOPED_TRACE(at);
+    const auto g = GroupAt(patches, at + module);
+    ASSERT_EQ(g.size(), 8u);
+    EXPECT_EQ(Originals(g), (std::vector<u32>{0x3880001D, 0x48000018, 0x3880001E, 0x48000010,
+                                              0x3880001F, 0x48000008, 0x3880002A, 0x2C04002A}));
+    for (const size_t guard : {0u, 1u, 3u, 5u, 6u, 7u})
+      EXPECT_EQ(g[guard].value, *g[guard].original) << guard;
+    EXPECT_EQ(BranchTarget(g[2].address, g[2].value), std::optional<u32>(cave));
+    EXPECT_EQ(BranchTarget(g[4].address, g[4].value), std::optional<u32>(cave + 8));
+    EXPECT_EQ(g[2].value & 1, 0u);
+    EXPECT_EQ(g[4].value & 1, 0u);
+    // The cave's copy, then back to where every row joins (cmpwi r4, 42).
+    const auto caves = GroupAt(patches, 0x806F7748);
+    ASSERT_EQ(caves.size(), 28u);
+    const size_t first = (cave - 0x806F7748) / 4;
+    ASSERT_EQ(caves[first].address, cave);
+    const std::vector<u32> code{0x3880001E, 0x48000008, 0x3880001F, 0x3D80805A, 0x818C0060,
+                                0x818C0004, 0x818C0368, 0x280C0000, 0x41820014, 0xA18C0042,
+                                0x280C0002, 0x40820008, 0x38840002};
+    for (size_t i = 0; i < code.size(); ++i)
+      EXPECT_EQ(caves[first + i].value, code[i]) << i;
+    const GamePatch& back = caves[first + code.size()];
+    EXPECT_EQ(BranchTarget(back.address, back.value), std::optional<u32>(g[7].address));
+    EXPECT_EQ(back.value & 1, 0u);
+    EXPECT_TRUE(GroupApplies(g, Originals(g)));
+    EXPECT_TRUE(GroupApplies(caves, Originals(caves)));
   }
   // G4: sora_scene's exit table, the same in both games: every online code goes to Orca's block
   // (the friend list's old entry), which starts local Versus (sqVsMelee); code 28 untouched.
@@ -210,13 +253,24 @@ void ExpectOnlineGates(const std::vector<GamePatch>& patches, u32 module)
                                               0x806DC940, 0x806DC8E0, 0x806DC8F8, 0x806DC910}));
     EXPECT_EQ(Values(g), (std::vector<u32>{0x806DC8C8, 0x806DC8C8, 0x806DC8C8, 0x806DC8C8,
                                            0x806DC940, 0x806DC8C8, 0x806DC8C8, 0x806DC8C8}));
+    // Brawl Online's 32 and 33 go there too, only while setNext's bound (cmplwi r0, 41) says the
+    // table reaches them; code 34's entry is the guard.
+    const auto bo = GroupAt(patches, 0x80701A24);
+    ASSERT_EQ(bo.size(), 3u);
+    EXPECT_EQ(Originals(bo), (std::vector<u32>{0x806DC940, 0x806DC940, 0x806DC928}));
+    EXPECT_EQ(Values(bo), (std::vector<u32>{0x806DC8C8, 0x806DC8C8, 0x806DC928}));
+    for (const GamePatch& p : bo)
+    {
+      ASSERT_EQ(p.when.size(), 1u);
+      EXPECT_EQ(p.when[0], (PatchCondition{0x806DC5E0, 0xFFFFFFFF, 0x28000029, true}));
+    }
   }
   // G5: B out of that character select goes back to the page the pick came from. The block
   // starts sqVsMelee as Group > Brawl does and keeps the exit code in it; sqVsMelee's back out
   // asks the helper for sqMenuMain's argument instead of always 1.
   {
     const auto block = GroupAt(patches, 0x806DC8C8);
-    ASSERT_EQ(block.size(), 22u);  // 0x806DC8C8-0x806DC91C, the four online entries' old blocks
+    ASSERT_EQ(block.size(), 24u);  // 0x806DC8C8-0x806DC924, the four online entries' old blocks
     // sqMenuMain::setNext's own entry for Group > Brawl (0x806DC618), apart from what follows.
     EXPECT_EQ(block[0].value, 0x7E439378u);  // mr r3, r18
     EXPECT_EQ(block[1].value, 0x38930030u);  // addi r4, r19, 48: "sqVsMelee"
@@ -231,18 +285,24 @@ void ExpectOnlineGates(const std::vector<GamePatch>& patches, u32 module)
     EXPECT_EQ(block[8].value & 1, 0u);  // b: setNext's loop, as every entry
     // The helper reads and clears it, and answers 1 for anything but an online code.
     EXPECT_EQ(block[9].address, 0x806DC8ECu);
-    EXPECT_EQ(block[9].value, 0x80AF0018u);   // lwz r5, 0x18(r15)
+    EXPECT_EQ(block[9].value, 0x80CF0018u);   // lwz r6, 0x18(r15)
     EXPECT_EQ(block[11].value, 0x900F0018u);  // stw r0, 0x18(r15), r0 = 0
-    // With Anyone's 29-31 go back as 27-29 (its page on that button); With Friends' 24-27 as 30,
-    // which sqMenuMain makes mode 34: the ONLINE page with the cursor on With Friends (there is no
-    // With Friends page to come back to).
-    EXPECT_EQ(block[15].value, 0x38A5FFFEu);  // subi r5, r5, 2
-    EXPECT_EQ(block[16].value, 0x28000004u);  // cmplwi r0, 4
-    EXPECT_EQ(block[17].value, 0x4C800020u);  // bgelr
-    EXPECT_EQ(block[18].value, 0x38A0001Eu);  // li r5, 30
-    EXPECT_EQ(block[19].value, 0x4E800020u);  // blr
-    EXPECT_EQ(block[20].value, 0x38A00001u);  // li r5, 1
-    EXPECT_EQ(block[21].value, 0x4E800020u);  // blr
+    EXPECT_EQ(block[12].value, 0x3806FFE8u);  // subi r0, r6, 24
+    EXPECT_EQ(block[13].value, 0x38A00001u);  // li r5, 1
+    EXPECT_EQ(block[14].value, 0x28000009u);  // cmplwi r0, 9
+    EXPECT_EQ(block[15].value, 0x4D810020u);  // bgtlr: not an online code
+    // Brawl Online's 32-33 go back as 31, which sqMenuMain makes mode 35: the ONLINE page with the
+    // cursor on With Anyone (no mode puts it on Brawl Online). With Anyone's 29-31 go back as 27-29
+    // (its page on that button); With Friends' 24-27 as 30, mode 34: the ONLINE page with the
+    // cursor on With Friends (there is no With Friends page to come back to).
+    EXPECT_EQ(block[16].value, 0x38A0001Fu);  // li r5, 31
+    EXPECT_EQ(block[17].value, 0x28000008u);  // cmplwi r0, 8
+    EXPECT_EQ(block[18].value, 0x4C800020u);  // bgelr
+    EXPECT_EQ(block[19].value, 0x38A6FFFEu);  // subi r5, r6, 2
+    EXPECT_EQ(block[20].value, 0x28000004u);  // cmplwi r0, 4
+    EXPECT_EQ(block[21].value, 0x4C800020u);  // bgelr
+    EXPECT_EQ(block[22].value, 0x38A0001Eu);  // li r5, 30
+    EXPECT_EQ(block[23].value, 0x4E800020u);  // blr
     const auto back = GroupAt(patches, 0x806DCE34);
     ASSERT_EQ(back.size(), 4u);
     EXPECT_EQ(*back[2].original, 0x38A00001u);  // li r5, 1: always Group
@@ -282,7 +342,7 @@ TEST(OrcaOnlineMenuGates, SceneGroupsAreTheSameInBothGames)
 {
   const auto brawl = Shipped("RSBE01.patches");
   const auto pplus = Shipped("PPLUS32.patches");
-  for (const u32 at : {0x80701A04u, 0x806DC8C8u, 0x806DCE34u})
+  for (const u32 at : {0x80701A04u, 0x80701A24u, 0x806DC8C8u, 0x806DCE34u})
   {
     SCOPED_TRACE(at);
     const auto b = GroupAt(brawl, at);
@@ -536,8 +596,9 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
   // character select's title in each game, CASUAL, RANKED and FRIENDS, one name per mark: the
   // game's texture (Brawl's BRAWL, Project+'s VERSUS) with its palette marked for that mode. And
   // the texture relabels (Relabel.h): READY TO FIGHT!'s three in each game, STAGE SELECT's
-  // thirteen in each, the stage select's RANKED and CASUAL in each, Project+'s legend's two.
-  EXPECT_EQ(bases.size(), 12u + 6u + 26u + 4u + 2u);
+  // thirteen in each, the stage select's RANKED and CASUAL in each, Project+'s legend's two, and
+  // the ONLINE page's Brawl Online button in each.
+  EXPECT_EQ(bases.size(), 12u + 6u + 26u + 4u + 2u + 2u);
   std::map<std::pair<u32, u32>, std::set<std::string>> titles;
   for (const auto& [stem, size] : bases)
   {
@@ -610,11 +671,11 @@ TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
         std::filesystem::path(directory + "/").lexically_normal().string());
   };
 
-  // In a session: Orca's fifty names are Orca's, wherever else they are; every other name is the
+  // In a session: Orca's fifty-two names are Orca's, wherever else they are; every other name is the
   // player's. Mip level files (<name>_mip<N>) load with their texture, never as one of their own.
   {
     const auto files = by_id(CollectHiresTextureFiles({player, player2}, {orca}));
-    ASSERT_EQ(files.size(), 51u);
+    ASSERT_EQ(files.size(), 53u);
     for (const auto& [id, f] : files)
     {
       SCOPED_TRACE(id);
@@ -639,7 +700,7 @@ TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
     EXPECT_FALSE(files.at(title).has_arbitrary_mipmaps);
   }
   // A session with no pack of the player's: Orca's alone.
-  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 50u);
+  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 52u);
 }
 
 namespace
@@ -680,7 +741,9 @@ TEST(OrcaOnlineMenuReader, EachPickIsAnnouncedOnceAsTheMenuLeaves)
                                                {24, OnlinePick::Friends},
                                                {25, OnlinePick::Friends},
                                                {26, OnlinePick::Friends},
-                                               {27, OnlinePick::Friends}})
+                                               {27, OnlinePick::Friends},
+                                               {32, OnlinePick::BrawlOnlineCasual},
+                                               {33, OnlinePick::BrawlOnlineFriends}})
   {
     SCOPED_TRACE(code);
     Feed r;
@@ -699,6 +762,43 @@ TEST(OrcaOnlineMenuReader, EachPickIsAnnouncedOnceAsTheMenuLeaves)
   EXPECT_EQ(MenuEventText(OnlinePick::Casual), "online casual local");
   EXPECT_EQ(MenuEventText(OnlinePick::Ranked), "online ranked local");
   EXPECT_EQ(MenuEventText(OnlinePick::Friends), "online friends");
+  for (const bool queue : {false, true})
+  {
+    EXPECT_EQ(MenuEventText(OnlinePick::BrawlOnline, queue), "online brawlonline");
+    EXPECT_EQ(MenuEventText(OnlinePick::BrawlOnlineCasual, queue), "online brawlonline casual");
+    EXPECT_EQ(MenuEventText(OnlinePick::BrawlOnlineFriends, queue), "online brawlonline friends");
+  }
+}
+
+TEST(OrcaOnlineMenuReader, PickForExitCodeKnowsEveryOnlineCode)
+{
+  const std::map<u32, OnlinePick> picks{
+      {24, OnlinePick::Friends}, {25, OnlinePick::Friends},
+      {26, OnlinePick::Friends}, {27, OnlinePick::Friends},
+      {30, OnlinePick::Casual},  {31, OnlinePick::Ranked},
+      {32, OnlinePick::BrawlOnlineCasual}, {33, OnlinePick::BrawlOnlineFriends}};
+  for (u32 code = 0; code < 64; ++code)
+  {
+    SCOPED_TRACE(code);
+    const auto it = picks.find(code);
+    EXPECT_EQ(PickForExitCode(code),
+              it == picks.end() ? std::nullopt : std::optional<OnlinePick>(it->second));
+    // Only Casual and Ranked are a queue's: never With Friends or a Brawl Online row.
+    const bool queue = code == 30 || code == 31;
+    EXPECT_EQ(QueuePickForCssCode(code).has_value(), queue);
+    EXPECT_EQ(BrawlOnlineRowCode(code), code == 32 || code == 33);
+  }
+  EXPECT_EQ(PickForExitCode(0xFFFFFFFF), std::nullopt);
+  for (const OnlinePick pick :
+       {OnlinePick::Friends, OnlinePick::BrawlOnline, OnlinePick::BrawlOnlineCasual,
+        OnlinePick::BrawlOnlineFriends})
+  {
+    EXPECT_FALSE(QueuePick(pick));
+    // No queue searches a Brawl Online pick, whatever the app's caps.
+    EXPECT_FALSE(PickSearchable(pick));
+  }
+  EXPECT_TRUE(QueuePick(OnlinePick::Casual));
+  EXPECT_TRUE(QueuePick(OnlinePick::Ranked));
 }
 
 TEST(OrcaOnlineMenuReader, OnlyOnlineExitsFromTheMenu)
@@ -711,7 +811,7 @@ TEST(OrcaOnlineMenuReader, OnlyOnlineExitsFromTheMenu)
   ASSERT_EQ(r.picks, std::vector<OnlinePick>{OnlinePick::Casual});
   r.picks.clear();
   // Group > Brawl (1), Spectator (29, never shown) and anything else: no pick.
-  for (const u32 code : {1u, 2u, 23u, 28u, 29u, 32u, 0xFFFFFFFFu})
+  for (const u32 code : {1u, 2u, 23u, 28u, 29u, 34u, 0xFFFFFFFFu})
   {
     r.Step(Menu());
     r.Step(Leaving(code));
@@ -1000,6 +1100,61 @@ TEST(OrcaOnlineMenuReader, ReadsTheSceneAndTheExitCode)
   FakeMemory m = Scene("scMemoryChange", 30);
   (void)ReadMenuState(m);
   EXPECT_EQ(m.writes, 0);
+}
+
+namespace
+{
+// Scene("muMenuMain") with its pages: the page showing at +0x3D0, the ONLINE page's proc (proc 3,
+// at +0x35C + 3 * 4) at 0x80930000 with its cursor at +0x42.
+FakeMemory MenuPages(std::string_view scene, u32 page, u16 online_cursor, bool online_proc = true)
+{
+  FakeMemory m = Scene(scene, 0);
+  m.Fill(0x80910000, 0x400);
+  m.Write32(0x80910000, 0x80920000);
+  m.Fill(0x80930000, 0x50);
+  m.Write32(0x80910000 + 0x35C + 3 * 4, online_proc ? 0x80930000 : 0);
+  m.Write16(0x80930042, online_cursor);
+  m.Write32(0x80910000 + 0x3D0, page);
+  m.writes = 0;
+  return m;
+}
+}  // namespace
+
+TEST(OrcaOnlineMenuReader, TheBrawlOnlinePageIsWithAnyonesFromTheThirdButton)
+{
+  EXPECT_TRUE(OnBrawlOnlinePage(MenuPages("muMenuMain", 0x1B, 2)));
+  // With Anyone's page from its own button, or after a back-out put the cursor elsewhere.
+  EXPECT_FALSE(OnBrawlOnlinePage(MenuPages("muMenuMain", 0x1B, 1)));
+  EXPECT_FALSE(OnBrawlOnlinePage(MenuPages("muMenuMain", 0x1B, 0)));
+  // The ONLINE page itself, with the cursor on Brawl Online.
+  EXPECT_FALSE(OnBrawlOnlinePage(MenuPages("muMenuMain", 3, 2)));
+  // No ONLINE page built, or not the main menu.
+  EXPECT_FALSE(OnBrawlOnlinePage(MenuPages("muMenuMain", 0x1B, 2, false)));
+  EXPECT_FALSE(OnBrawlOnlinePage(MenuPages("scMemoryChange", 0x1B, 2)));
+  EXPECT_FALSE(OnBrawlOnlinePage(FakeMemory{}));
+  FakeMemory m = MenuPages("muMenuMain", 0x1B, 2);
+  (void)OnBrawlOnlinePage(m);
+  EXPECT_EQ(m.writes, 0);
+}
+
+TEST(OrcaOnlineMenuReader, BrawlOnlineRowsShowTheirPanel)
+{
+  EXPECT_EQ(BrawlOnlineEntry::RowTitle(OnlinePick::BrawlOnlineCasual), "Brawl Online: Casual");
+  EXPECT_EQ(BrawlOnlineEntry::RowTitle(OnlinePick::BrawlOnlineFriends),
+            "Brawl Online: With Friends");
+  for (const OnlinePick other : {OnlinePick::Casual, OnlinePick::Ranked, OnlinePick::Friends,
+                                 OnlinePick::BrawlOnline})
+  {
+    EXPECT_TRUE(BrawlOnlineEntry::RowTitle(other).empty());
+    BrawlOnlineEntry::SetRow(other);
+    EXPECT_EQ(BrawlOnlineEntry::Row(), std::nullopt);
+  }
+  BrawlOnlineEntry::SetRow(OnlinePick::BrawlOnlineFriends);
+  EXPECT_EQ(BrawlOnlineEntry::Row(), OnlinePick::BrawlOnlineFriends);
+  BrawlOnlineEntry::SetRow(std::nullopt);
+  EXPECT_EQ(BrawlOnlineEntry::Row(), std::nullopt);
+  // The sign-in screen's own line goes under the title (in a test build: nothing is sent).
+  EXPECT_FALSE(BrawlOnlineSignIn::Note().empty());
 }
 
 namespace

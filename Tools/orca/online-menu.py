@@ -90,7 +90,7 @@ BACK_FIRST = 200
 CSS_FRAMES = 600
 
 # The top page's cursor starts on Group / VERSUS; Play Online is below it. On the ONLINE page the
-# cursor starts on With Friends; With Anyone is to its right. With Anyone's cursor starts on Casual,
+# cursor starts on With Friends; With Anyone is to its right and Brawl Online below them. With Anyone's cursor starts on Casual,
 # Ranked is below it. A on With Friends leaves the menu at once (RSBE01.patches, PPLUS32.patches:
 # muProcWifi).
 TO_ONLINE = [("DOWN", "top-play-online"), ("A", "online")]
@@ -111,7 +111,9 @@ SCENARIOS = {
             ("RIGHT", "online-with-anyone"),
             ("LEFT", "online-with-friends"),
             ("UP", "online-up"),
-            ("DOWN", "online-down"),
+            ("DOWN", "online-down-brawl-online"),
+            ("UP", "online-up-2"),
+            ("LEFT", "online-with-friends-2"),
             ("RIGHT", "online-with-anyone-2"),
             ("A", "with-anyone"),
             ("DOWN", "with-anyone-ranked"),

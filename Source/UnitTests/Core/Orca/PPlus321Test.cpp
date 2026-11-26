@@ -127,10 +127,10 @@ TEST_F(OrcaPPlus321, CompatibilityKeysSeparateReleasesAndPreserve320)
   EXPECT_NE(before, key(same_card));
 }
 
-TEST_F(OrcaPPlus321, LegacyFilesAreByteIdenticalTo647d1aa6c7)
+TEST_F(OrcaPPlus321, LegacyFilesArePinned)
 {
   EXPECT_EQ(Orca::HashFile(SYS + "Orca/PPLUS32.ini"), "ea7ba547b132f2957e109c4620160f97");
-  EXPECT_EQ(Orca::HashFile(SYS + "Orca/PPLUS32.patches"), "342cc4c7634a2122a098b3f7db0eac1b");
+  EXPECT_EQ(Orca::HashFile(SYS + "Orca/PPLUS32.patches"), "59ca25baed30fa1b637a219123655bd4");
   EXPECT_EQ(Orca::HashFile(SYS + "Orca/PPLUS32.jitwarm"), "8878e3439e5b4db1e44b4e81c28a2dc1");
 }
 

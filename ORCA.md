@@ -1740,9 +1740,17 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
 
 - **The top page.** Brawl's Wi-Fi button reads PLAY ONLINE (Project+'s already does), with "Play
   different modes online." under it.
-- **A opens the game's own ONLINE page** (With Friends / With Anyone) with no connection window: no
-  save check, no NAND access, no network task. B goes straight back. Options (WiiConnect24) and
-  Spectator never show.
+- **A opens the game's own ONLINE page** (With Friends / With Anyone / Brawl Online) with no
+  connection window: no save check, no NAND access, no network task. B goes straight back.
+  Spectator never shows.
+- **Brawl Online** is the page's Options button (WiiConnect24), relabelled. It opens the With Anyone
+  page with Casual and With Friends rows and prints `orca menu online brawlonline`. The first time on
+  a PC it opens the Brawl Online sign-in screen (`UX/BrawlOnlineSignIn.h`); once a link is saved, it
+  goes straight to the page. Either row goes to the local Versus character select, prints
+  `orca menu online brawlonline casual|friends` and shows a panel over it (`UX/BrawlOnlineEntry.h`)
+  saying the test build sends nothing to Brawl Online; B backs out to the With Anyone page. Nothing
+  searches and no network path exists. The page's title and second row still draw the game's own
+  With Anyone / Ranked art.
 - **With Anyone** shows CASUAL and RANKED. Either goes to the local Versus character select and Orca
   prints `orca menu online casual|ranked` (with the app's `host` cap; `... local` without).
 - **With Friends** goes straight to the local Versus character select, where friends drop in, and
@@ -1755,9 +1763,11 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
 - **Game patches** (guarded groups; Project+'s menu module sits `0x1480` above Brawl's): the top
   page's press takes the path every other button takes, never creating the connection window; the
   ONLINE page's B does what the game does after its disconnect window says OK; A on With Friends
-  leaves the menu with exit code 25; Options and Spectator are never enabled; the main menu's exit
-  table sends codes 24-27, 29, 30 (Casual) and 31 (Ranked) to Orca's block, which starts the local
-  Versus scene. No online scene, network thread or DWC is ever entered.
+  leaves the menu with exit code 25; Spectator is never enabled; Options is enabled and opens the
+  With Anyone page, where a cave turns Casual and Ranked into codes 32 and 33 while the ONLINE
+  page's cursor is on its third button; the main menu's exit table sends codes 24-27, 29, 30
+  (Casual), 31 (Ranked), 32 and 33 (Brawl Online Casual and With Friends) to Orca's block, which
+  starts the local Versus scene. No online scene, network thread or DWC is ever entered.
 - **The back out.** Orca's block keeps the exit code in sqVsMelee's object (`+0x18`, slack in its
   heap block); on the way back a helper turns it into the main menu's argument for that page and
   button. It is game memory, so rollback and keyframes carry it.
@@ -1765,7 +1775,7 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
   "(Discontinued)" and the rewritten descriptions are replaced in emulated memory, only while the
   bytes are exactly the game's own, into the same slot.
 - **Textures** (`Data/Sys/Orca/Textures/RSBE01`, `Tools/orca/textures/`): Orca's own label art
-  (PLAY ONLINE, ONLINE, CASUAL, RANKED), drawn by `make-labels.py` with SIL OFL fonts. A session
+  (PLAY ONLINE, ONLINE, CASUAL, RANKED, BRAWL ONLINE), drawn by `make-labels.py` with SIL OFL fonts. A session
   forces texture replacement on and loads Orca's pack with the player's own; Orca's names win, so a
   player's HD pack can never bring back the Nintendo WFC labels. Textures only change what is drawn,
   so the pack is not in the compatibility key.
@@ -1784,6 +1794,8 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
 | `orca menu online casual kept` / `ranked kept` | The same with friends in a host's game, kept because the app can't search that queue now: nothing armed, never a search. Printed again unmarked once the friends are gone. |
 | `orca menu online casual local` / `ranked local` | The same without `host`: nothing searches. |
 | `orca menu online friends` | With Friends. |
+| `orca menu online brawlonline` | The Brawl Online page opened (third button of the ONLINE page). |
+| `orca menu online brawlonline casual` / `friends` | Brawl Online > Casual or With Friends. Never searches. |
 | `orca menu cancel` | The player backed out of searching, alone. Once. Also when a friend on the way, or a friends room joined, ends the queue ([Play again](#play-again-after-a-ranked-set)). |
 
 ### Casual or Ranked with friends in the game

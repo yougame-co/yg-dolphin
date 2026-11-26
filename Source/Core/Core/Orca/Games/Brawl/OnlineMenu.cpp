@@ -22,6 +22,7 @@
 #include "Core/Orca/Games/Brawl/CssTitle.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/UX/BrawlOnlineEntry.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/Search.h"
@@ -37,6 +38,14 @@ constexpr u32 MANAGER_SEQUENCE = 0x10;
 constexpr u32 MANAGER_EXIT_CODE = 0x284;
 constexpr u32 MANAGER_STEP = 0x288;
 constexpr u32 SCENE_NAME_MAX = 32;
+// muMenuMain: the page showing (its proc's id) and its procs, one word each; a proc's cursor (u16).
+constexpr u32 MENU_PAGE = 0x3D0;
+constexpr u32 MENU_PROCS = 0x35C;
+constexpr u32 PROC_CURSOR = 0x42;
+constexpr u32 PAGE_ONLINE = 3;
+constexpr u32 PAGE_WITH_ANYONE = 0x1B;
+// The ONLINE page's third button, Brawl Online (Orca's patch shows the hidden Options button).
+constexpr u16 ONLINE_BRAWL_ONLINE = 2;
 
 bool Pointer(const GuestMemory& m, u32 p)
 {
@@ -114,9 +123,37 @@ std::optional<OnlinePick> PickForExitCode(u32 exit_code)
     return OnlinePick::Casual;
   case 31:
     return OnlinePick::Ranked;
+  case 32:
+    return OnlinePick::BrawlOnlineCasual;
+  case 33:
+    return OnlinePick::BrawlOnlineFriends;
   default:
     return std::nullopt;
   }
+}
+
+bool OnBrawlOnlinePage(const GuestMemory& m)
+{
+  if (ReadSceneName(m) != "muMenuMain")
+    return false;
+  const u32 manager = m.Read32(SCENE_MANAGER);
+  if (!Pointer(m, manager + MANAGER_SCENE))
+    return false;
+  const u32 menu = m.Read32(manager + MANAGER_SCENE);
+  if (!Pointer(m, menu + MENU_PAGE) || m.Read32(menu + MENU_PAGE) != PAGE_WITH_ANYONE)
+    return false;
+  const u32 procs = menu + MENU_PROCS;
+  if (!Pointer(m, procs + 4 * PAGE_ONLINE))
+    return false;
+  const u32 online = m.Read32(procs + 4 * PAGE_ONLINE);
+  if (!Pointer(m, online) || !m.Valid(online + PROC_CURSOR + 1))
+    return false;
+  return m.Read16(online + PROC_CURSOR) == ONLINE_BRAWL_ONLINE;
+}
+
+bool BrawlOnlineRowCode(u32 code)
+{
+  return code == 32 || code == 33;
 }
 
 std::optional<OnlinePick> OnlineMenuReader::Boundary(const MenuState& state, bool resimulating,
@@ -199,7 +236,7 @@ bool OnTheMenus()
 std::optional<OnlinePick> QueuePickForCssCode(u32 code)
 {
   const std::optional<OnlinePick> pick = PickForExitCode(code);
-  if (pick == OnlinePick::Friends)
+  if (!pick || !QueuePick(*pick))
     return std::nullopt;
   return pick;
 }
@@ -228,8 +265,25 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
   s_leaving_pick = state.where == MenuState::Where::Leaving ?
                        QueuePickForCssCode(state.exit_code) :
                        std::nullopt;
-  s_css_pick = scene == "scSelctCharacter" ? QueuePickForCssCode(CssTitle::ReadPick(memory)) :
-                                             std::nullopt;
+  const u32 css_code = scene == "scSelctCharacter" ? CssTitle::ReadPick(memory) : 0;
+  s_css_pick = QueuePickForCssCode(css_code);
+  BrawlOnlineEntry::SetRow(BrawlOnlineRowCode(css_code) ? PickForExitCode(css_code) :
+                                                          std::nullopt);
+  // The Brawl Online page opening (its rising edge): the line, then the sign-in screen the first
+  // time on this PC. Read again after a resync, so a page already open is not a new event.
+  static bool s_bo_page = false;
+  static u64 s_bo_resyncs = 0;
+  const bool bo_page = state.where == MenuState::Where::Menu && OnBrawlOnlinePage(memory);
+  const bool bo_fresh = s_bo_resyncs == Orca::Events::Resyncs();
+  if (bo_page && !s_bo_page && bo_fresh)
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Online menu: Brawl Online page: orca menu {}",
+                   MenuEventText(OnlinePick::BrawlOnline));
+    AnnounceOnlinePick(OnlinePick::BrawlOnline);
+    BrawlOnlineEntry::PageOpened();
+  }
+  s_bo_page = bo_page;
+  s_bo_resyncs = Orca::Events::Resyncs();
   if (const auto pick = s_reader.Boundary(state, false, alone, Orca::Events::Resyncs()))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {}: orca menu {}", state.exit_code,
@@ -238,8 +292,9 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
     return;
   }
   // Casual or Ranked picked with friends in this game (or one about to land): the session decides
-  // at this boundary, after the hook. With Friends while friends play stays theirs.
-  if (const auto busy = s_reader.TakeBusyPick(); busy && *busy != OnlinePick::Friends)
+  // at this boundary, after the hook. With Friends (and a Brawl Online row) while friends play stays
+  // theirs.
+  if (const auto busy = s_reader.TakeBusyPick(); busy && QueuePick(*busy))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {} ({}) while this game isn't alone",
                    state.exit_code, MenuEventText(*busy, true));

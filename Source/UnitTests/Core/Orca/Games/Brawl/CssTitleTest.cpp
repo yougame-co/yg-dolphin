@@ -211,7 +211,10 @@ TEST(OrcaCssTitle, ThePickIsReadOnlyFromARunningVersus)
   EXPECT_EQ(ReadPick(CharacterSelect(kBrawl, 25)), 25u);
   EXPECT_EQ(ReadPick(CharacterSelect(kBrawl, 31)), 31u);
   // The heap's fill, a code the back out already used (0), the main menu's other codes.
-  for (const u32 word : {0xCCCCCCCCu, 0u, 1u, 23u, 32u})
+  // Brawl Online's rows (32, 33) are kept too (BrawlOnlineEntry's panel).
+  EXPECT_EQ(ReadPick(CharacterSelect(kBrawl, 33)), 33u);
+  EXPECT_EQ(Wanted(CharacterSelect(kBrawl, 32), 1), Title::Game);
+  for (const u32 word : {0xCCCCCCCCu, 0u, 1u, 23u, 34u})
     EXPECT_EQ(ReadPick(CharacterSelect(kBrawl, word)), 0u) << word;
   // Another sequence running (Classic, Special Brawl...): no pick.
   FakeMemory other = CharacterSelect(kBrawl, 25);
