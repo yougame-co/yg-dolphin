@@ -25,6 +25,10 @@ struct CowVectorAudit
   unsigned long long handler_changed = 0;
   unsigned long long avx512_in_use = 0;
   unsigned long long context_no_avx512 = 0;
+  unsigned long long wide_stores = 0;
+  unsigned long long wide_no_avx = 0;
+  unsigned long long evex_stores = 0;
+  unsigned long long evex_no_avx512 = 0;
 };
 CowVectorAudit GetCowVectorAudit();
 }  // namespace EMM

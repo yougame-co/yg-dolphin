@@ -106,7 +106,8 @@ static bool s_clobber_vectors = false;
 static u32 s_ymm_offset = 0;
 static bool s_xinuse = false;  // XGETBV with ECX=1
 static std::atomic<u64> s_audit_faults{0}, s_audit_context_avx{0}, s_audit_context_differs{0},
-    s_audit_handler_changed{0}, s_audit_avx512_in_use{0}, s_audit_context_no_avx512{0};
+    s_audit_handler_changed{0}, s_audit_avx512_in_use{0}, s_audit_context_no_avx512{0},
+    s_audit_wide_stores{0}, s_audit_wide_no_avx{0}, s_audit_evex_stores{0}, s_audit_evex_no_avx512{0};
 constexpr std::size_t AUDIT_BYTES = 1024;
 static thread_local u8 t_audit_before[AUDIT_BYTES + 64];
 static thread_local u8 t_audit_after[AUDIT_BYTES + 64];
@@ -129,6 +130,26 @@ static void LiveYmmHigh(u8* area, u8 out[256])
     std::memset(out, 0, 256);
 }
 
+// The faulting instruction's vector store kind: 1 = a 256-bit VEX store (the upper half comes from
+// the YMM state), 2 = an EVEX store (AVX-512 encoding), 0 = anything else.
+static int VectorStoreKind(const u8* ip)
+{
+  int n = 0;
+  while (n < 4 && (ip[n] == 0x66 || ip[n] == 0x67 || ip[n] == 0xF2 || ip[n] == 0xF3 || ip[n] == 0x2E ||
+                   ip[n] == 0x3E || ip[n] == 0x26 || ip[n] == 0x36 || ip[n] == 0x64 || ip[n] == 0x65))
+    ++n;
+  const auto is_store = [](u8 op) {
+    return op == 0x11 || op == 0x29 || op == 0x2B || op == 0x7F || op == 0xE7;
+  };
+  if (ip[n] == 0xC5)
+    return (ip[n + 1] & 4) && is_store(ip[n + 2]) ? 1 : 0;
+  if (ip[n] == 0xC4)
+    return (ip[n + 1] & 0x1F) == 1 && (ip[n + 2] & 4) && is_store(ip[n + 3]) ? 1 : 0;
+  if (ip[n] == 0x62)
+    return (ip[n + 1] & 3) == 1 && is_store(ip[n + 4]) ? 2 : 0;
+  return 0;
+}
+
 static void AuditBefore(CONTEXT* ctx, u8 live[256])
 {
   s_audit_faults.fetch_add(1, std::memory_order_relaxed);
@@ -143,6 +164,19 @@ static void AuditBefore(CONTEXT* ctx, u8 live[256])
     s_audit_avx512_in_use.fetch_add(1, std::memory_order_relaxed);
     if (!has_xstate || (features & 0xe0) != 0xe0)
       s_audit_context_no_avx512.fetch_add(1, std::memory_order_relaxed);
+  }
+  const int kind = VectorStoreKind(reinterpret_cast<const u8*>(ctx->Rip));
+  if (kind == 1)
+  {
+    s_audit_wide_stores.fetch_add(1, std::memory_order_relaxed);
+    if (!has_xstate || !(features & XSTATE_MASK_AVX))
+      s_audit_wide_no_avx.fetch_add(1, std::memory_order_relaxed);
+  }
+  else if (kind == 2)
+  {
+    s_audit_evex_stores.fetch_add(1, std::memory_order_relaxed);
+    if (!has_xstate || (features & 0xe0) != 0xe0)
+      s_audit_evex_no_avx512.fetch_add(1, std::memory_order_relaxed);
   }
   if (has_xstate && (features & XSTATE_MASK_AVX))
   {
@@ -275,6 +309,10 @@ void InstallExceptionHandler()
   s_audit_handler_changed = 0;
   s_audit_avx512_in_use = 0;
   s_audit_context_no_avx512 = 0;
+  s_audit_wide_stores = 0;
+  s_audit_wide_no_avx = 0;
+  s_audit_evex_stores = 0;
+  s_audit_evex_no_avx512 = 0;
 #endif
   s_veh_handle = AddVectoredExceptionHandler(TRUE, Handler);
   ASSERT(s_veh_handle);
@@ -298,7 +336,9 @@ CowVectorAudit GetCowVectorAudit()
 #ifdef _M_X64
   return {s_audit_vectors, s_clobber_vectors, s_audit_faults.load(), s_audit_context_avx.load(),
           s_audit_context_differs.load(), s_audit_handler_changed.load(),
-          s_audit_avx512_in_use.load(), s_audit_context_no_avx512.load()};
+          s_audit_avx512_in_use.load(), s_audit_context_no_avx512.load(),
+          s_audit_wide_stores.load(), s_audit_wide_no_avx.load(), s_audit_evex_stores.load(),
+          s_audit_evex_no_avx512.load()};
 #else
   return {};
 #endif

@@ -508,9 +508,11 @@ TEST(OrcaCow, VectorStateProbe)
     if (c.avx512 && !touched)
       continue;
     std::printf("COWPROBE keep=%s clobber=%s avx512=%d audit=%d faults=%llu ctxavx=%llu "
-                "ctxdiff=%llu changed=%llu in512=%llu ctxno512=%llu lost=%s\n",
+                "ctxdiff=%llu changed=%llu in512=%llu ctxno512=%llu wide=%llu widenoavx=%llu "
+                "evex=%llu evexno512=%llu lost=%s\n",
                 c.keep, c.clobber, c.avx512 ? 1 : 0, a.audit ? 1 : 0, a.faults, a.context_has_avx,
                 a.context_differs, a.handler_changed, a.avx512_in_use, a.context_no_avx512,
+                a.wide_stores, a.wide_no_avx, a.evex_stores, a.evex_no_avx512,
                 lost.empty() ? "none" : lost.c_str());
     if (c.keep[0] == '1')
       EXPECT_EQ(lost, "") << "keep=1 clobber=" << c.clobber << " avx512=" << c.avx512;

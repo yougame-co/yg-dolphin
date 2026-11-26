@@ -440,9 +440,10 @@ void Disarm(const void* owner)
   {
     NOTICE_LOG_FMT(MEMMAP,
                    "Rollback COW vector audit: faults={} ctxavx={} ctxdiff={} changed={} avx512={} "
-                   "ctxno512={}",
+                   "ctxno512={} wide={} widenoavx={} evex={} evexno512={}",
                    a.faults, a.context_has_avx, a.context_differs, a.handler_changed,
-                   a.avx512_in_use, a.context_no_avx512);
+                   a.avx512_in_use, a.context_no_avx512, a.wide_stores, a.wide_no_avx,
+                   a.evex_stores, a.evex_no_avx512);
   }
   UnprotectAll(t);
   ResetLocked(t);
@@ -467,19 +468,25 @@ u64 Snapshot()
   TraceLine(fmt::format("snapshot id={}", id));
   CopyHotPages(t);
   // DIAGNOSTIC build only: the fault handler's vector audit, in the log every 600 snapshots and when
-  // the handler changed the vector registers or a fault's context left out AVX-512 state in use.
+  // the handler changed the vector registers, a fault's context left out AVX-512 state in use, or a
+  // faulting 256-bit or EVEX store's context left out the state its upper bytes come from.
   if (const EMM::CowVectorAudit a = EMM::GetCowVectorAudit(); a.audit)
   {
-    static u64 s_seen_changed = 0, s_seen_no512 = 0, s_audit_snapshots = 0;
+    static u64 s_seen_changed = 0, s_seen_no512 = 0, s_seen_wide = 0, s_seen_evex = 0,
+               s_audit_snapshots = 0;
     if (a.handler_changed != s_seen_changed || a.context_no_avx512 != s_seen_no512 ||
+        a.wide_no_avx != s_seen_wide || a.evex_no_avx512 != s_seen_evex ||
         ++s_audit_snapshots % 600 == 0)
     {
       s_seen_changed = a.handler_changed;
       s_seen_no512 = a.context_no_avx512;
-      const std::string line =
-          fmt::format("vecaudit faults={} ctxavx={} ctxdiff={} changed={} avx512={} ctxno512={}",
-                      a.faults, a.context_has_avx, a.context_differs, a.handler_changed,
-                      a.avx512_in_use, a.context_no_avx512);
+      s_seen_wide = a.wide_no_avx;
+      s_seen_evex = a.evex_no_avx512;
+      const std::string line = fmt::format(
+          "vecaudit faults={} ctxavx={} ctxdiff={} changed={} avx512={} ctxno512={} wide={} "
+          "widenoavx={} evex={} evexno512={}",
+          a.faults, a.context_has_avx, a.context_differs, a.handler_changed, a.avx512_in_use,
+          a.context_no_avx512, a.wide_stores, a.wide_no_avx, a.evex_stores, a.evex_no_avx512);
       TraceLine(line);
       NOTICE_LOG_FMT(ROLLBACK, "COW vector audit: {}", line);
     }
