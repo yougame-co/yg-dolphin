@@ -306,6 +306,8 @@ public:
   std::string Queue() const;
   // Gameplay policy: doubles uses the friends four-seat select until team rules/results ship.
   std::string PlayQueue() const;
+  // A cup match whose ticket carries rules (CupSetWins): it plays under the locked online rules.
+  bool CupRules() const;
   bool Doubles() const;
   // Complete seat-to-team assignment from the room, otherwise empty. No guest writes.
   std::map<int, int> Teams() const;
@@ -386,6 +388,9 @@ class SetTally
 public:
   static constexpr int SET_WINS = 2;
   static constexpr int SET_GAMES = 7;
+  SetTally() = default;
+  // A set of another length: `wins` to take it, void after `wins` * 2 + 3 games (7 for a best of 3).
+  explicit SetTally(int wins) : m_need(wins), m_limit(wins * 2 + 3) {}
   struct End
   {
     // The set's winner (a participant id); empty: the set is void.
@@ -402,9 +407,18 @@ public:
 
 private:
   std::map<std::string, int> m_wins;
+  int m_need = SET_WINS;
+  int m_limit = SET_GAMES;
   int m_games = 0;
   bool m_ended = false;
 };
+
+// A cup match's rules from its room ticket (exposed for tests), read from the signed payload's
+// tournament pairing (`tr.rules`, the site's tournaments.rules). nullopt: the pairing has no rules
+// (or the ticket can't be read), so the match plays as before: one game, the players' own rules.
+// Otherwise the wins a player needs to take the match: 1 (best of 1), 2 (best of 3) or 3 (best of
+// 5). A cup with rules plays under the locked online rules.
+std::optional<int> CupSetWins(std::string_view ticket);
 
 // A ranked game's `game-start` for the room's match (exposed for tests):
 // {"t":"game-start","matchId":"<match>","id":"g<start>"}, the id the game's `game-report` carries.
@@ -491,6 +505,8 @@ struct RoomTestStep
     PageEvent,
     SessionActive,
     Tournament,
+    // A cup match's ticket (`text`): a tournament ticket whose payload may carry rules.
+    CupTicket,
     OfferKeyframe,
     AppCaps,
     SocketMessage,

@@ -1417,6 +1417,8 @@ struct YouGameRoom::Impl
   bool queue_known = false;
   bool welcome_recovery = false;  // Only the welcome room.recovery boolean can opt a queue in.
   bool ticket_tourney = false;
+  // A cup match's rules from its ticket (CupSetWins): the wins a player needs, or none.
+  std::optional<int> cup_wins;
   bool probe_room = false;  // I/O thread: authoritative queue welcome, excluding tournaments.
   // The frame thread closes this path before it queues game 1's start/result. Never reset on rejoin.
   std::atomic<bool> probe_stopped{false};
@@ -2001,6 +2003,7 @@ struct YouGameRoom::Impl
     mirror_dirty = true;
     code = room;
     ticket_tourney = Int(reply, "tourney", 1, 1).has_value();
+    NoteCupRules(*ticket);
     ticket_lobby = lobby;
     if (const auto original = reply.find("lobby");
         original != reply.end() && original->second.is<picojson::object>())
@@ -2155,6 +2158,7 @@ struct YouGameRoom::Impl
       ice_minted = Clock::now();
     ticket_direct = TicketAllowsDirect(reply);
     ticket_tourney = Int(reply, "tourney", 1, 1).has_value();
+    NoteCupRules(*ticket);
     return true;
   }
 
@@ -3863,6 +3867,31 @@ struct YouGameRoom::Impl
     });
   }
 
+  // A cup match's rules, from a ticket (under the mutex). The match keeps the first ticket's: a
+  // fresh ticket mid-match that says otherwise is logged and ignored.
+  void NoteCupRules(const std::string& t)
+  {
+    const std::optional<int> wins = ticket_tourney ? CupSetWins(t) : std::nullopt;
+    if (wins == cup_wins)
+      return;
+    if (cup_wins && !match_id.empty())
+    {
+      WARN_LOG_FMT(NETPLAY, "Orca room: a fresh ticket names other cup rules mid-match: kept");
+      return;
+    }
+    cup_wins = wins;
+    if (wins)
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: cup rules locked, first to {} game{}", *wins,
+                     *wins == 1 ? "" : "s");
+  }
+
+  // A cup match played as a set (best of 3 or 5): each game is a report, and the room's tally of
+  // agreed games ends the match. Under the mutex.
+  bool CupSet() const
+  {
+    return ticket_tourney && !doubles && queue == "private" && cup_wins && *cup_wins > 1;
+  }
+
   // Tournament eligibility comes only from this room's ticket response. The room service
   // validates it again; the emulator reports a private tournament game as a casual game.
   std::string ReportQueue() const
@@ -3877,7 +3906,7 @@ struct YouGameRoom::Impl
   void TryBegin()
   {
     std::string current_match, room_queue;
-    bool plugged, done;
+    bool plugged, done, cup;
     int my_seat;
     {
       std::lock_guard lock(mutex);
@@ -3885,9 +3914,11 @@ struct YouGameRoom::Impl
       room_queue = ReportQueue();
       plugged = opponent_plugged;
       done = set_done;
+      cup = CupSet();
       my_seat = seat;
     }
-    if (room_queue == "private" || !current_match.empty() || (room_queue == "ranked" && done))
+    if (room_queue == "private" || !current_match.empty() ||
+        ((room_queue == "ranked" || cup) && done))
       return;
     const auto now = Now();
     if (begin_sent && now - *begin_sent < BEGIN_ANSWER)
@@ -3916,11 +3947,22 @@ struct YouGameRoom::Impl
     if (QueueRecovery() && report.start >= 0 && !reports_sent.insert(report.start).second)
       return;
     const bool ranked = room_queue == "ranked";
+    bool cup;
+    {
+      std::lock_guard lock(mutex);
+      cup = CupSet();
+    }
+    // A set's games (a ranked set's, a cup set's) are each a game report; the set's end is the
+    // match's final (OnGameResult).
+    const bool set_games = ranked || cup;
     const int n = ranked ? ++ranked_sent : ++casual_sent;
-    // A ranked game is named by its fight's first frame, the same on both
+    // A set's game is named by its fight's first frame, the same on both
     // machines whatever either missed.
-    const std::string id = ranked && report.start >= 0 ? fmt::format("g{}", report.start) :
-                                                         fmt::format("{}{}", ranked ? "g" : "c", n);
+    const std::string id = set_games && report.start >= 0 ?
+                               fmt::format("g{}", report.start) :
+                               fmt::format("{}{}", set_games ? "g" : "c", n);
+    if (cup)
+      game_numbers[id] = n;
     if (ranked)
     {
       game_numbers[id] = report.number > 0 ? report.number : n;
@@ -3976,11 +4018,12 @@ struct YouGameRoom::Impl
     if (r.kind != GameReport::Kind::Void)
       sent_detail[id] = r.detail;
     const std::string text =
-        ranked ? fmt::format("{{\"t\":\"game-report\",\"matchId\":{},\"id\":\"{}\",{}}}",
-                             JsonString(match), id, outcome) :
-                 fmt::format("{{\"t\":\"finish\",\"matchId\":{},{}}}", JsonString(match), outcome);
+        set_games ?
+            fmt::format("{{\"t\":\"game-report\",\"matchId\":{},\"id\":\"{}\",{}}}",
+                        JsonString(match), id, outcome) :
+            fmt::format("{{\"t\":\"finish\",\"matchId\":{},{}}}", JsonString(match), outcome);
     NOTICE_LOG_FMT(NETPLAY, "Orca room: report {}", text);
-    SendMatchReport(match, ranked ? id : "$final", HarnessReport(text));
+    SendMatchReport(match, set_games ? id : "$final", HarnessReport(text));
   }
 
   // A ranked game began: the room's match hears it once (GameStartMessage), so a leave from here on
@@ -4056,13 +4099,14 @@ struct YouGameRoom::Impl
       return;
     FlushReportOutbox();
     std::string current_match, room_queue;
-    bool desync, fault, done, stall;
+    bool desync, fault, done, stall, cup;
     std::vector<HeldReport> ready;
     {
       std::lock_guard lock(mutex);
       current_match = match_id;
       room_queue = ReportQueue();
       done = set_done;
+      cup = CupSet();
       desync = std::exchange(desync_pending, false);
       fault = std::exchange(fault_pending, false);
       stall = std::exchange(stall_pending, false);
@@ -4117,8 +4161,8 @@ struct YouGameRoom::Impl
         return;
       }
     }
-    // A ranked set already decided takes no more games.
-    if (room_queue == "ranked" && (finish_sent || done))
+    // A set already decided (ranked, or a cup's) takes no more games.
+    if ((room_queue == "ranked" || cup) && (finish_sent || done))
       return;
     for (const HeldReport& held : ready)
     {
@@ -4295,9 +4339,15 @@ struct YouGameRoom::Impl
       }
     }
     const std::string d = LocalDetail(m, id);
+    bool cup;
+    {
+      std::lock_guard lock(mutex);
+      cup = CupSet();
+    }
     ResultLine(
-        fmt::format("{{\"q\":\"ranked\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{},\"score\":{}{}}}",
-                    n, v.out, v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(),
+        fmt::format("{{\"q\":\"{}\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{},\"score\":{}{}}}",
+                    cup ? "casual" : "ranked", n, v.out,
+                    v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(),
                     d.empty() ? "" : ",\"d\":" + d));
     const std::string score = Score();
     const int mine = tally.Wins(MyScoreId()), theirs = tally.Wins(TheirScoreId());
@@ -4455,6 +4505,25 @@ struct YouGameRoom::Impl
         fmt::format("{{\"q\":\"casual\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{}{}}}", n, v.out,
                     v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
                     d.empty() ? "" : ",\"d\":" + d));
+    bool cup;
+    {
+      std::lock_guard lock(mutex);
+      cup = CupSet();
+    }
+    // A cup set's end: YOU WON or YOU LOST with the set's games. A decided pairing takes no other
+    // match here; a void or drawn one is played again from game 1, as a one-game cup's is.
+    if (cup && (v.out == "won" || v.out == "lost"))
+    {
+      Orca::UX::SetEnd::Current().CasualGame(OutcomeOf(v.out), tally.Wins(MyScoreId()),
+                                             tally.Wins(TheirScoreId()), Orca::UX::SetEnd::NowMs());
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: cup set {} for this player, games {}", v.out, Score());
+      std::lock_guard lock(mutex);
+      set_done = true;
+      rejoin_verdict_until.reset();
+      mirror_dirty |= !match_id.empty();
+      match_id.clear();
+      return true;
+    }
     // On screen: YOU WON or YOU LOST with the sitting's score (UX/SetEnd.h).
     if (v.out == "won")
       ++casual_mine;
@@ -4495,7 +4564,10 @@ struct YouGameRoom::Impl
     begin_retry_at.reset();
     begin_tries = 0;
     ranked_sent = 0;
-    tally.Reset();
+    {
+      std::lock_guard lock(mutex);
+      tally = CupSet() ? SetTally(*cup_wins) : SetTally();
+    }
     finish_sent = false;
     game_numbers.clear();
     set_ends.clear();
@@ -6406,6 +6478,13 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     case RoomTestStep::Kind::Tournament:
       room.ticket_tourney = true;
       break;
+    case RoomTestStep::Kind::CupTicket:
+    {
+      std::lock_guard lock(room.mutex);
+      room.ticket_tourney = true;
+      room.NoteCupRules(step.text);
+      break;
+    }
     case RoomTestStep::Kind::AppCaps:
       Orca::Status::SetAppCaps(step.text);
       break;
@@ -6843,12 +6922,12 @@ std::optional<SetTally::End> SetTally::Game(const std::string& winner)
   if (m_ended)
     return std::nullopt;
   ++m_games;
-  if (!winner.empty() && ++m_wins[winner] >= SET_WINS)
+  if (!winner.empty() && ++m_wins[winner] >= m_need)
   {
     m_ended = true;
     return End{winner, ""};
   }
-  if (m_games >= SET_GAMES)
+  if (m_games >= m_limit)
   {
     m_ended = true;
     return End{"", "limit"};
@@ -6867,6 +6946,50 @@ void SetTally::Reset()
   m_wins.clear();
   m_games = 0;
   m_ended = false;
+}
+
+std::optional<int> CupSetWins(std::string_view ticket)
+{
+  // `<base64url payload>.<signature>`: the room service checks the signature; the payload is the
+  // site's, as sent to this player.
+  const size_t dot = ticket.find('.');
+  if (dot == std::string_view::npos || dot == 0 || dot > 16384)
+    return std::nullopt;
+  std::string json;
+  json.reserve(dot * 3 / 4);
+  u32 bits = 0;
+  int have = 0;
+  for (const char c : ticket.substr(0, dot))
+  {
+    const int v = Base64Value(c == '-' ? '+' : c == '_' ? '/' : c);
+    if (v < 0 || c == '+' || c == '/')
+      return std::nullopt;
+    bits = (bits << 6) | static_cast<u32>(v);
+    have += 6;
+    if (have >= 8)
+    {
+      have -= 8;
+      json.push_back(static_cast<char>((bits >> have) & 0xFF));
+    }
+  }
+  picojson::value payload;
+  if (!ParseRoomJson(json, &payload) || !payload.is<picojson::object>())
+    return std::nullopt;
+  const auto& top = payload.get<picojson::object>();
+  const auto tr = top.find("tr");
+  if (tr == top.end() || !tr->second.is<picojson::object>())
+    return std::nullopt;
+  const auto& pairing = tr->second.get<picojson::object>();
+  const auto rules = pairing.find("rules");
+  if (rules == pairing.end() || !rules->second.is<picojson::object>())
+    return std::nullopt;
+  const auto& r = rules->second.get<picojson::object>();
+  if (!r.count("bestOf"))
+    return 1;
+  const auto best_of = Int(r, "bestOf", 1, 5);
+  if (!best_of || *best_of % 2 == 0)
+    return std::nullopt;
+  return (*best_of + 1) / 2;
 }
 
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
@@ -7015,6 +7138,13 @@ std::string YouGameRoom::PlayQueue() const
 {
   std::lock_guard lock(m_impl->mutex);
   return m_impl->doubles ? "private" : m_impl->queue;
+}
+
+bool YouGameRoom::CupRules() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->ticket_tourney && !m_impl->doubles && m_impl->queue == "private" &&
+         m_impl->cup_wins.has_value();
 }
 
 std::map<int, int> YouGameRoom::Teams() const

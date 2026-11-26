@@ -53,6 +53,8 @@ std::optional<std::string> TakeHostRequest();
 // Gameplay policy: "private" for friends/doubles (or no room), otherwise "casual" or "ranked".
 // YouGameRoom::Queue keeps the room service's queue for the mirror and tickets.
 std::string RoomQueue();
+// A cup match whose ticket carries rules: it plays under the locked (casual) online rules.
+bool RoomCupRules();
 bool RoomDoubles();
 // Complete room team assignment; metadata only until frame-synchronized team rules ship.
 std::map<int, int> RoomTeams();

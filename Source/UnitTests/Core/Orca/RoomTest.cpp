@@ -1430,6 +1430,142 @@ TEST(OrcaRoom, SceneRankedWinsWithStartFramesFinishThroughTheTally)
   EXPECT_NE(trace.back().results[0].find(R"("score":[2,0])"), std::string::npos);
 }
 
+TEST(OrcaRoom, CupRulesComeFromTheTicketsPairing)
+{
+  // Payloads: {"tr":{"p1":"a","rules":{"bestOf":3}}}, {"tr":{"rules":{"bestOf":5,"stocks":3}}},
+  // {"tr":{"rules":{"bestOf":1}}}, {"tr":{"rules":{}}}, and one with url-safe characters
+  // ({"tr":{"x":"??>>~~","rules":{"bestOf":3}}}).
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJwMSI6ImEiLCJydWxlcyI6eyJiZXN0T2YiOjN9fX0.sig"), 2);
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjUsInN0b2NrcyI6M319fQ.sig"), 3);
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjF9fX0.sig"), 1);
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJydWxlcyI6e319fQ.sig"), 1);
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJ4IjoiPz8-Pn5-IiwicnVsZXMiOnsiYmVzdE9mIjozfX19.sig"), 2);
+  // No rules: the match plays as before. {"tr":{"p1":"a"}}, {"k":2}.
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJwMSI6ImEifX0.sig"), std::nullopt);
+  EXPECT_EQ(CupSetWins("eyJrIjoyfQ.sig"), std::nullopt);
+  // A set length the site never signs: bestOf 2, "3", 7.
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjJ9fX0.sig"), std::nullopt);
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOiIzIn19fQ.sig"), std::nullopt);
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjd9fX0.sig"), std::nullopt);
+  // Not a ticket's shape: no signature part, an empty payload, standard base64's characters.
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjF9fX0"), std::nullopt);
+  EXPECT_EQ(CupSetWins(".sig"), std::nullopt);
+  EXPECT_EQ(CupSetWins("eyJ0ciI6eyJ4IjoiPz8+Pn5+IiwicnVsZXMiOnsiYmVzdE9mIjozfX19.sig"), std::nullopt);
+  EXPECT_EQ(CupSetWins("loopback-fixture-1"), std::nullopt);
+}
+
+TEST(OrcaRoom, ALongerSetNeedsMoreWinsAndVoidsLater)
+{
+  SetTally tally(3);
+  EXPECT_FALSE(tally.Game("a"));
+  EXPECT_FALSE(tally.Game("b"));
+  EXPECT_FALSE(tally.Game("a"));
+  EXPECT_FALSE(tally.Game("b"));
+  const auto end = tally.Game("a");
+  ASSERT_TRUE(end);
+  EXPECT_EQ(end->winner, "a");
+  EXPECT_FALSE(tally.Game("a"));
+
+  SetTally drawn(3);
+  for (int n = 1; n < 9; ++n)
+    EXPECT_FALSE(drawn.Game(""));
+  const auto limit = drawn.Game("");
+  ASSERT_TRUE(limit);
+  EXPECT_EQ(limit->why, "limit");
+  // The default is a ranked set's: best of 3, void after 7.
+  SetTally ranked;
+  EXPECT_FALSE(ranked.Game("a"));
+  EXPECT_TRUE(ranked.Game("a"));
+}
+
+namespace
+{
+// A cup match's room trace: its ticket, then a private welcome and the match's start.
+std::vector<RoomTestStep> CupSteps(const std::string& ticket)
+{
+  return {{RK::CupTicket, 0, ticket},
+          {RK::Message, 0, QueueRoster("welcome", "private", "")},
+          {RK::Message, 0, QueueRoster("start", "private", "")}};
+}
+
+void CupGame(std::vector<RoomTestStep>* steps, int at, int start, const char* ranking)
+{
+  steps->push_back({RK::ReportGame, at, "", unsigned(start)});
+  steps->push_back({RK::Tick, at + 1});
+  steps->push_back({RK::Message, at + 2,
+      fmt::format(R"({{"t":"game-result","matchId":"queue-recovery-match","id":"g{}","ranking":{}}})",
+                  start, ranking)});
+}
+
+struct CupSent
+{
+  std::vector<std::string> reports;
+  std::vector<std::pair<size_t, std::string>> finishes;
+};
+
+CupSent SentBy(const std::vector<RoomTestSnapshot>& trace)
+{
+  CupSent out;
+  for (size_t i = 0; i < trace.size(); ++i)
+    for (const auto& wire : trace[i].sent)
+    {
+      picojson::value message;
+      if (!picojson::parse(message, wire).empty())
+        continue;
+      if (message.get("t").to_str() == "game-report")
+        out.reports.push_back(message.get("id").to_str());
+      if (message.get("t").to_str() == "finish")
+        out.finishes.emplace_back(i, message.contains("winner") ? message.get("winner").to_str() :
+                                                                  std::string("void"));
+    }
+  return out;
+}
+}  // namespace
+
+TEST(OrcaRoom, ACupBestOfThreeReportsEachGameAndFinishesOnTheSet)
+{
+  // {"tr":{"p1":"a","rules":{"bestOf":3}}}
+  auto steps = CupSteps("eyJ0ciI6eyJwMSI6ImEiLCJydWxlcyI6eyJiZXN0T2YiOjN9fX0.sig");
+  CupGame(&steps, 1, 120, R"(["me","peer"])");
+  CupGame(&steps, 4, 360, R"(["peer","me"])");
+  const size_t before_last = steps.size();
+  CupGame(&steps, 7, 600, R"(["me","peer"])");
+  const auto trace = TraceRoomForTest(TraceOptions(), steps);
+  const CupSent sent = SentBy(trace);
+  EXPECT_EQ(sent.reports, (std::vector<std::string>{"g120", "g360", "g600"}));
+  ASSERT_EQ(sent.finishes.size(), 1u);
+  EXPECT_GE(sent.finishes[0].first, before_last);
+  EXPECT_EQ(sent.finishes[0].second, "me");
+}
+
+TEST(OrcaRoom, ACupBestOfFiveTakesThreeWins)
+{
+  // {"tr":{"rules":{"bestOf":5,"stocks":3}}}
+  auto steps = CupSteps("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjUsInN0b2NrcyI6M319fQ.sig");
+  CupGame(&steps, 1, 120, R"(["peer","me"])");
+  CupGame(&steps, 4, 360, R"(["peer","me"])");
+  CupGame(&steps, 7, 600, R"(["me","peer"])");
+  const auto after_three = TraceRoomForTest(TraceOptions(), steps);
+  EXPECT_TRUE(SentBy(after_three).finishes.empty());
+  CupGame(&steps, 10, 840, R"(["peer","me"])");
+  const auto trace = TraceRoomForTest(TraceOptions(), steps);
+  const CupSent sent = SentBy(trace);
+  EXPECT_EQ(sent.reports.size(), 4u);
+  ASSERT_EQ(sent.finishes.size(), 1u);
+  EXPECT_EQ(sent.finishes[0].second, "peer");
+}
+
+TEST(OrcaRoom, ACupOfOneGameWithRulesFinishesOnItsGame)
+{
+  // {"tr":{"rules":{"bestOf":1}}}: the rules lock, but the game is the match, as before.
+  auto steps = CupSteps("eyJ0ciI6eyJydWxlcyI6eyJiZXN0T2YiOjF9fX0.sig");
+  steps.push_back({RK::ReportGame, 1, "", 120});
+  steps.push_back({RK::Tick, 2});
+  const CupSent sent = SentBy(TraceRoomForTest(TraceOptions(), steps));
+  EXPECT_TRUE(sent.reports.empty());
+  ASSERT_EQ(sent.finishes.size(), 1u);
+}
+
 TEST(OrcaRoom, SceneRankedGamesWithStartFramesVoidAtTheGameLimit)
 {
   std::vector<RoomTestStep> steps{

@@ -386,6 +386,12 @@ std::string RoomQueue()
   return room ? room->PlayQueue() : "private";
 }
 
+bool RoomCupRules()
+{
+  const auto room = Room();
+  return room && room->CupRules();
+}
+
 bool RoomDoubles()
 {
   const auto room = Room();

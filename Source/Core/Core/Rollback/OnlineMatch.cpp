@@ -1052,6 +1052,26 @@ u8 RoomFlags()
   return Orca::Status::Cap("queue2") ? Orca::Engine::FLAG_QUEUE2 : u8{0};
 }
 
+// A cup match's room: no queue of its own, but its ticket carries rules, so it plays under casual's
+// locked rules (no queue flags: its character select is the friends room's).
+bool CupRulesRoom()
+{
+  return QueueMode(Orca::Online::RoomQueue()) == Orca::Engine::Mode::None &&
+         Orca::Online::RoomCupRules();
+}
+
+// The online rules' mode for this room: its queue's, casual for a cup match with rules, else none.
+Orca::Engine::Mode RoomRulesMode()
+{
+  return CupRulesRoom() ? Orca::Engine::Mode::Casual : QueueMode(Orca::Online::RoomQueue());
+}
+
+// The queue flags this room's header carries (RoomFlags; none in a cup match's room).
+u8 RoomHeaderFlags()
+{
+  return CupRulesRoom() ? u8{0} : RoomFlags();
+}
+
 // The header this game should carry, written only where HeaderFreeAt allows: a queue room's while
 // hosting it on port 1, or while waiting for or staying after a ranked verdict; the queue's own
 // character select's (FLAG_SOLO) while waiting there with `queue2`; otherwise none.
@@ -1061,13 +1081,12 @@ std::pair<Orca::Engine::Mode, u8> WantedRulesMode(const Match& match)
   namespace MB = Orca::Engine;
   if (match.joining)
     return {Mode::None, 0};
-  const Mode mode =
-      Orca::Online::RoomEnded() ? Mode::None : QueueMode(Orca::Online::RoomQueue());
+  const Mode mode = Orca::Online::RoomEnded() ? Mode::None : RoomRulesMode();
   if (mode != Mode::None &&
       (match.local_seat == 0 ||
        ((match.linger_until || Orca::Online::SetOver()) && mode == Mode::Ranked)))
   {
-    return {mode, RoomFlags()};
+    return {mode, RoomHeaderFlags()};
   }
   if (mode == Mode::None && Orca::UX::QueueApp::Active() && Orca::Status::Cap("queue2") &&
       match.local_seat == 0 && !match.session && !match.linger_until)
@@ -1520,6 +1539,9 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   const bool in_room = test_room ? test_room->Connected() : Orca::Online::InRoom();
   const bool in_queue_room = test_room ? QueueMode(test_room->PlayQueue()) != Orca::Engine::Mode::None :
                                          InQueueRoom();
+  // A keyframe waits for the room's header in a queue room, and in a cup match's (its rules).
+  const bool header_room =
+      in_queue_room || (!test_room && !Orca::Online::RoomEnded() && CupRulesRoom());
   // `host` also opens private/tournament rooms. Only a confirmed welcome can disarm the queue
   // start: before it, "private" is also the default for a queue room still connecting.
   if (match.fresh_queue_armed && in_room && !in_queue_room)
@@ -1668,7 +1690,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
     const bool in_place = Orca::UX::Game().Header().HeaderInPlace();
     int waited = match.header_waited;
     const bool header_ready = HeaderWaitAt(&waited, InTail(match), Unseen(match), in_place,
-                                           true, in_queue_room) == HeaderWait::Ready;
+                                           true, header_room) == HeaderWait::Ready;
     const auto capture = ChooseJoinCapture(match.session.get(), match.doubles, next,
         std::max(match.replay.first_frame + 1, match.recovery_keyframe_from));
     const char* fresh_reason = !match.fresh ? "none" :
@@ -1880,7 +1902,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   // A fresh start's tail can't write the header (it runs as a re-run), so its boundaries don't
   // count toward the header's limit; nor do its unseen hold's, which run unthrottled.
   const HeaderWait header = HeaderWaitAt(&match.header_waited, InTail(match), Unseen(match),
-                                         in_place, !match.waiting.empty(), in_queue_room);
+                                         in_place, !match.waiting.empty(), header_room);
   if (header == HeaderWait::Fail)
   {
     FailHeaderWait(match);
@@ -2641,8 +2663,8 @@ void FinishReplay(Match& match)
   match.running = frame - 1;
   match.stats_frame = -1;
   EndQueueForJoin(match);
-  Orca::UX::Game().Header().ExpectHeader(QueueMode(Orca::Online::RoomQueue()), Orca::Online::Code(),
-                                RoomFlags(), Orca::Online::KnownSetGames());
+  Orca::UX::Game().Header().ExpectHeader(RoomRulesMode(), Orca::Online::Code(), RoomHeaderFlags(),
+                                         Orca::Online::KnownSetGames());
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: rebuilt replay frame {} locally in {:.0f} ms", frame,
                  MsSince(match.loaded_time));
   match.replaying.reset();
