@@ -456,6 +456,49 @@ bool IsArmedFor(const void* owner)
   return t.owner && t.owner == owner;
 }
 
+// DIAGNOSTIC build only: a code address as module+offset, or the raw address outside any module.
+static std::string CodeAddressName(u64 address)
+{
+#ifdef _WIN32
+  HMODULE module = nullptr;
+  char path[MAX_PATH] = {};
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCSTR>(address), &module) &&
+      GetModuleFileNameA(module, path, MAX_PATH))
+  {
+    const char* name = path;
+    for (const char* p = path; *p; ++p)
+      if (*p == '\\' || *p == '/')
+        name = p + 1;
+    return fmt::format("{}+{:#x}", name, address - reinterpret_cast<u64>(module));
+  }
+#endif
+  return fmt::format("{:#x}", address);
+}
+
+// DIAGNOSTIC build only: a host address in a tracked view as its guest physical address.
+static std::string GuestAddressName(const Tracker& t, u64 address)
+{
+  const u8* const at = reinterpret_cast<const u8*>(address);
+  for (const ViewInfo& view : t.views)
+  {
+    if (at < view.base || at >= view.end)
+      continue;
+    const std::size_t offset = static_cast<std::size_t>(at - view.base);
+    const std::size_t page = view.first_page + offset / t.page_size;
+    for (std::size_t a = t.areas.size(); a-- > 0;)
+    {
+      if (t.area_first_page[a] > page)
+        continue;
+      return fmt::format("{:#010x}", t.areas[a].physical_address +
+                                         (page - t.area_first_page[a]) * t.page_size +
+                                         offset % t.page_size);
+    }
+  }
+  return fmt::format("host:{:#x}", address);
+}
+
 u64 Snapshot()
 {
   Tracker& t = T();
@@ -487,6 +530,21 @@ u64 Snapshot()
           "widenoavx={} evex={} evexno512={}",
           a.faults, a.context_has_avx, a.context_differs, a.handler_changed, a.avx512_in_use,
           a.context_no_avx512, a.wide_stores, a.wide_no_avx, a.evex_stores, a.evex_no_avx512);
+      TraceLine(line);
+      NOTICE_LOG_FMT(ROLLBACK, "COW vector audit: {}", line);
+    }
+    EMM::CowWideSample samples[8];
+    const unsigned n = EMM::TakeCowWideSamples(samples, 8);
+    for (unsigned i = 0; i < n; ++i)
+    {
+      const EMM::CowWideSample& w = samples[i];
+      std::string bytes;
+      for (const unsigned char b : w.bytes)
+        bytes += fmt::format("{:02x}", b);
+      const std::string line = fmt::format(
+          "widesample ctxavx={} hostcopy={} tid={} rip={} ret={} guest={} bytes={}",
+          w.context_avx ? 1 : 0, w.host_copy ? 1 : 0, w.tid, CodeAddressName(w.rip),
+          CodeAddressName(w.ret), GuestAddressName(t, w.address), bytes);
       TraceLine(line);
       NOTICE_LOG_FMT(ROLLBACK, "COW vector audit: {}", line);
     }

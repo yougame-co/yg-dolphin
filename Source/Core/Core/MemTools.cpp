@@ -111,6 +111,30 @@ static std::atomic<u64> s_audit_faults{0}, s_audit_context_avx{0}, s_audit_conte
 constexpr std::size_t AUDIT_BYTES = 1024;
 static thread_local u8 t_audit_before[AUDIT_BYTES + 64];
 static thread_local u8 t_audit_after[AUDIT_BYTES + 64];
+static thread_local bool t_host_copy = false;
+// Slots 0..23: wide stores whose context lacks AVX state; 24..31: ones that carry it.
+constexpr unsigned WIDE_SAMPLES = 32, WIDE_NO_AVX_SLOTS = 24;
+static CowWideSample s_wide_samples[WIDE_SAMPLES];
+static std::atomic<bool> s_wide_ready[WIDE_SAMPLES], s_wide_taken[WIDE_SAMPLES];
+static std::atomic<unsigned> s_wide_next_no_avx{0}, s_wide_next_avx{0};
+
+static void SampleWide(const CONTEXT* ctx, bool context_avx, uintptr_t address)
+{
+  std::atomic<unsigned>& next = context_avx ? s_wide_next_avx : s_wide_next_no_avx;
+  const unsigned slot =
+      (context_avx ? WIDE_NO_AVX_SLOTS : 0) + next.fetch_add(1, std::memory_order_relaxed);
+  if (slot >= (context_avx ? WIDE_SAMPLES : WIDE_NO_AVX_SLOTS))
+    return;
+  CowWideSample& s = s_wide_samples[slot];
+  s.rip = ctx->Rip;
+  std::memcpy(&s.ret, reinterpret_cast<const void*>(ctx->Rsp), sizeof(s.ret));
+  s.address = address;
+  s.tid = GetCurrentThreadId();
+  s.context_avx = context_avx;
+  s.host_copy = t_host_copy;
+  std::memcpy(s.bytes, reinterpret_cast<const void*>(ctx->Rip), sizeof(s.bytes));
+  s_wide_ready[slot].store(true, std::memory_order_release);
+}
 
 static u8* Aligned64(u8* p)
 {
@@ -150,7 +174,7 @@ static int VectorStoreKind(const u8* ip)
   return 0;
 }
 
-static void AuditBefore(CONTEXT* ctx, u8 live[256])
+static void AuditBefore(CONTEXT* ctx, u8 live[256], uintptr_t address)
 {
   s_audit_faults.fetch_add(1, std::memory_order_relaxed);
   // Whether AVX-512 state (opmask, ZMM_Hi256, Hi16_ZMM) is in use, read before anything here runs.
@@ -169,8 +193,10 @@ static void AuditBefore(CONTEXT* ctx, u8 live[256])
   if (kind == 1)
   {
     s_audit_wide_stores.fetch_add(1, std::memory_order_relaxed);
-    if (!has_xstate || !(features & XSTATE_MASK_AVX))
+    const bool context_avx = has_xstate && (features & XSTATE_MASK_AVX);
+    if (!context_avx)
       s_audit_wide_no_avx.fetch_add(1, std::memory_order_relaxed);
+    SampleWide(ctx, context_avx, address);
   }
   else if (kind == 2)
   {
@@ -224,7 +250,7 @@ static LONG NTAPI Handler(PEXCEPTION_POINTERS pPtrs)
         _xsave64(state, mask);
       alignas(16) u8 audit_live[256];
       if (s_audit_vectors)
-        AuditBefore(ctx, audit_live);
+        AuditBefore(ctx, audit_live, fault_address);
       if (s_clobber_vectors)
         _mm256_zeroall();
 #endif
@@ -313,6 +339,13 @@ void InstallExceptionHandler()
   s_audit_wide_no_avx = 0;
   s_audit_evex_stores = 0;
   s_audit_evex_no_avx512 = 0;
+  s_wide_next_no_avx = 0;
+  s_wide_next_avx = 0;
+  for (unsigned i = 0; i < WIDE_SAMPLES; ++i)
+  {
+    s_wide_ready[i] = false;
+    s_wide_taken[i] = false;
+  }
 #endif
   s_veh_handle = AddVectoredExceptionHandler(TRUE, Handler);
   ASSERT(s_veh_handle);
@@ -341,6 +374,27 @@ CowVectorAudit GetCowVectorAudit()
           s_audit_evex_no_avx512.load()};
 #else
   return {};
+#endif
+}
+
+unsigned TakeCowWideSamples(CowWideSample* out, unsigned max)
+{
+  unsigned n = 0;
+#ifdef _M_X64
+  for (unsigned i = 0; i < WIDE_SAMPLES && n < max; ++i)
+  {
+    if (!s_wide_ready[i].load(std::memory_order_acquire) || s_wide_taken[i].exchange(true))
+      continue;
+    out[n++] = s_wide_samples[i];
+  }
+#endif
+  return n;
+}
+
+void SetHostCopyActive(bool active)
+{
+#ifdef _M_X64
+  t_host_copy = active;
 #endif
 }
 
@@ -494,6 +548,15 @@ CowVectorAudit GetCowVectorAudit()
   return {};
 }
 
+unsigned TakeCowWideSamples(CowWideSample*, unsigned)
+{
+  return 0;
+}
+
+void SetHostCopyActive(bool)
+{
+}
+
 // Faults on threads without the Mach thread port (only the CPU thread has it) reach the task's
 // and host's ports, which nothing here claims, and then become SIGBUS (a write to a read-only page)
 // or SIGSEGV.
@@ -637,6 +700,15 @@ CowVectorAudit GetCowVectorAudit()
   return {};
 }
 
+unsigned TakeCowWideSamples(CowWideSample*, unsigned)
+{
+  return 0;
+}
+
+void SetHostCopyActive(bool)
+{
+}
+
 void InstallCowFallbackHandler()
 {
   // The signal handler is process-wide.
@@ -660,6 +732,15 @@ bool IsExceptionHandlerSupported()
 CowVectorAudit GetCowVectorAudit()
 {
   return {};
+}
+
+unsigned TakeCowWideSamples(CowWideSample*, unsigned)
+{
+  return 0;
+}
+
+void SetHostCopyActive(bool)
+{
 }
 
 void InstallCowFallbackHandler()

@@ -38,6 +38,7 @@
 #include "Core/HW/MMIO.h"
 #include "Core/HW/MemoryInterface.h"
 #include "Core/HW/ProcessorInterface.h"
+#include "Core/MemTools.h"
 #include "Core/HW/SI/SI.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/HW/WII_IPC.h"
@@ -760,7 +761,7 @@ static void VerifyHostCopy(const char* what, u32 address, const u8* dst, const u
   }
   if (bad == 0)
   {
-    if (s_copy_checked % 20000 == 0)
+    if ((s_copy_checked & (s_copy_checked - 1)) == 0 || s_copy_checked % 2000 == 0)
       NOTICE_LOG_FMT(MEMMAP, "COW vector audit: copycheck checked={} bad={} badbytes={}",
                      s_copy_checked, s_copy_bad, s_copy_bad_bytes);
     return;
@@ -787,7 +788,9 @@ void MemoryManager::CopyToEmu(u32 address, const void* data, size_t size)
   }
   if (s_copy_prepare)
     Rollback::Cow::PrepareHostWrite(pointer, size);
+  EMM::SetHostCopyActive(true);
   memcpy(pointer, data, size);
+  EMM::SetHostCopyActive(false);
   if (s_copy_verify)
     VerifyHostCopy("copy", address, static_cast<const u8*>(pointer), static_cast<const u8*>(data), 0,
                    size);
@@ -806,7 +809,9 @@ void MemoryManager::Memset(u32 address, u8 value, size_t size)
   }
   if (s_copy_prepare)
     Rollback::Cow::PrepareHostWrite(pointer, size);
+  EMM::SetHostCopyActive(true);
   memset(pointer, value, size);
+  EMM::SetHostCopyActive(false);
   if (s_copy_verify)
     VerifyHostCopy("memset", address, static_cast<const u8*>(pointer), nullptr, value, size);
 }

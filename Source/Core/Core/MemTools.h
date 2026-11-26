@@ -31,4 +31,19 @@ struct CowVectorAudit
   unsigned long long evex_no_avx512 = 0;
 };
 CowVectorAudit GetCowVectorAudit();
+// DIAGNOSTIC build only (Windows x64): the first faulting 256-bit stores, where they came from.
+struct CowWideSample
+{
+  unsigned long long rip = 0;
+  unsigned long long ret = 0;  // the 8 bytes at RSP (a leaf copy's return address)
+  unsigned long long address = 0;
+  unsigned long tid = 0;
+  bool context_avx = false;
+  bool host_copy = false;  // inside MemoryManager::CopyToEmu or Memset
+  unsigned char bytes[16] = {};
+};
+// Copies out samples not taken before; returns how many.
+unsigned TakeCowWideSamples(CowWideSample* out, unsigned max);
+// Marks the calling thread as inside a host copy into guest RAM.
+void SetHostCopyActive(bool active);
 }  // namespace EMM
