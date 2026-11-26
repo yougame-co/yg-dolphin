@@ -313,9 +313,9 @@ TEST(OrcaRoomPingRange, QueueWelcomesAdvertiseProbeOnJoin)
   }
 }
 
-// A room the app's hello names is joined, unless the server seats this player alone as its host:
-// then nobody hosts it, so this game does. The role stays unknown until a roster settles it.
-TEST(OrcaRoom, HelloNamedRoomIsHostedWhenNobodyIsInIt)
+// A room the app's hello names is joined, unless the server makes this player its host: then no
+// other game hosts it, so this game does. The role stays unknown until a roster settles it.
+TEST(OrcaRoom, HelloNamedRoomIsHostedWhenTheServerMakesThisGameItsHost)
 {
   auto hello = TraceOptions(true);
   hello.room_code.clear();
@@ -325,6 +325,13 @@ TEST(OrcaRoom, HelloNamedRoomIsHostedWhenNobodyIsInIt)
   EXPECT_FALSE(alone[0].joining.has_value());
   EXPECT_EQ(alone[1].joining, false);
   EXPECT_EQ(alone[1].seat, 0);
+
+  // Host on arrival with a friend already in the first roster (both reached the room at once).
+  const auto together = TraceRoomForTest(
+      hello, {{RK::Message, 0, bare}, {RK::Message, 10, RosterMessage("welcome", false, true)}});
+  EXPECT_FALSE(together[0].joining.has_value());
+  EXPECT_EQ(together[1].joining, false);
+  EXPECT_EQ(together[1].seat, 0);
 
   const auto hosted = TraceRoomForTest(hello, {{RK::Message, 0, RosterMessage("welcome", true)}});
   EXPECT_EQ(hosted[0].joining, true);

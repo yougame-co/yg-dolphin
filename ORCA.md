@@ -2882,6 +2882,10 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.110
+
+- "Play with your party" also works when two of you reach the party's room at the same moment. In 0.3.109 both games could wait to join each other and then say they couldn't join; now the game the room names as host hosts it.
+
 ### 0.3.109
 
 - "Play with your party" works when your game reaches the party's room first. In 0.3.108 that game waited to join a room nobody was hosting, then said it couldn't join and opened a different room. It now hosts the party's room, and the others join it.
