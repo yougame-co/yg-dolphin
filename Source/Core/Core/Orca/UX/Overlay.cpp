@@ -19,6 +19,7 @@
 #include <imgui.h>
 
 #include "Common/HookableEvent.h"
+#include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/OrbCombo.h"
@@ -1481,6 +1482,13 @@ void InitOverlay()
     if (state == Core::State::Paused || state == Core::State::Stopping)
       LocalPadStopped();
   });
+  // ORCA_UX_OVERLAY_OFF=1, for cost checks only: no overlay is drawn at all (the game's picture
+  // alone), so a frame-time run can compare with and without it.
+  if (const char* v = std::getenv("ORCA_UX_OVERLAY_OFF"); v && v[0] == '1')
+  {
+    NOTICE_LOG_FMT(CORE, "Orca overlay: off (ORCA_UX_OVERLAY_OFF)");
+    return;
+  }
   OSD::SetHostOverlay(&Draw, &Kit::ReleaseGpu);
 }
 }  // namespace Orca::UX

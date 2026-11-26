@@ -156,6 +156,7 @@ with the same value meet):
 | `ORCA_TEST_HOLD`, `ORCA_TEST_SHADER_WAIT_MS`, `ORCA_TEST_FXC_FLAGS`, `ORCA_TEST_JITWARM_SLOW_US`, `ORCA_JITWARM_SEED`, `ORCA_JITWARM_LOG`, `ORCA_JITWARM_BUDGET_US` | Knobs for the sections that describe them. |
 | `ORCA_UX_PROBE` | Memory watches, dumps and writes for reverse-engineering game state. |
 | `ORCA_UX_KIT_DEMO`, `ORCA_UX_SETEND_DEMO`, `ORCA_UX_OVERLAY_DEMO` | Draw overlay elements for design checks. |
+| `ORCA_UX_OVERLAY_OFF` | `1`: draw no overlay at all, for frame-time cost checks. |
 
 ### Orca.app and the disc
 

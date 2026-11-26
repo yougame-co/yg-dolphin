@@ -607,6 +607,7 @@
 1	env	Source/Core/Core/Orca/UX/OnlineMenu.cpp	std::getenv("ORCA_TEST_HOLD"
 1	app-channel	Source/Core/Core/Orca/UX/OrbCombo.cpp	Status::Line("orcaorb"
 1	env	Source/Core/Core/Orca/UX/Overlay.cpp	std::getenv("ORCA_UX_OVERLAY_DEMO"
+1	env	Source/Core/Core/Orca/UX/Overlay.cpp	std::getenv("ORCA_UX_OVERLAY_OFF"
 1	env	Source/Core/Core/Orca/UX/Overlay.cpp	std::getenv("ORCA_UX_STATS"
 1	env	Source/Core/Core/Orca/UX/Probe.cpp	std::getenv("ORCA_TEST_DEV_GAME"
 1	env	Source/Core/Core/Orca/UX/Probe.cpp	std::getenv("ORCA_UX_PROBE"
