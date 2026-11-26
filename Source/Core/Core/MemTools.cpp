@@ -104,8 +104,9 @@ static u64 VectorStateMask()
 static bool s_audit_vectors = false;
 static bool s_clobber_vectors = false;
 static u32 s_ymm_offset = 0;
+static bool s_xinuse = false;  // XGETBV with ECX=1
 static std::atomic<u64> s_audit_faults{0}, s_audit_context_avx{0}, s_audit_context_differs{0},
-    s_audit_handler_changed{0};
+    s_audit_handler_changed{0}, s_audit_avx512_in_use{0}, s_audit_context_no_avx512{0};
 constexpr std::size_t AUDIT_BYTES = 1024;
 static thread_local u8 t_audit_before[AUDIT_BYTES + 64];
 static thread_local u8 t_audit_after[AUDIT_BYTES + 64];
@@ -131,10 +132,19 @@ static void LiveYmmHigh(u8* area, u8 out[256])
 static void AuditBefore(CONTEXT* ctx, u8 live[256])
 {
   s_audit_faults.fetch_add(1, std::memory_order_relaxed);
+  // Whether AVX-512 state (opmask, ZMM_Hi256, Hi16_ZMM) is in use, read before anything here runs.
+  const bool avx512 = s_xinuse && (_xgetbv(1) & 0xe0) != 0;
   LiveYmmHigh(Aligned64(t_audit_before), live);
   DWORD64 features = 0;
-  if ((ctx->ContextFlags & CONTEXT_XSTATE) == CONTEXT_XSTATE &&
-      GetXStateFeaturesMask(ctx, &features) && (features & XSTATE_MASK_AVX))
+  const bool has_xstate = (ctx->ContextFlags & CONTEXT_XSTATE) == CONTEXT_XSTATE &&
+                          GetXStateFeaturesMask(ctx, &features);
+  if (avx512)
+  {
+    s_audit_avx512_in_use.fetch_add(1, std::memory_order_relaxed);
+    if (!has_xstate || (features & 0xe0) != 0xe0)
+      s_audit_context_no_avx512.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (has_xstate && (features & XSTATE_MASK_AVX))
   {
     s_audit_context_avx.fetch_add(1, std::memory_order_relaxed);
     DWORD length = 0;
@@ -250,6 +260,8 @@ void InstallExceptionHandler()
     int r[4];
     __cpuidex(r, 0xD, 2);
     s_ymm_offset = static_cast<u32>(r[1]);
+    __cpuidex(r, 0xD, 1);
+    s_xinuse = (r[0] & (1 << 2)) != 0;
   }
   const auto on = [](const char* name) {
     const char* v = std::getenv(name);
@@ -261,6 +273,8 @@ void InstallExceptionHandler()
   s_audit_context_avx = 0;
   s_audit_context_differs = 0;
   s_audit_handler_changed = 0;
+  s_audit_avx512_in_use = 0;
+  s_audit_context_no_avx512 = 0;
 #endif
   s_veh_handle = AddVectoredExceptionHandler(TRUE, Handler);
   ASSERT(s_veh_handle);
@@ -283,7 +297,8 @@ CowVectorAudit GetCowVectorAudit()
 {
 #ifdef _M_X64
   return {s_audit_vectors, s_clobber_vectors, s_audit_faults.load(), s_audit_context_avx.load(),
-          s_audit_context_differs.load(), s_audit_handler_changed.load()};
+          s_audit_context_differs.load(), s_audit_handler_changed.load(),
+          s_audit_avx512_in_use.load(), s_audit_context_no_avx512.load()};
 #else
   return {};
 #endif

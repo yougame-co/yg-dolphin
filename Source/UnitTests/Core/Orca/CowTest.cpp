@@ -14,6 +14,7 @@
 
 #if defined(_WIN32) && defined(_M_X64)
 #include <immintrin.h>
+#include <intrin.h>
 #endif
 
 #ifndef _WIN32
@@ -432,6 +433,20 @@ static std::string CopiesIntoColdPages(CowMemory& memory)
   return lost;
 }
 
+// Puts AVX-512 state in use on this thread (an opmask register written), when the CPU and OS have it.
+static bool TouchAvx512()
+{
+  int r[4];
+  __cpuidex(r, 7, 0);
+  if (!(r[1] & (1 << 16)) || (_xgetbv(0) & 0xe6) != 0xe6)
+    return false;
+  alignas(64) static volatile u32 sink[16];
+  const __m512i a = _mm512_set1_epi32(static_cast<int>(sink[0]) + 1);
+  const __mmask16 m = _mm512_cmpeq_epi32_mask(a, _mm512_set1_epi32(1));
+  sink[1] = static_cast<u32>(m);
+  return true;
+}
+
 static void SetDiagEnv(const char* name, const char* value)
 {
   _putenv_s(name, value);
@@ -468,28 +483,37 @@ TEST(OrcaCow, VectorStateProbe)
   {
     const char* keep;
     const char* clobber;
+    bool avx512;
   };
-  for (const Case c : {Case{"0", "0"}, Case{"1", "0"}, Case{"0", "1"}, Case{"1", "1"}})
+  for (const Case c : {Case{"0", "0", false}, Case{"1", "0", false}, Case{"0", "1", false},
+                       Case{"1", "1", false}, Case{"0", "0", true}, Case{"0", "1", true},
+                       Case{"1", "1", true}})
   {
     SetDiagEnv("YG_DIAG_COW_VECTOR_AUDIT", "1");
     SetDiagEnv("YG_DIAG_COW_KEEP_VECTORS", c.keep);
     SetDiagEnv("YG_DIAG_COW_CLOBBER_VECTORS", c.clobber);
     EMM::InstallExceptionHandler();
     std::string lost;
+    bool touched = false;
     {
       CowMemory memory;
       ASSERT_TRUE(memory.Arm());
+      if (c.avx512)
+        touched = TouchAvx512();
       lost = CopiesIntoColdPages(memory);
       Rollback::Cow::Disarm(&memory);
     }
     const EMM::CowVectorAudit a = EMM::GetCowVectorAudit();
     EMM::UninstallExceptionHandler();
-    std::printf("COWPROBE keep=%s clobber=%s audit=%d faults=%llu ctxavx=%llu ctxdiff=%llu "
-                "changed=%llu lost=%s\n",
-                c.keep, c.clobber, a.audit ? 1 : 0, a.faults, a.context_has_avx, a.context_differs,
-                a.handler_changed, lost.empty() ? "none" : lost.c_str());
+    if (c.avx512 && !touched)
+      continue;
+    std::printf("COWPROBE keep=%s clobber=%s avx512=%d audit=%d faults=%llu ctxavx=%llu "
+                "ctxdiff=%llu changed=%llu in512=%llu ctxno512=%llu lost=%s\n",
+                c.keep, c.clobber, c.avx512 ? 1 : 0, a.audit ? 1 : 0, a.faults, a.context_has_avx,
+                a.context_differs, a.handler_changed, a.avx512_in_use, a.context_no_avx512,
+                lost.empty() ? "none" : lost.c_str());
     if (c.keep[0] == '1')
-      EXPECT_EQ(lost, "") << "keep=1 clobber=" << c.clobber;
+      EXPECT_EQ(lost, "") << "keep=1 clobber=" << c.clobber << " avx512=" << c.avx512;
   }
   SetDiagEnv("YG_DIAG_COW_VECTOR_AUDIT", "");
   SetDiagEnv("YG_DIAG_COW_KEEP_VECTORS", "");

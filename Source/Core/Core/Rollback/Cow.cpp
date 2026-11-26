@@ -438,8 +438,11 @@ void Disarm(const void* owner)
     return;
   if (const EMM::CowVectorAudit a = EMM::GetCowVectorAudit(); a.audit)
   {
-    NOTICE_LOG_FMT(MEMMAP, "Rollback COW vector audit: faults={} ctxavx={} ctxdiff={} changed={}",
-                   a.faults, a.context_has_avx, a.context_differs, a.handler_changed);
+    NOTICE_LOG_FMT(MEMMAP,
+                   "Rollback COW vector audit: faults={} ctxavx={} ctxdiff={} changed={} avx512={} "
+                   "ctxno512={}",
+                   a.faults, a.context_has_avx, a.context_differs, a.handler_changed,
+                   a.avx512_in_use, a.context_no_avx512);
   }
   UnprotectAll(t);
   ResetLocked(t);
@@ -472,8 +475,9 @@ u64 Snapshot()
     {
       s_seen_changed = a.handler_changed;
       s_seen_differs = a.context_differs;
-      TraceLine(fmt::format("vecaudit faults={} ctxavx={} ctxdiff={} changed={}", a.faults,
-                            a.context_has_avx, a.context_differs, a.handler_changed));
+      TraceLine(fmt::format("vecaudit faults={} ctxavx={} ctxdiff={} changed={} avx512={} ctxno512={}",
+                            a.faults, a.context_has_avx, a.context_differs, a.handler_changed,
+                            a.avx512_in_use, a.context_no_avx512));
     }
   }
   return id;
