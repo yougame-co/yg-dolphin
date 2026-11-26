@@ -470,6 +470,12 @@ u64 RoomGeneration()
   return room ? room->Generation() : 0;
 }
 
+u64 ReplayStreamEpoch()
+{
+  const auto room = Room();
+  return room ? room->ReplayEpoch() : 0;
+}
+
 void ReportDesync()
 {
   if (const auto room = Room())

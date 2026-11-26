@@ -1455,6 +1455,10 @@ struct YouGameRoom::Impl
   std::deque<std::string> replay_texts;
   size_t replay_text_bytes = 0;
   bool replay_dropped = false;
+  // After a same-seat reconnect, until the recorder's header comes again: bytes the dead socket
+  // took are gone, so the room only takes a new stream (RestartReplayStream).
+  bool replay_restart = false;
+  std::atomic<u64> replay_epoch{0};
   // The newest saved copy's pieces still to send (SendReplayPacked), one per PACKED_GAP: a newer
   // copy replaces them. The I/O thread's time of the last one.
   std::deque<std::string> replay_packed;
@@ -4143,6 +4147,21 @@ struct YouGameRoom::Impl
   // A replay stream's waiting messages, in order; then at most one saved-copy piece (32 KiB, ~44 KB
   // of text) every PACKED_GAP, so a whole copy never goes out in one burst ahead of the inputs, and
   // stays within the room's replay budget (rooms/src/index.ts RS_BYTES_PER_SECOND).
+  // The room's stream starts over from the recorder's header: what was queued or written to the
+  // lost socket can't follow on from what the room already has. I/O thread.
+  void RestartReplayStream()
+  {
+    {
+      std::lock_guard lock(mutex);
+      replay_texts.clear();
+      replay_text_bytes = 0;
+      replay_dropped = false;
+      replay_restart = true;
+    }
+    replay_epoch.fetch_add(1);
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: back in the same seat: the replay stream starts over");
+  }
+
   void FlushReplayStream()
   {
     constexpr auto PACKED_GAP = std::chrono::milliseconds(200);
@@ -5874,6 +5893,7 @@ struct YouGameRoom::Impl
           return;
         }
         ReconnectOutcome(kept_session ? "same-seat" : "same-seat-fresh-drop-in", kept_session);
+        RestartReplayStream();
         if (held_seat)
           rejoin_flaps.Rejoined(Now());
         reconnect = {};
@@ -6968,6 +6988,11 @@ u64 YouGameRoom::Generation() const
   return m_impl->generation;
 }
 
+u64 YouGameRoom::ReplayEpoch() const
+{
+  return m_impl->replay_epoch.load();
+}
+
 std::string YouGameRoom::Status() const
 {
   std::lock_guard lock(m_impl->mutex);
@@ -7425,6 +7450,13 @@ void YouGameRoom::SendReplayStream(const std::vector<u8>& bytes)
     return;
   std::string text = R"({"t":"rs","b":")" + EncodeInlineKeyframe(bytes) + R"("})";
   std::lock_guard lock(m_impl->mutex);
+  // A restarted stream takes nothing before its new header.
+  if (m_impl->replay_restart)
+  {
+    if (!IsReplayStreamHeader(bytes))
+      return;
+    m_impl->replay_restart = false;
+  }
   // A stream with a gap is no stream: once anything was dropped, nothing more is sent.
   if (m_impl->replay_dropped)
     return;

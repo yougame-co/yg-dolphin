@@ -276,6 +276,9 @@ public:
   // Process-wide generation of this room connection. Reopening creates a new room/socket, even
   // when its code is the same; immutable, so it can be read on any thread.
   u64 Generation() const;
+  // Changes when this room's replay stream starts over (a same-seat reconnect): the recorder then
+  // sends its header and the history so far again. Any thread.
+  u64 ReplayEpoch() const;
   // The roster's name for a seat (this player's included); "" when nobody holds it.
   std::string SeatName(int seat) const;
   // A joiner's own controls and queue identity exactly as its hello carries them (none past their

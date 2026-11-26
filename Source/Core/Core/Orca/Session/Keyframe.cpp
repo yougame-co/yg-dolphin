@@ -630,6 +630,12 @@ std::vector<u8> PackReplayStreamHeader(const ReplayStreamInfo& info)
   return out;
 }
 
+bool IsReplayStreamHeader(const std::vector<u8>& bytes)
+{
+  return bytes.size() >= sizeof(STREAM_MAGIC) &&
+         std::memcmp(bytes.data(), STREAM_MAGIC, sizeof(STREAM_MAGIC)) == 0;
+}
+
 std::vector<u8> PackReplayChunk(const ReplayChunk& chunk, bool history_start)
 {
   try

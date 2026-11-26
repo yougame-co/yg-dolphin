@@ -1519,6 +1519,21 @@ TEST(OrcaReplayStream, ResumesWithARepackedBacklog)
   }
 }
 
+// After a same-seat reconnect the room takes only a new header first, never a chunk.
+TEST(OrcaReplayStream, TellsAHeaderFromAChunk)
+{
+  EXPECT_TRUE(IsReplayStreamHeader(PackReplayStreamHeader(StreamInfo())));
+  const auto replay = Replay(30);
+  ReplayChunk chunk;
+  chunk.first = replay.first_frame;
+  chunk.frames = replay.frames;
+  const auto bytes = PackReplayChunk(chunk, true);
+  ASSERT_FALSE(bytes.empty());
+  EXPECT_FALSE(IsReplayStreamHeader(bytes));
+  EXPECT_FALSE(IsReplayStreamHeader({'Y', 'G', 'R'}));
+  EXPECT_FALSE(IsReplayStreamHeader({}));
+}
+
 TEST(OrcaReplayStream, RefusesAnotherHeaderOnResume)
 {
   const auto replay = Replay(20, 500);

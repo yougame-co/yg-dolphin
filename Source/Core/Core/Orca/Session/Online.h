@@ -88,6 +88,9 @@ void SendReplayPacked(const std::vector<std::vector<u8>>& pieces, int frames, u6
 // The current room/socket's process-wide generation (0 with no room). Changes on a reopen,
 // including one with the same code; room readiness is still checked separately.
 u64 RoomGeneration();
+// The room's replay stream epoch (YouGameRoom::ReplayEpoch; 0 with no room): a change means the
+// recorder starts its room stream over.
+u64 ReplayStreamEpoch();
 // In a ranked set whose opponent stopped sending inputs (15 s stalled, or silent), this player
 // claims the set. Does nothing outside a ranked room's live match.
 void ReportStall();

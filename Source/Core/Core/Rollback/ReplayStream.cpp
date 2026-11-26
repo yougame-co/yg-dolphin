@@ -551,9 +551,12 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
   if (m_to_room)
   {
     const u64 generation = Orca::Online::RoomGeneration();
-    if (generation != m_room_generation)
+    const u64 epoch = Orca::Online::ReplayStreamEpoch();
+    // A reopened room, or the same room after a reconnect: its stream starts again from the header.
+    if (generation != m_room_generation || epoch != m_room_epoch)
     {
       m_room_generation = generation;
+      m_room_epoch = epoch;
       m_room_started = false;
     }
   }

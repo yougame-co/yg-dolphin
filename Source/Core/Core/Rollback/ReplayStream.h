@@ -177,6 +177,7 @@ private:
   bool m_started = false;
   bool m_room_started = false;
   u64 m_room_generation = 0;
+  u64 m_room_epoch = 0;
   // The checksums already written: sessions only retain their last few seconds, but a reopened
   // room needs the whole backlog's checksums too.
   std::map<int, u64> m_room_checksums;

@@ -88,6 +88,8 @@ struct ReplayChunk
 };
 
 std::vector<u8> PackReplayStreamHeader(const ReplayStreamInfo& info);
+// Whether `bytes` begin a stream's header (PackReplayStreamHeader), not a chunk.
+bool IsReplayStreamHeader(const std::vector<u8>& bytes);
 // Empty if the frames can't be written (too large, a seed or menu exit past the history's start).
 std::vector<u8> PackReplayChunk(const ReplayChunk& chunk, bool history_start);
 
