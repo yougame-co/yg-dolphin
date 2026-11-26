@@ -20,7 +20,15 @@
 #include <unistd.h>  // Needed for _POSIX_VERSION
 #endif
 
+#if defined(_WIN32) && defined(_M_X64)
+#include <algorithm>
+#include <cstdint>
+
+#include <immintrin.h>
+#include <intrin.h>
+#endif
 #ifdef _WIN32
+
 #include "Common/Assert.h"
 #endif
 #if defined(__APPLE__) && !defined(USE_SIGACTION_ON_APPLE)
@@ -51,6 +59,43 @@ namespace EMM
 
 static PVOID s_veh_handle;
 
+#ifdef _M_X64
+// The vector register bits above XMM (the AVX and AVX-512 state) are not restored from the context a
+// handled fault resumes with, and the snapshot fault handler's calls (memcpy, VirtualProtect) may
+// change them: they are volatile across calls. A host copy into guest RAM with 256-bit registers
+// that faulted on a protected page would then go on storing those upper halves as zeros. So that
+// state is saved before the snapshot handler runs and put back after it. x87 and SSE come back
+// from the context; AMX tiles are granted per thread and left out.
+constexpr std::size_t VECTOR_STATE_BYTES = 8192;
+// Zero-initialised, as XRSTOR wants the save header's reserved bytes; aligned to 64 by hand.
+static thread_local u8 t_vector_state[VECTOR_STATE_BYTES + 64];
+static u64 s_vector_state_mask = 0;
+
+static void* VectorStateArea()
+{
+  const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(t_vector_state);
+  return reinterpret_cast<void*>((at + 63) & ~std::uintptr_t{63});
+}
+
+static u64 VectorStateMask()
+{
+  int r[4];
+  __cpuid(r, 1);
+  if (!(r[2] & (1 << 27)))  // OSXSAVE
+    return 0;
+  const u64 mask = _xgetbv(0) & ~u64{3} & ~((u64{1} << 17) | (u64{1} << 18));
+  std::size_t end = 512 + 64;
+  for (int bit = 2; bit < 32; ++bit)
+  {
+    if (!(mask >> bit & 1))
+      continue;
+    __cpuidex(r, 0xD, bit);
+    end = std::max<std::size_t>(end, std::size_t{static_cast<u32>(r[1])} + static_cast<u32>(r[0]));
+  }
+  return end <= VECTOR_STATE_BYTES ? mask : 0;
+}
+#endif
+
 static LONG NTAPI Handler(PEXCEPTION_POINTERS pPtrs)
 {
   switch (pPtrs->ExceptionRecord->ExceptionCode)
@@ -69,8 +114,22 @@ static LONG NTAPI Handler(PEXCEPTION_POINTERS pPtrs)
 
     // A write to guest RAM that a rollback snapshot protected: the page is writable again and the
     // write runs again. Before the JIT, which would backpatch a fastmem write it doesn't own.
-    if (access_type == 1 && Rollback::Cow::HandleFault(fault_address))
-      return EXCEPTION_CONTINUE_EXECUTION;
+    if (access_type == 1)
+    {
+#ifdef _M_X64
+      const u64 mask = s_vector_state_mask;
+      void* const state = mask ? VectorStateArea() : nullptr;
+      if (mask)
+        _xsave64(state, mask);
+#endif
+      const bool handled = Rollback::Cow::HandleFault(fault_address);
+#ifdef _M_X64
+      if (mask)
+        _xrstor64(state, mask);
+#endif
+      if (handled)
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
 
     if (Core::System::GetInstance().GetJitInterface().HandleFault(fault_address, ctx))
     {
@@ -113,6 +172,13 @@ static LONG NTAPI Handler(PEXCEPTION_POINTERS pPtrs)
 void InstallExceptionHandler()
 {
   ASSERT(!s_veh_handle);
+#ifdef _M_X64
+  s_vector_state_mask = VectorStateMask();
+  // DIAGNOSTIC build only: YG_DIAG_COW_KEEP_VECTORS=0 runs the snapshot handler without keeping
+  // the vector state, to show the loss it causes.
+  if (const char* v = std::getenv("YG_DIAG_COW_KEEP_VECTORS"); v && v[0] == '0')
+    s_vector_state_mask = 0;
+#endif
   s_veh_handle = AddVectoredExceptionHandler(TRUE, Handler);
   ASSERT(s_veh_handle);
 }

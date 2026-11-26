@@ -6,8 +6,13 @@
 #include <cstring>
 #include <map>
 #include <random>
+#include <string>
 #include <thread>
 #include <vector>
+
+#if defined(_WIN32) && defined(_M_X64)
+#include <immintrin.h>
+#endif
 
 #ifndef _WIN32
 #include <cerrno>
@@ -18,6 +23,7 @@
 
 #include <gtest/gtest.h>
 
+#include "Common/CPUDetect.h"
 #include "Common/CommonTypes.h"
 #include "Common/MemArena.h"
 #include "Core/MemTools.h"
@@ -359,4 +365,76 @@ TEST(OrcaCow, WriteFaultsRestoreAndChecksum)
   }
   EMM::UninstallExceptionHandler();
 }
+#if defined(_WIN32) && defined(_M_X64)
+// 256-bit loads, then 256-bit stores, so a store that faults on a protected page is followed by
+// stores of registers loaded before the fault.
+static void WideCopy(u8* destination, const u8* source, std::size_t length)
+{
+  for (std::size_t i = 0; i + 128 <= length; i += 128)
+  {
+    const __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source + i));
+    const __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source + i + 32));
+    const __m256i c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source + i + 64));
+    const __m256i d = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source + i + 96));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(destination + i), a);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(destination + i + 32), b);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(destination + i + 64), c);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(destination + i + 96), d);
+  }
+}
+
+static std::string FirstDifference(const u8* got, const std::vector<u8>& want)
+{
+  std::size_t bad = 0, first = want.size();
+  for (std::size_t i = 0; i < want.size(); ++i)
+  {
+    if (got[i] != want[i])
+    {
+      ++bad;
+      first = std::min(first, i);
+    }
+  }
+  return bad ? std::to_string(bad) + " bytes differ, first at " + std::to_string(first) : "";
+}
+
+// A host copy into guest RAM that faults on a protected page goes on with every byte it was given:
+// the snapshot handler must not lose vector register state the interrupted copy still holds.
+TEST(OrcaCow, AFaultingWideCopyKeepsEveryByte)
+{
+  if (!EMM::IsExceptionHandlerSupported())
+    GTEST_SKIP() << "no fault handler on this platform";
+  if (!cpu_info.bAVX)
+    GTEST_SKIP() << "no AVX on this CPU";
+  EMM::InstallExceptionHandler();
+  {
+    CowMemory memory;
+    ASSERT_TRUE(memory.Arm());
+    const std::size_t page = Rollback::Cow::PageSize();
+    for (int round = 0; round < 2; ++round)
+    {
+      // Snapshots with nothing written let every page go cold (read-only).
+      for (int i = 0; i < 260; ++i)
+        Rollback::Cow::Snapshot();
+      std::vector<u8> source(8 * page);
+      for (std::size_t i = 0; i < source.size(); ++i)
+        source[i] = static_cast<u8>(i * 7 + 1 + round);
+      if (round == 0)
+      {
+        WideCopy(memory.View(1, 0), source.data(), source.size());
+        EXPECT_EQ(FirstDifference(memory.View(1, 1), source), "") << "explicit 256-bit copy";
+      }
+      else
+      {
+        // The library copy, at the length and page offset of a disc read DMA.
+        const std::size_t at = 2 * page + 0xb60, length = 0x4e28;
+        source.resize(length);
+        std::memcpy(memory.View(1, 0) + at, source.data(), length);
+        EXPECT_EQ(FirstDifference(memory.View(1, 1) + at, source), "") << "library copy";
+      }
+    }
+    Rollback::Cow::Disarm(&memory);
+  }
+  EMM::UninstallExceptionHandler();
+}
+#endif
 }  // namespace
