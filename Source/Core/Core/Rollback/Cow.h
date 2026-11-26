@@ -79,7 +79,8 @@ bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>
 // Forgets snapshot `id`; its saved pages merge into the next older snapshot's log.
 void Drop(u64 id);
 // RamChecksum (Rollback.h) of RAM as it was at snapshot `id`, rebuilt from live RAM and the logs.
-std::optional<u64> Checksum(u64 id);
+// With `blocks`, also its block map, the same as RamChecksum's.
+std::optional<u64> Checksum(u64 id, std::vector<u16>* blocks = nullptr);
 
 // Called first by the fault handlers. True if `address` is a protected page of tracked RAM; the
 // page is then saved and made writable so the faulting write can be retried.

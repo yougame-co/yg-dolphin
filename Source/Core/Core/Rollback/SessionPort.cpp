@@ -8,6 +8,9 @@
 #include <optional>
 #include <thread>
 
+#include <fmt/format.h>
+
+#include "Common/CPUDetect.h"
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/Orca/Session/PadCodec.h"
@@ -134,7 +137,28 @@ void RingPort::SetResimulating(bool resimulating)
 
 std::optional<u64> RingPort::SnapshotChecksum(int frame)
 {
-  return m_ring.RamChecksum(frame);
+  // A desync is found a round trip or so after the checksum; this keeps several seconds of maps.
+  constexpr std::size_t KEPT_BLOCK_MAPS = 16;
+  std::vector<u16> blocks;
+  const std::optional<u64> hash = m_ring.RamChecksum(frame, &blocks);
+  if (hash)
+  {
+    m_block_maps[frame] = std::move(blocks);
+    while (m_block_maps.size() > KEPT_BLOCK_MAPS)
+      m_block_maps.erase(m_block_maps.begin());
+  }
+  return hash;
+}
+
+std::vector<u16> RingPort::BlockMap(int frame) const
+{
+  const auto it = m_block_maps.find(frame);
+  return it == m_block_maps.end() ? std::vector<u16>{} : it->second;
+}
+
+std::string RingPort::HostCpu() const
+{
+  return fmt::format("cpu {}, avx512 {}", cpu_info.model_name, cpu_info.bAVX512F ? 1 : 0);
 }
 
 void RingPort::ResetPacing()

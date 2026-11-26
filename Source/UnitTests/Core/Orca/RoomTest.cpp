@@ -188,6 +188,34 @@ TEST(OrcaRoom, PacketRoundTrips)
   ExpectSame(bare, got);
 }
 
+// A desync's block map goes by the relay, not beside drop-in history, and never over the direct
+// link; a malformed one is dropped without the packet.
+TEST(OrcaRoom, DesyncMapRoundTrips)
+{
+  Packet sent = Sample();
+  sent.desync_frame = 120;
+  for (int i = 0; i < 1408; ++i)
+    sent.desync_map.push_back(static_cast<u16>(i * 40503));
+  const std::string text = EncodePacket(sent);
+  EXPECT_LT(text.size(), 16u * 1024);
+  Packet got;
+  ASSERT_TRUE(DecodePacket(text, &got));
+  ExpectSame(sent, got);
+  EXPECT_EQ(got.desync_frame, 120);
+  EXPECT_EQ(got.desync_map, sent.desync_map);
+
+  EXPECT_EQ(EncodeDirectPacket(sent).find("\"dm\""), std::string::npos);
+  Packet with_history = sent;
+  with_history.history_seat = 1;
+  with_history.history = {Pads{}};
+  EXPECT_EQ(EncodePacket(with_history).find("\"dm\""), std::string::npos);
+
+  ASSERT_TRUE(DecodePacket(R"({"k":"p","s":1,"f":0,"c":0,"p":"","a":[-1,-1,-1,-1],"df":5,"dm":"abc"})",
+                           &got));
+  EXPECT_FALSE(got.desync_frame);
+  EXPECT_TRUE(got.desync_map.empty());
+}
+
 TEST(OrcaRoom, LegacyPacketGoldens)
 {
   // Captured with the unmodified 0.3.77 encoder (55238506e8).

@@ -388,6 +388,20 @@ picojson::object PacketToJson(const Packet& packet)
       bytes[i] = static_cast<u8>(packet.checksum >> (56 - 8 * i));
     d["h"] = picojson::value(ToHex(bytes, 8));
   }
+  // A desync's block map, 16-bit big-endian hashes in hex. Never beside drop-in history, which can
+  // fill the relay's message on its own.
+  if (packet.desync_frame && !packet.desync_map.empty() && packet.history.empty())
+  {
+    d["df"] = picojson::value(static_cast<double>(*packet.desync_frame));
+    std::vector<u8> bytes;
+    bytes.reserve(packet.desync_map.size() * 2);
+    for (const u16 h : packet.desync_map)
+    {
+      bytes.push_back(static_cast<u8>(h >> 8));
+      bytes.push_back(static_cast<u8>(h));
+    }
+    d["dm"] = picojson::value(ToHex(bytes.data(), bytes.size()));
+  }
   // Drop-in (all optional): the roster as [plug, unplug, live] per seat (-1: never), the history
   // ack, history as [count, pads hex] runs, and a leave request.
   if (packet.roster)
@@ -584,6 +598,20 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     out.checksum = 0;
     for (u8 b : hash)
       out.checksum = out.checksum << 8 | b;
+  }
+  // A malformed block map is dropped, not the packet: it only names blocks in a desync's log.
+  if (d.count("df"))
+  {
+    const auto frame = Int(d, "df", 0, MAX_FRAME);
+    std::vector<u8> map_bytes;
+    if (frame && FromHex(Str(d, "dm"), &map_bytes) && !map_bytes.empty() &&
+        map_bytes.size() % 2 == 0 && map_bytes.size() / 2 <= static_cast<size_t>(MAX_DESYNC_BLOCKS))
+    {
+      out.desync_frame = *frame;
+      out.desync_map.resize(map_bytes.size() / 2);
+      for (size_t i = 0; i < out.desync_map.size(); ++i)
+        out.desync_map[i] = static_cast<u16>(map_bytes[2 * i] << 8 | map_bytes[2 * i + 1]);
+    }
   }
   if (d.count("ro"))
   {
@@ -824,6 +852,9 @@ std::string EncodeDirectPacket(const Packet& packet)
   copy.history_seat = -1;
   copy.history_first = 0;
   copy.history.clear();
+  // Block maps go by the relay only; one would not fit a datagram.
+  copy.desync_frame.reset();
+  copy.desync_map.clear();
   std::string payload = EncodePacket(copy);
   while (payload.size() > DirectLink::MAX_PAYLOAD && copy.pads.size() > 1)
   {
@@ -7263,6 +7294,11 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
   {
     merged.checksum_frame = pending->checksum_frame;
     merged.checksum = pending->checksum;
+  }
+  if (pending->desync_frame && !merged.desync_frame)
+  {
+    merged.desync_frame = pending->desync_frame;
+    merged.desync_map = pending->desync_map;
   }
   // Drop-in history: the older packet's goes first when the newer one continues it (or has none); a
   // gap is resent once the joiner's ack stalls.

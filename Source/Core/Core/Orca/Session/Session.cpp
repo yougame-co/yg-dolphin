@@ -1163,7 +1163,15 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
   // A re-run needs nothing from the transport: a connection lost mid re-run fails the session at
   // the next normal boundary.
   if (!m_transport.Connected() && m_resim_until < 0)
+  {
+    // The others end a desync as soon as they have the maps, so the line can close first here.
+    if (m_desync_frame)
+    {
+      FinishDesync(true);
+      return {StepKind::Ended, m_frame};
+    }
     return Fail("Connection lost");
+  }
 
   // A re-run frame just completed.
   if (m_resim_until >= 0)
@@ -1213,6 +1221,9 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad, const Pads* 
   if (m_stalling && m_stall_ended_ms < 0 && m_frame - ConfirmedFrame() <= StallLimit())
     m_stall_ended_ms = m_game.NowMs();
   CheckChecksums();
+  if (!m_error.empty())
+    return {StepKind::Ended, m_frame};
+  FinishDesync();
   if (!m_error.empty())
     return {StepKind::Ended, m_frame};
   if (m_config.authority_seat == m_config.local_seat)
@@ -2141,6 +2152,7 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
   if (stale)
   {
     AddPeerChecksum(s, packet);
+    AddPeerDesyncMap(s, packet);
     return;
   }
   // How far this player ran past the newest of our inputs it had, while it needed them: how deep
@@ -2213,6 +2225,7 @@ void Session::ReceiveOne(const Packet& packet, bool input_only)
     m_last_hitch_frame = m_frame;
   }
   AddPeerChecksum(s, packet);
+  AddPeerDesyncMap(s, packet);
 }
 
 void Session::AddPeerChecksum(int seat, const Packet& packet)
@@ -2223,6 +2236,80 @@ void Session::AddPeerChecksum(int seat, const Packet& packet)
     return;
   m_peer_checksum_frame[seat] = *packet.checksum_frame;
   m_peer_checksums[{*packet.checksum_frame, seat}] = packet.checksum;
+}
+
+void Session::AddPeerDesyncMap(int seat, const Packet& packet)
+{
+  if (!packet.desync_frame || packet.desync_map.empty())
+    return;
+  m_peer_desync_maps[seat] = {*packet.desync_frame, packet.desync_map};
+  // Another player found the desync first. If this machine kept that frame's map, it answers with
+  // its own and ends the same way; otherwise its own checksums end it.
+  if (!m_desync_frame && m_error.empty() && !m_game.BlockMap(*packet.desync_frame).empty())
+  {
+    const auto mine = m_local_checksums.find(*packet.desync_frame);
+    BeginDesync(*packet.desync_frame,
+                mine == m_local_checksums.end() ?
+                    fmt::format("Desync at frame {}: seat {} found it", *packet.desync_frame,
+                                seat + 1) :
+                    fmt::format("Desync at frame {}: {:016x} here, seat {} differs",
+                                *packet.desync_frame, mine->second, seat + 1));
+  }
+}
+
+void Session::BeginDesync(int frame, std::string error)
+{
+  if (m_desync_frame || !m_error.empty())
+    return;
+  std::vector<u16> map = m_game.BlockMap(frame);
+  if (map.empty() || map.size() > static_cast<size_t>(MAX_DESYNC_BLOCKS))
+  {
+    Fail(std::move(error));
+    return;
+  }
+  m_desync_frame = frame;
+  m_desync_error = std::move(error);
+  m_desync_map = std::move(map);
+  m_desync_map_pending = true;
+  m_desync_deadline_ms = m_game.NowMs() + DESYNC_MAP_WAIT_MS;
+}
+
+void Session::FinishDesync(bool now)
+{
+  // Not before this machine's map went out, so the others can name the blocks too.
+  if (!m_desync_frame || (m_desync_map_pending && !now) || !m_error.empty())
+    return;
+  std::string blocks;
+  bool compared = false;
+  for (const auto& [seat, entry] : m_peer_desync_maps)
+  {
+    if (entry.first != *m_desync_frame || entry.second.size() != m_desync_map.size())
+      continue;
+    for (size_t i = 0; i < m_desync_map.size(); ++i)
+    {
+      if (entry.second[i] != m_desync_map[i])
+        m_desync_blocks.push_back(static_cast<int>(i));
+    }
+    compared = true;
+    break;
+  }
+  if (!compared && !now && m_game.NowMs() < m_desync_deadline_ms)
+    return;
+  if (!compared)
+  {
+    blocks = "no block map came from the others";
+  }
+  else
+  {
+    // At most 32 numbers in the line; the count says how many there were.
+    blocks = fmt::format("{} of {} blocks differ:", m_desync_blocks.size(), m_desync_map.size());
+    for (size_t i = 0; i < m_desync_blocks.size() && i < 32; ++i)
+      blocks += fmt::format(" {}", m_desync_blocks[i]);
+    if (m_desync_blocks.size() > 32)
+      blocks += " ...";
+  }
+  const std::string cpu = m_game.HostCpu();
+  Fail(fmt::format("{}; {}{}{}", m_desync_error, blocks, cpu.empty() ? "" : "; ", cpu));
 }
 
 void Session::CheckChecksums()
@@ -2251,8 +2338,8 @@ void Session::CheckChecksums()
     }
     if (mine->second != it->second)
     {
-      Fail(fmt::format("Desync at frame {}: {:016x} here, {:016x} there", it->first.first, mine->second,
-                       it->second));
+      BeginDesync(it->first.first, fmt::format("Desync at frame {}: {:016x} here, {:016x} there",
+                                               it->first.first, mine->second, it->second));
       return;
     }
     ++m_stats.checksums_matched;
@@ -2459,8 +2546,11 @@ void Session::SendPacket()
   last = std::min(last, take_up_to);
   // Nothing new and no checksum to report: stay quiet. A drop-in session always sends, since a
   // joiner paces itself on its frame, acks and roster.
-  if (!drop_in && newest == m_last_sent_newest && !m_pending_checksum && first > newest)
+  if (!drop_in && newest == m_last_sent_newest && !m_pending_checksum && !m_desync_map_pending &&
+      first > newest)
+  {
     return;
+  }
 
   Packet packet;
   packet.seat = m_config.local_seat;
@@ -2537,6 +2627,13 @@ void Session::SendPacket()
     packet.checksum_frame = m_pending_checksum;
     packet.checksum = m_local_checksums[*m_pending_checksum];
     m_pending_checksum.reset();
+  }
+  // Not beside drop-in history, which can fill the relay's message on its own.
+  if (m_desync_map_pending && packet.history.empty())
+  {
+    packet.desync_frame = m_desync_frame;
+    packet.desync_map = m_desync_map;
+    m_desync_map_pending = false;
   }
   m_last_sent_newest = newest;
   if (drop_in && m_config.per_peer_inputs && PeersInPlay() > 2)

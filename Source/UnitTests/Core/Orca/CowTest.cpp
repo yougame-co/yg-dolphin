@@ -303,6 +303,18 @@ TEST(OrcaCow, WriteFaultsRestoreAndChecksum)
       hashes.push_back(memory.Hash());
       for (std::size_t i = 0; i < ring.size(); ++i)
         ASSERT_EQ(Rollback::Cow::Checksum(ring[i].first), hashes[i]) << "step " << step;
+      // A block map leaves the checksum as it was and matches the one from a full copy.
+      if (step % 10 == 0)
+      {
+        std::vector<u16> cow_blocks;
+        std::vector<u16> copy_blocks;
+        ASSERT_EQ(Rollback::Cow::Checksum(ring.back().first, &cow_blocks), hashes.back());
+        ASSERT_EQ(Rollback::RamChecksum({memory.View(0, 2), memory.Size(0)},
+                                        {memory.View(1, 2), memory.Size(1)}, &copy_blocks),
+                  hashes.back());
+        ASSERT_FALSE(cow_blocks.empty());
+        ASSERT_EQ(cow_blocks, copy_blocks) << "step " << step;
+      }
     }
 
     // A write from another thread faults on that thread (macOS: the signal fallback).

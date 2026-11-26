@@ -74,8 +74,9 @@ public:
   bool Has(s64 frame) const;
   // Forgets every snapshot and stops the NAND journal. Call while emulation is still running.
   void Reset(Core::System& system);
-  // RamChecksum of the snapshot taken at `frame`, or nullopt if it is not in the ring.
-  std::optional<u64> RamChecksum(s64 frame) const;
+  // RamChecksum of the snapshot taken at `frame`, or nullopt if it is not in the ring. With
+  // `blocks`, also fills its RAM_BLOCK_SIZE block map (see RamChecksum below).
+  std::optional<u64> RamChecksum(s64 frame, std::vector<u16>* blocks = nullptr) const;
 
   // The non-RAM state from the most recent Save, for hashing and diagnostics.
   std::span<const u8> LastState() const;
@@ -117,8 +118,12 @@ private:
   std::optional<bool> m_cow;
 };
 
-// XXH3 of MEM1 then MEM2: the checksum players compare to detect a desync.
-u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2);
+// XXH3 of MEM1 then MEM2: the checksum players compare to detect a desync. With `blocks`, the same
+// pass also fills the block map: per RAM_BLOCK_SIZE block of MEM1 then MEM2, the low 16 bits of its
+// XXH3, so two machines that disagree can tell which blocks differ without sending RAM.
+constexpr std::size_t RAM_BLOCK_SIZE = 64 * 1024;
+u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2,
+                std::vector<u16>* blocks = nullptr);
 
 // The pad a GameCube port (0-based) reports to the game this frame: RawInputOverride passed through
 // the input gate (InputGate.h). It fully replaces the host controller's status, so nothing local

@@ -153,8 +153,18 @@ public:
     const auto it = m_snapshots.find(frame);
     if (it == m_snapshots.end())
       return std::nullopt;
+    // Like RingPort: the map is made with the checksum, since the snapshot leaves the ring soon.
+    // Only block 3 depends on the state.
+    if (block_maps)
+      m_block_maps[frame] = {7, 7, 7, static_cast<u16>(it->second), 7, 7, 7, 7};
     return it->second;
   }
+  std::vector<u16> BlockMap(int frame) const override
+  {
+    const auto it = m_block_maps.find(frame);
+    return it == m_block_maps.end() ? std::vector<u16>{} : it->second;
+  }
+  std::string HostCpu() const override { return host_cpu; }
   void ResetPacing() override { ++m_pacing_resets; }
   double SaveMs() const override { return save_ms; }
   double NowMs() const override { return now_ms; }
@@ -178,6 +188,10 @@ public:
   size_t ring_slots = 0;
   double save_ms = 0;
   double now_ms = 0;
+  // Game::BlockMap and Game::HostCpu (off: no maps, as before block maps existed).
+  bool block_maps = false;
+  std::string host_cpu;
+  std::map<int, std::vector<u16>> m_block_maps;
   std::vector<int> m_ring;
   size_t m_next = 0;
   std::map<int, u64> m_snapshots;
@@ -1298,6 +1312,53 @@ TEST(OrcaSession, DetectsDesync)
   const bool detected = match.a->session.Error().find("Desync") != std::string::npos ||
                         match.b->session.Error().find("Desync") != std::string::npos;
   EXPECT_TRUE(detected) << match.a->session.Error() << " / " << match.b->session.Error();
+}
+
+// With block maps, both players swap theirs after the checksums differ and each names the same
+// differing block and its own CPU.
+TEST(OrcaSession, DesyncSwapsBlockMaps)
+{
+  Match match(Config{}, 3, 1);
+  for (Player* p : {match.a.get(), match.b.get()})
+  {
+    p->game.block_maps = true;
+    p->game.host_cpu = p == match.a.get() ? "cpu A, avx512 0" : "cpu B, avx512 1";
+  }
+  match.b->game.m_corrupt_at = 100;
+  match.Play(600);
+  for (Player* p : {match.a.get(), match.b.get()})
+  {
+    const std::string& error = p->session.Error();
+    EXPECT_TRUE(error.starts_with("Desync at frame 120")) << error;
+    EXPECT_NE(error.find("1 of 8 blocks differ: 3"), std::string::npos) << error;
+    EXPECT_EQ(p->session.DesyncBlocks(), std::vector<int>{3});
+  }
+  EXPECT_NE(match.a->session.Error().find("cpu A, avx512 0"), std::string::npos);
+  EXPECT_NE(match.b->session.Error().find("cpu B, avx512 1"), std::string::npos);
+}
+
+// A peer whose map never comes: the desync still ends the session, saying so.
+TEST(OrcaSession, DesyncWithoutPeerMapStillEnds)
+{
+  Match match(Config{}, 3, 1);
+  match.a->game.block_maps = true;
+  match.b->game.block_maps = true;
+  // Seat 2's maps are lost on the way.
+  match.net.tamper = [](int from, Packet* packet) {
+    if (from == 1)
+    {
+      packet->desync_frame.reset();
+      packet->desync_map.clear();
+    }
+  };
+  match.b->game.m_corrupt_at = 100;
+  match.Play(600);
+  const std::string& error = match.a->session.Error();
+  EXPECT_TRUE(error.starts_with("Desync at frame 120")) << error;
+  EXPECT_NE(error.find("no block map came from the others"), std::string::npos) << error;
+  EXPECT_TRUE(match.a->session.DesyncBlocks().empty());
+  EXPECT_NE(match.b->session.Error().find("1 of 8 blocks differ: 3"), std::string::npos)
+      << match.b->session.Error();
 }
 
 TEST(OrcaPadCodec, NeutralIsZeroAndRoundTrips)

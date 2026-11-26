@@ -8,8 +8,11 @@
 #include <array>
 #include <chrono>
 #include <functional>
+#include <map>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "Common/CommonTypes.h"
 #include "Core/CoreTiming.h"
@@ -44,6 +47,8 @@ public:
   void SetPads(int frame, const Orca::Net::Pads& pads) override;
   void SetResimulating(bool resimulating) override;
   std::optional<u64> SnapshotChecksum(int frame) override;
+  std::vector<u16> BlockMap(int frame) const override;
+  std::string HostCpu() const override;
   void ResetPacing() override;
   double SaveMs() const override { return m_save_ms; }
 
@@ -70,6 +75,9 @@ private:
   // max_rollback frames past the confirmed one, so any frame it loads or checksums has at most
   // max_rollback newer saves. This also holds with sparse snapshots (Config::snapshot_every).
   SnapshotRing m_ring;
+  // The block maps of the newest checksummed frames. The snapshot itself is gone by the time a
+  // peer's checksum shows a desync, so each map is made with its checksum.
+  std::map<int, std::vector<u16>> m_block_maps;
   // Smoothed wall time of one Save; 0 until measured. Saves that allocate are skipped.
   double m_save_ms = 0;
   std::array<GCPadStatus, Orca::Net::MAX_SEATS> m_pads;

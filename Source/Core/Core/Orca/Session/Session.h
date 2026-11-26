@@ -46,6 +46,12 @@ constexpr int MAX_PADS_IN_PACKET = 64;
 constexpr int MAX_FRAMES_AHEAD = 240;
 // Drop-in history frames per packet (senders send half, so two coalesced packets still fit).
 constexpr int MAX_HISTORY_IN_PACKET = 512;
+// A block map in a packet (Packet::desync_map): at most this many blocks (Wii RAM, 88 MiB, is 1408
+// blocks of 64 KiB).
+constexpr int MAX_DESYNC_BLOCKS = 2048;
+// After a desync, how long to keep playing while the others' block maps come
+// (Session::BeginDesync), in ms.
+constexpr double DESYNC_MAP_WAIT_MS = 1000;
 // Most predicted frames between two snapshots (Config::snapshot_every). A rollback may load a
 // snapshot up to MAX_SNAPSHOT_EVERY - 1 frames before the first wrong frame and re-run from there.
 constexpr int MAX_SNAPSHOT_EVERY = 4;
@@ -79,6 +85,12 @@ public:
   // A hash of the saved state at the start of `frame`, for desync detection (nullopt if not saved).
   // Only asked every Config::checksum_every frames; it may be computed at Save time.
   virtual std::optional<u64> SnapshotChecksum(int frame) = 0;
+  // The block map of the state whose SnapshotChecksum(frame) was asked: per fixed-size block of the
+  // checksummed RAM, a short hash, the same on every machine with the same RAM (empty: none kept).
+  // After a desync both players swap theirs, so each can log which blocks differ.
+  virtual std::vector<u16> BlockMap(int frame) const { return {}; }
+  // The host's CPU for a desync's log line: model name and whether AVX-512 is on (empty: unknown).
+  virtual std::string HostCpu() const { return {}; }
   // After a stall: restart frame pacing from now, so the emulator doesn't race to make up the time.
   virtual void ResetPacing() = 0;
   // What one Save costs on this machine, smoothed, in ms (0: not measured). Picks
@@ -151,6 +163,9 @@ struct Packet
   std::optional<int> rtt;
   std::optional<int> checksum_frame;
   u64 checksum = 0;
+  // After a desync at desync_frame: the sender's Game::BlockMap of that frame. Relay only, once.
+  std::optional<int> desync_frame;
+  std::vector<u16> desync_map;
 
   // Drop-in (see SeatPlan): which seats are plugged in when. Only the host's roster counts.
   std::optional<std::array<SeatPlan, MAX_SEATS>> roster;
@@ -414,6 +429,9 @@ public:
   // The error was another player's doing (a packet or a host roster no honest Orca sends), not
   // this machine's: this player can play on, and the match it was in doesn't count.
   bool ErrorFromPeer() const { return m_error_from_peer; }
+  // After a desync whose block maps were swapped: the blocks (indexes into Game::BlockMap) that
+  // differ from the first other player's map that came. Empty otherwise.
+  const std::vector<int>& DesyncBlocks() const { return m_desync_blocks; }
   // Whether `seat`'s inputs keep coming late against its own frame (a player holding them back):
   // this machine then runs fewer frames on guesses for it.
   bool LateSeat(int seat) const;
@@ -448,6 +466,12 @@ private:
   bool ApplyGroups(const Packet& packet);
   void AddCoPads(Packet* packet) const;
   void AddPeerChecksum(int seat, const Packet& packet);
+  void AddPeerDesyncMap(int seat, const Packet& packet);
+  // A desync at `frame`: with a local block map, send it and keep playing until a peer's map comes
+  // or DESYNC_MAP_WAIT_MS pass, then fail with the differing blocks; without one, fail now.
+  void BeginDesync(int frame, std::string error);
+  // With now, ends it with whatever maps came (the line closed).
+  void FinishDesync(bool now = false);
   void SendPacket();
   Pads PadsFor(int frame);
   bool NeedsSnapshot(int frame) const;
@@ -525,6 +549,17 @@ private:
   std::map<std::pair<int, int>, u64> m_peer_checksums;
   int m_last_checksum_frame = 0;
   std::optional<int> m_pending_checksum;
+  // A desync whose block maps are being swapped (BeginDesync): its frame, the error it will end
+  // with, this machine's map, when to give up on the others' maps (Game::NowMs), and whether ours
+  // still has to go out.
+  std::optional<int> m_desync_frame;
+  std::string m_desync_error;
+  std::vector<u16> m_desync_map;
+  double m_desync_deadline_ms = 0;
+  bool m_desync_map_pending = false;
+  // Each other seat's latest map: (frame, map).
+  std::map<int, std::pair<int, std::vector<u16>>> m_peer_desync_maps;
+  std::vector<int> m_desync_blocks;
   int m_last_sent_newest = -1;
   bool m_stalling = false;
   // The frame last saved since the last load (-1: none), so a repeated boundary on a stalled or

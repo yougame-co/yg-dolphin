@@ -30,6 +30,8 @@ struct CPUInfo
   bool bSSE4_2 = false;
   bool bLZCNT = false;
   bool bAVX = false;
+  // AVX-512 Foundation, with the OS saving its state (ZMM and opmask registers).
+  bool bAVX512F = false;
   bool bBMI1 = false;
   bool bBMI2 = false;
   // PDEP and PEXT are ridiculously slow on AMD Zen1, Zen1+ and Zen2 (Family 17h)

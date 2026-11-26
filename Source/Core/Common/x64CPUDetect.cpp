@@ -206,6 +206,11 @@ void CPUInfo::Detect()
         bBMI2 = true;
       if ((info.ebx >> 29) & 1)
         bSHA1 = bSHA2 = true;
+      if (bAVX && ((info.ebx >> 16) & 1) &&
+          (xgetbv(XCR_XFEATURE_ENABLED_MASK) & 0b11100110) == 0b11100110)
+      {
+        bAVX512F = true;
+      }
     }
   }
 

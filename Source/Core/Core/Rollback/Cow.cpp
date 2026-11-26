@@ -22,6 +22,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/HW/Memmap.h"
 #include "Core/MemTools.h"
+#include "Core/Rollback/Rollback.h"
 #include "Core/Rollback/UndoLog.h"
 #include "Core/System.h"
 
@@ -445,7 +446,7 @@ void Drop(u64 id)
     t.log->Drop(id);
 }
 
-std::optional<u64> Checksum(u64 id)
+std::optional<u64> Checksum(u64 id, std::vector<u16>* blocks)
 {
   Tracker& t = T();
   std::lock_guard lock(t.lock);
@@ -457,6 +458,34 @@ std::optional<u64> Checksum(u64 id)
   // Must hash the same bytes in the same order as Rollback::RamChecksum over MEM1 and MEM2.
   XXH3_state_t* const state = XXH3_createState();
   XXH3_64bits_reset(state);
+  if (blocks)
+  {
+    // Page by page, so each block's hash is taken while its pages are in cache. A block is
+    // RAM_BLOCK_SIZE of the area, whatever the host page size, so both machines' maps line up.
+    blocks->clear();
+    XXH3_state_t* const block_state = XXH3_createState();
+    const std::size_t pages_per_block = std::max<std::size_t>(1, RAM_BLOCK_SIZE / t.page_size);
+    for (std::size_t a = 0; a < t.areas.size(); ++a)
+    {
+      const std::size_t first = t.area_first_page[a];
+      const std::size_t count = t.areas[a].size / t.page_size;
+      for (std::size_t i = 0; i < count; ++i)
+      {
+        const u8* const pre_image = pre_images[first + i];
+        const u8* const data = pre_image ? pre_image : t.areas[a].alias + i * t.page_size;
+        if (i % pages_per_block == 0)
+          XXH3_64bits_reset(block_state);
+        XXH3_64bits_update(state, data, t.page_size);
+        XXH3_64bits_update(block_state, data, t.page_size);
+        if (i % pages_per_block == pages_per_block - 1 || i == count - 1)
+          blocks->push_back(static_cast<u16>(XXH3_64bits_digest(block_state)));
+      }
+    }
+    XXH3_freeState(block_state);
+    const u64 hash = XXH3_64bits_digest(state);
+    XXH3_freeState(state);
+    return hash;
+  }
   for (std::size_t a = 0; a < t.areas.size(); ++a)
   {
     const std::size_t first = t.area_first_page[a];

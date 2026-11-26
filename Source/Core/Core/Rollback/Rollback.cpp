@@ -145,12 +145,27 @@ IOS::HLE::FS::HostFileSystem* HostNand(Core::System& system)
 }
 }  // namespace
 
-u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2)
+u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2, std::vector<u16>* blocks)
 {
   XXH3_state_t* const state = XXH3_createState();
   XXH3_64bits_reset(state);
-  XXH3_64bits_update(state, mem1.data(), mem1.size());
-  XXH3_64bits_update(state, mem2.data(), mem2.size());
+  if (blocks)
+    blocks->clear();
+  for (const std::span<const u8> area : {mem1, mem2})
+  {
+    if (!blocks)
+    {
+      XXH3_64bits_update(state, area.data(), area.size());
+      continue;
+    }
+    // Block by block while each is in cache; the digest is the same as one update.
+    for (std::size_t at = 0; at < area.size(); at += RAM_BLOCK_SIZE)
+    {
+      const std::size_t size = std::min(RAM_BLOCK_SIZE, area.size() - at);
+      XXH3_64bits_update(state, area.data() + at, size);
+      blocks->push_back(static_cast<u16>(XXH3_64bits(area.data() + at, size)));
+    }
+  }
   const u64 hash = XXH3_64bits_digest(state);
   XXH3_freeState(state);
   return hash;
@@ -477,15 +492,15 @@ bool SnapshotRing::LoadMachineImage(Core::System& system, MachineImage image, s6
   return LoadSlot(system, frame, true);
 }
 
-std::optional<u64> SnapshotRing::RamChecksum(s64 frame) const
+std::optional<u64> SnapshotRing::RamChecksum(s64 frame, std::vector<u16>* blocks) const
 {
   const Slot* slot = Find(frame);
   if (!slot || slot->state_size == 0)
     return std::nullopt;
   // Copy-on-write snapshots keep no full copy: rebuild RAM from live RAM plus the undo logs.
   if (slot->cow_id != 0)
-    return Cow::Checksum(slot->cow_id);
-  return Rollback::RamChecksum(slot->mem1, slot->mem2);
+    return Cow::Checksum(slot->cow_id, blocks);
+  return Rollback::RamChecksum(slot->mem1, slot->mem2, blocks);
 }
 
 std::span<const u8> SnapshotRing::LastState() const
