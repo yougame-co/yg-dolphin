@@ -156,6 +156,14 @@ bool BrawlOnlineRowCode(u32 code)
   return code == 32 || code == 33;
 }
 
+bool BrawlOnlinePageEdge::Step(bool on_page, bool alone, u64 resyncs)
+{
+  const bool opened = on_page && !m_on && m_resyncs == resyncs && alone;
+  m_on = on_page;
+  m_resyncs = resyncs;
+  return opened;
+}
+
 std::optional<OnlinePick> OnlineMenuReader::Boundary(const MenuState& state, bool resimulating,
                                                      bool alone, u64 resyncs)
 {
@@ -269,21 +277,17 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
   s_css_pick = QueuePickForCssCode(css_code);
   BrawlOnlineEntry::SetRow(BrawlOnlineRowCode(css_code) ? PickForExitCode(css_code) :
                                                           std::nullopt);
-  // The Brawl Online page opening (its rising edge): the line, then the sign-in screen the first
-  // time on this PC. Read again after a resync, so a page already open is not a new event.
-  static bool s_bo_page = false;
-  static u64 s_bo_resyncs = 0;
+  // The Brawl Online page opening while this game plays alone: the line, then the sign-in screen
+  // the first time on this PC (BrawlOnlinePageEdge).
+  static BrawlOnlinePageEdge s_bo_page;
   const bool bo_page = state.where == MenuState::Where::Menu && OnBrawlOnlinePage(memory);
-  const bool bo_fresh = s_bo_resyncs == Orca::Events::Resyncs();
-  if (bo_page && !s_bo_page && bo_fresh)
+  if (s_bo_page.Step(bo_page, alone, Orca::Events::Resyncs()))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: Brawl Online page: orca menu {}",
                    MenuEventText(OnlinePick::BrawlOnline));
     AnnounceOnlinePick(OnlinePick::BrawlOnline);
     BrawlOnlineEntry::PageOpened();
   }
-  s_bo_page = bo_page;
-  s_bo_resyncs = Orca::Events::Resyncs();
   if (const auto pick = s_reader.Boundary(state, false, alone, Orca::Events::Resyncs()))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {}: orca menu {}", state.exit_code,

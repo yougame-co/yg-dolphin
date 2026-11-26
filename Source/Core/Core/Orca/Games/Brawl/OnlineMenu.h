@@ -71,6 +71,21 @@ bool OnBrawlOnlinePage(const GuestMemory& memory);
 // Whether a main menu exit code is a Brawl Online row's (32, 33). Pure.
 bool BrawlOnlineRowCode(u32 code);
 
+// The Brawl Online page's opening, read once per frame on first runs: true on the frame the page
+// appears (its rising edge) while this game plays alone. In a room every peer's menu follows the
+// host's, so a game that isn't alone never opens the page for its own player: no line, no sign-in
+// screen, and the page already open when the room empties is not a new opening either. After a
+// resync the page's state is read again without an opening.
+class BrawlOnlinePageEdge
+{
+public:
+  bool Step(bool on_page, bool alone, u64 resyncs);
+
+private:
+  bool m_on = false;
+  u64 m_resyncs = 0;
+};
+
 // The current scene's name ("" when unreadable).
 std::string ReadSceneName(const GuestMemory& memory);
 

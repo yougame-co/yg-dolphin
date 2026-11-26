@@ -1137,6 +1137,35 @@ TEST(OrcaOnlineMenuReader, TheBrawlOnlinePageIsWithAnyonesFromTheThirdButton)
   EXPECT_EQ(m.writes, 0);
 }
 
+TEST(OrcaOnlineMenuReader, TheBrawlOnlinePageOpensOnceWhileAlone)
+{
+  BrawlOnlinePageEdge edge;
+  EXPECT_FALSE(edge.Step(false, true, 0));
+  // The page appears: one opening, not again while it stays.
+  EXPECT_TRUE(edge.Step(true, true, 0));
+  EXPECT_FALSE(edge.Step(true, true, 0));
+  EXPECT_FALSE(edge.Step(false, true, 0));
+  EXPECT_TRUE(edge.Step(true, true, 0));
+  // A resync: the page already open is read again, never a new opening.
+  EXPECT_FALSE(edge.Step(true, true, 1));
+  EXPECT_FALSE(edge.Step(true, true, 1));
+}
+
+TEST(OrcaOnlineMenuReader, TheBrawlOnlinePageNeverOpensForAGameThatIsNotAlone)
+{
+  // In a room every peer's menu follows the host's: the page shows on each guest, which must not
+  // announce it (no "orca menu online brawlonline") or open the sign-in screen.
+  BrawlOnlinePageEdge edge;
+  EXPECT_FALSE(edge.Step(false, false, 0));
+  EXPECT_FALSE(edge.Step(true, false, 0));
+  EXPECT_FALSE(edge.Step(true, false, 0));
+  // The room empties while the page is open: still the same page, not a new opening.
+  EXPECT_FALSE(edge.Step(true, true, 0));
+  // Opened again alone, it counts.
+  EXPECT_FALSE(edge.Step(false, true, 0));
+  EXPECT_TRUE(edge.Step(true, true, 0));
+}
+
 TEST(OrcaOnlineMenuReader, BrawlOnlineRowsShowTheirPanel)
 {
   EXPECT_EQ(BrawlOnlineEntry::RowTitle(OnlinePick::BrawlOnlineCasual), "Brawl Online: Casual");
