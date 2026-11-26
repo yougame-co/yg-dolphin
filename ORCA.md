@@ -1754,7 +1754,8 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
   textures; Orca's pack holds the new art), and the rows' descriptions name Brawl Online. Reached
   through With Anyone, the page is unchanged. With Brawl Online highlighted, the ONLINE page says
   "Play on Brawl Online's servers." instead of the Spectator line. B from its page leaves the
-  ONLINE page's cursor on Brawl Online.
+  ONLINE page's cursor and description on Brawl Online, but no button is drawn lit until the player
+  moves the cursor. B out of the character select lands on With Anyone.
 - **With Anyone** shows CASUAL and RANKED. Either goes to the local Versus character select and Orca
   prints `orca menu online casual|ranked` (with the app's `host` cap; `... local` without).
 - **With Friends** goes straight to the local Versus character select, where friends drop in, and
@@ -1770,7 +1771,7 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
   leaves the menu with exit code 25; Spectator is never enabled; Options is enabled and opens the
   With Anyone page, where a cave turns Casual and Ranked into codes 32 and 33 while the ONLINE
   page's cursor is on its third button, and the ONLINE page's init keeps that cursor on its way
-  back from the page (it would put it on With Anyone); the main menu's exit table sends codes 24-27, 29, 30
+  back from the page (it would put it on With Anyone; no button is drawn lit until the cursor moves); the main menu's exit table sends codes 24-27, 29, 30
   (Casual), 31 (Ranked), 32 and 33 (Brawl Online Casual and With Friends) to Orca's block, which
   starts the local Versus scene. No online scene, network thread or DWC is ever entered.
 - **The back out.** Orca's block keeps the exit code in sqVsMelee's object (`+0x18`, slack in its

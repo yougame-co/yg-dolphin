@@ -225,8 +225,9 @@
 # Back from With Anyone's page (B on it), the ONLINE page's init (muProcWifi, previous page 0x1B)
 # puts its cursor on With Anyone (1) before it lights the button.
 # When the player came from Brawl Online the cursor is still 2 (it stays there while With Anyone's
-# page runs), so the cave below keeps it there and Brawl Online stays lit; from With Anyone itself
-# it is 1 and nothing changes. The hook's group guards the whole return path so it only lands on
+# page runs), so the cave below keeps it there: the cursor and the description stay on Brawl Online,
+# but no button is drawn lit until the player moves it. From With Anyone itself it is 1 and nothing
+# changes. B out of the character select (a fresh page) still lands on With Anyone. The hook's group guards the whole return path so it only lands on
 # the code it was found in; the cave (sora_scene's free space) is written at boot.
 # As RSBE01.patches, at Project+'s module addresses (+ 0x1480); the cave branches back there.
 8117B054 38A00001 38A00001    # li   r5, 1 (guard)

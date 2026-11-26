@@ -1970,10 +1970,10 @@ TEST(OrcaMod, GoldenLegacyCompatibilityKey)
   std::string previous = parts;
   previous.replace(previous.size() - 8, 8, "|ux=30");
   EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(previous.data(), previous.size())),
-            "orca2:524e66f3e79344b6");
+            "orca2:ae52bc6f0aa911fe");
   previous.replace(previous.size() - 6, 6, "|ux=29");
   EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(previous.data(), previous.size())),
-            "orca2:59f89de184ca8bf7");
+            "orca2:3e84507e3ba3bc3d");
 }
 
 namespace

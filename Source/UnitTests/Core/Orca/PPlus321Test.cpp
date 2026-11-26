@@ -130,7 +130,7 @@ TEST_F(OrcaPPlus321, CompatibilityKeysSeparateReleasesAndPreserve320)
 TEST_F(OrcaPPlus321, LegacyFilesArePinned)
 {
   EXPECT_EQ(Orca::HashFile(SYS + "Orca/PPLUS32.ini"), "ea7ba547b132f2957e109c4620160f97");
-  EXPECT_EQ(Orca::HashFile(SYS + "Orca/PPLUS32.patches"), "f7606847a667a3d307043aa3f179b439");
+  EXPECT_EQ(Orca::HashFile(SYS + "Orca/PPLUS32.patches"), "bfdb708c5a14d121be807650893f2d46");
   EXPECT_EQ(Orca::HashFile(SYS + "Orca/PPLUS32.jitwarm"), "8878e3439e5b4db1e44b4e81c28a2dc1");
 }
 
