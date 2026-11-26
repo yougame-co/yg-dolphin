@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <random>
@@ -397,6 +399,44 @@ static std::string FirstDifference(const u8* got, const std::vector<u8>& want)
   return bad ? std::to_string(bad) + " bytes differ, first at " + std::to_string(first) : "";
 }
 
+// Both copies into cold pages, round 0 an explicit 256-bit copy, round 1 the library copy at the
+// length and page offset of a disc read DMA. Returns a description of every byte lost, or "".
+static std::string CopiesIntoColdPages(CowMemory& memory)
+{
+  const std::size_t page = Rollback::Cow::PageSize();
+  std::string lost;
+  for (int round = 0; round < 2; ++round)
+  {
+    // Snapshots with nothing written let every page go cold (read-only).
+    for (int i = 0; i < 260; ++i)
+      Rollback::Cow::Snapshot();
+    std::vector<u8> source(8 * page);
+    for (std::size_t i = 0; i < source.size(); ++i)
+      source[i] = static_cast<u8>(i * 7 + 1 + round);
+    std::string d;
+    if (round == 0)
+    {
+      WideCopy(memory.View(1, 0), source.data(), source.size());
+      d = FirstDifference(memory.View(1, 1), source);
+    }
+    else
+    {
+      const std::size_t at = 2 * page + 0xb60, length = 0x4e28;
+      source.resize(length);
+      std::memcpy(memory.View(1, 0) + at, source.data(), length);
+      d = FirstDifference(memory.View(1, 1) + at, source);
+    }
+    if (!d.empty())
+      lost += (round == 0 ? "explicit 256-bit copy: " : "library copy: ") + d + "; ";
+  }
+  return lost;
+}
+
+static void SetDiagEnv(const char* name, const char* value)
+{
+  _putenv_s(name, value);
+}
+
 // A host copy into guest RAM that faults on a protected page goes on with every byte it was given:
 // the snapshot handler must not lose vector register state the interrupted copy still holds.
 TEST(OrcaCow, AFaultingWideCopyKeepsEveryByte)
@@ -409,32 +449,51 @@ TEST(OrcaCow, AFaultingWideCopyKeepsEveryByte)
   {
     CowMemory memory;
     ASSERT_TRUE(memory.Arm());
-    const std::size_t page = Rollback::Cow::PageSize();
-    for (int round = 0; round < 2; ++round)
-    {
-      // Snapshots with nothing written let every page go cold (read-only).
-      for (int i = 0; i < 260; ++i)
-        Rollback::Cow::Snapshot();
-      std::vector<u8> source(8 * page);
-      for (std::size_t i = 0; i < source.size(); ++i)
-        source[i] = static_cast<u8>(i * 7 + 1 + round);
-      if (round == 0)
-      {
-        WideCopy(memory.View(1, 0), source.data(), source.size());
-        EXPECT_EQ(FirstDifference(memory.View(1, 1), source), "") << "explicit 256-bit copy";
-      }
-      else
-      {
-        // The library copy, at the length and page offset of a disc read DMA.
-        const std::size_t at = 2 * page + 0xb60, length = 0x4e28;
-        source.resize(length);
-        std::memcpy(memory.View(1, 0) + at, source.data(), length);
-        EXPECT_EQ(FirstDifference(memory.View(1, 1) + at, source), "") << "library copy";
-      }
-    }
+    EXPECT_EQ(CopiesIntoColdPages(memory), "");
     Rollback::Cow::Disarm(&memory);
   }
   EMM::UninstallExceptionHandler();
+}
+
+// DIAGNOSTIC: the same copies with the vector registers zeroed in the fault handler, with and
+// without the handler keeping the vector state, and the audit of the plain handler. The kept case
+// must lose nothing; the other lines report what this host and Windows do.
+TEST(OrcaCow, VectorStateProbe)
+{
+  if (!EMM::IsExceptionHandlerSupported())
+    GTEST_SKIP() << "no fault handler on this platform";
+  if (!cpu_info.bAVX)
+    GTEST_SKIP() << "no AVX on this CPU";
+  struct Case
+  {
+    const char* keep;
+    const char* clobber;
+  };
+  for (const Case c : {Case{"0", "0"}, Case{"1", "0"}, Case{"0", "1"}, Case{"1", "1"}})
+  {
+    SetDiagEnv("YG_DIAG_COW_VECTOR_AUDIT", "1");
+    SetDiagEnv("YG_DIAG_COW_KEEP_VECTORS", c.keep);
+    SetDiagEnv("YG_DIAG_COW_CLOBBER_VECTORS", c.clobber);
+    EMM::InstallExceptionHandler();
+    std::string lost;
+    {
+      CowMemory memory;
+      ASSERT_TRUE(memory.Arm());
+      lost = CopiesIntoColdPages(memory);
+      Rollback::Cow::Disarm(&memory);
+    }
+    const EMM::CowVectorAudit a = EMM::GetCowVectorAudit();
+    EMM::UninstallExceptionHandler();
+    std::printf("COWPROBE keep=%s clobber=%s audit=%d faults=%llu ctxavx=%llu ctxdiff=%llu "
+                "changed=%llu lost=%s\n",
+                c.keep, c.clobber, a.audit ? 1 : 0, a.faults, a.context_has_avx, a.context_differs,
+                a.handler_changed, lost.empty() ? "none" : lost.c_str());
+    if (c.keep[0] == '1')
+      EXPECT_EQ(lost, "") << "keep=1 clobber=" << c.clobber;
+  }
+  SetDiagEnv("YG_DIAG_COW_VECTOR_AUDIT", "");
+  SetDiagEnv("YG_DIAG_COW_KEEP_VECTORS", "");
+  SetDiagEnv("YG_DIAG_COW_CLOBBER_VECTORS", "");
 }
 #endif
 }  // namespace

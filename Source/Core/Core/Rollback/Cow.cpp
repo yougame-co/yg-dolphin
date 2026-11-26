@@ -436,6 +436,11 @@ void Disarm(const void* owner)
   std::lock_guard lock(t.lock);
   if (!t.owner || t.owner != owner)
     return;
+  if (const EMM::CowVectorAudit a = EMM::GetCowVectorAudit(); a.audit)
+  {
+    NOTICE_LOG_FMT(MEMMAP, "Rollback COW vector audit: faults={} ctxavx={} ctxdiff={} changed={}",
+                   a.faults, a.context_has_avx, a.context_differs, a.handler_changed);
+  }
   UnprotectAll(t);
   ResetLocked(t);
 }
@@ -458,6 +463,19 @@ u64 Snapshot()
   const u64 id = t.log->Open();
   TraceLine(fmt::format("snapshot id={}", id));
   CopyHotPages(t);
+  // DIAGNOSTIC build only: the fault handler's vector audit, when it changes and every 600 snapshots.
+  if (const EMM::CowVectorAudit a = EMM::GetCowVectorAudit(); a.audit)
+  {
+    static u64 s_seen_changed = 0, s_seen_differs = 0, s_audit_snapshots = 0;
+    if (a.handler_changed != s_seen_changed || a.context_differs != s_seen_differs ||
+        ++s_audit_snapshots % 600 == 0)
+    {
+      s_seen_changed = a.handler_changed;
+      s_seen_differs = a.context_differs;
+      TraceLine(fmt::format("vecaudit faults={} ctxavx={} ctxdiff={} changed={}", a.faults,
+                            a.context_has_avx, a.context_differs, a.handler_changed));
+    }
+  }
   return id;
 }
 

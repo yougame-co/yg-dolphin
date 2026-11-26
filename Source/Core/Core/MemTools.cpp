@@ -22,7 +22,9 @@
 
 #if defined(_WIN32) && defined(_M_X64)
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <cstring>
 
 #include <immintrin.h>
 #include <intrin.h>
@@ -94,6 +96,61 @@ static u64 VectorStateMask()
   }
   return end <= VECTOR_STATE_BYTES ? mask : 0;
 }
+
+// DIAGNOSTIC build only. YG_DIAG_COW_VECTOR_AUDIT=1 counts write faults, whether the fault's
+// context carries the AVX state, whether it matches the live registers on entry, and whether the
+// snapshot handler changed the YMM upper halves. YG_DIAG_COW_CLOBBER_VECTORS=1 zeroes the vector
+// registers before the snapshot handler, to show whether a resumed copy keeps what it loaded.
+static bool s_audit_vectors = false;
+static bool s_clobber_vectors = false;
+static u32 s_ymm_offset = 0;
+static std::atomic<u64> s_audit_faults{0}, s_audit_context_avx{0}, s_audit_context_differs{0},
+    s_audit_handler_changed{0};
+constexpr std::size_t AUDIT_BYTES = 1024;
+static thread_local u8 t_audit_before[AUDIT_BYTES + 64];
+static thread_local u8 t_audit_after[AUDIT_BYTES + 64];
+
+static u8* Aligned64(u8* p)
+{
+  const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(p);
+  return reinterpret_cast<u8*>((at + 63) & ~std::uintptr_t{63});
+}
+
+// The live YMM upper halves (16 x 16 bytes), zeros when the AVX state is in its initial state.
+static void LiveYmmHigh(u8* area, u8 out[256])
+{
+  _xsave64(area, 4);
+  u64 bv;
+  std::memcpy(&bv, area + 512, sizeof(bv));
+  if (bv & 4)
+    std::memcpy(out, area + s_ymm_offset, 256);
+  else
+    std::memset(out, 0, 256);
+}
+
+static void AuditBefore(CONTEXT* ctx, u8 live[256])
+{
+  s_audit_faults.fetch_add(1, std::memory_order_relaxed);
+  LiveYmmHigh(Aligned64(t_audit_before), live);
+  DWORD64 features = 0;
+  if ((ctx->ContextFlags & CONTEXT_XSTATE) == CONTEXT_XSTATE &&
+      GetXStateFeaturesMask(ctx, &features) && (features & XSTATE_MASK_AVX))
+  {
+    s_audit_context_avx.fetch_add(1, std::memory_order_relaxed);
+    DWORD length = 0;
+    const void* ymm = LocateXStateFeature(ctx, XSTATE_AVX, &length);
+    if (ymm && length >= 256 && std::memcmp(ymm, live, 256) != 0)
+      s_audit_context_differs.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+static void AuditAfter(const u8 before[256])
+{
+  u8 after[256];
+  LiveYmmHigh(Aligned64(t_audit_after), after);
+  if (std::memcmp(before, after, 256) != 0)
+    s_audit_handler_changed.fetch_add(1, std::memory_order_relaxed);
+}
 #endif
 
 static LONG NTAPI Handler(PEXCEPTION_POINTERS pPtrs)
@@ -121,9 +178,16 @@ static LONG NTAPI Handler(PEXCEPTION_POINTERS pPtrs)
       void* const state = mask ? VectorStateArea() : nullptr;
       if (mask)
         _xsave64(state, mask);
+      alignas(16) u8 audit_live[256];
+      if (s_audit_vectors)
+        AuditBefore(ctx, audit_live);
+      if (s_clobber_vectors)
+        _mm256_zeroall();
 #endif
       const bool handled = Rollback::Cow::HandleFault(fault_address);
 #ifdef _M_X64
+      if (s_audit_vectors && !s_clobber_vectors)
+        AuditAfter(audit_live);
       if (mask)
         _xrstor64(state, mask);
 #endif
@@ -178,6 +242,25 @@ void InstallExceptionHandler()
   // the vector state, to show the loss it causes.
   if (const char* v = std::getenv("YG_DIAG_COW_KEEP_VECTORS"); v && v[0] == '0')
     s_vector_state_mask = 0;
+  int id[4];
+  __cpuid(id, 1);
+  const bool avx = (id[2] & (1 << 27)) && (id[2] & (1 << 28)) && (_xgetbv(0) & 6) == 6;
+  if (avx)
+  {
+    int r[4];
+    __cpuidex(r, 0xD, 2);
+    s_ymm_offset = static_cast<u32>(r[1]);
+  }
+  const auto on = [](const char* name) {
+    const char* v = std::getenv(name);
+    return v && v[0] == '1';
+  };
+  s_audit_vectors = avx && s_ymm_offset + 256 <= AUDIT_BYTES && on("YG_DIAG_COW_VECTOR_AUDIT");
+  s_clobber_vectors = avx && on("YG_DIAG_COW_CLOBBER_VECTORS");
+  s_audit_faults = 0;
+  s_audit_context_avx = 0;
+  s_audit_context_differs = 0;
+  s_audit_handler_changed = 0;
 #endif
   s_veh_handle = AddVectoredExceptionHandler(TRUE, Handler);
   ASSERT(s_veh_handle);
@@ -194,6 +277,16 @@ void UninstallExceptionHandler()
 bool IsExceptionHandlerSupported()
 {
   return true;
+}
+
+CowVectorAudit GetCowVectorAudit()
+{
+#ifdef _M_X64
+  return {s_audit_vectors, s_clobber_vectors, s_audit_faults.load(), s_audit_context_avx.load(),
+          s_audit_context_differs.load(), s_audit_handler_changed.load()};
+#else
+  return {};
+#endif
 }
 
 void InstallCowFallbackHandler()
@@ -341,6 +434,11 @@ bool IsExceptionHandlerSupported()
   return true;
 }
 
+CowVectorAudit GetCowVectorAudit()
+{
+  return {};
+}
+
 // Faults on threads without the Mach thread port (only the CPU thread has it) reach the task's
 // and host's ports, which nothing here claims, and then become SIGBUS (a write to a read-only page)
 // or SIGSEGV.
@@ -479,6 +577,11 @@ bool IsExceptionHandlerSupported()
   return true;
 }
 
+CowVectorAudit GetCowVectorAudit()
+{
+  return {};
+}
+
 void InstallCowFallbackHandler()
 {
   // The signal handler is process-wide.
@@ -497,6 +600,11 @@ void UninstallExceptionHandler()
 bool IsExceptionHandlerSupported()
 {
   return false;
+}
+
+CowVectorAudit GetCowVectorAudit()
+{
+  return {};
 }
 
 void InstallCowFallbackHandler()
