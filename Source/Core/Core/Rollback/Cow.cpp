@@ -466,18 +466,22 @@ u64 Snapshot()
   const u64 id = t.log->Open();
   TraceLine(fmt::format("snapshot id={}", id));
   CopyHotPages(t);
-  // DIAGNOSTIC build only: the fault handler's vector audit, when it changes and every 600 snapshots.
+  // DIAGNOSTIC build only: the fault handler's vector audit, in the log every 600 snapshots and when
+  // the handler changed the vector registers or a fault's context left out AVX-512 state in use.
   if (const EMM::CowVectorAudit a = EMM::GetCowVectorAudit(); a.audit)
   {
-    static u64 s_seen_changed = 0, s_seen_differs = 0, s_audit_snapshots = 0;
-    if (a.handler_changed != s_seen_changed || a.context_differs != s_seen_differs ||
+    static u64 s_seen_changed = 0, s_seen_no512 = 0, s_audit_snapshots = 0;
+    if (a.handler_changed != s_seen_changed || a.context_no_avx512 != s_seen_no512 ||
         ++s_audit_snapshots % 600 == 0)
     {
       s_seen_changed = a.handler_changed;
-      s_seen_differs = a.context_differs;
-      TraceLine(fmt::format("vecaudit faults={} ctxavx={} ctxdiff={} changed={} avx512={} ctxno512={}",
-                            a.faults, a.context_has_avx, a.context_differs, a.handler_changed,
-                            a.avx512_in_use, a.context_no_avx512));
+      s_seen_no512 = a.context_no_avx512;
+      const std::string line =
+          fmt::format("vecaudit faults={} ctxavx={} ctxdiff={} changed={} avx512={} ctxno512={}",
+                      a.faults, a.context_has_avx, a.context_differs, a.handler_changed,
+                      a.avx512_in_use, a.context_no_avx512);
+      TraceLine(line);
+      NOTICE_LOG_FMT(ROLLBACK, "COW vector audit: {}", line);
     }
   }
   return id;
