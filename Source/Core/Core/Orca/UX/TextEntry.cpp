@@ -16,6 +16,8 @@ namespace ImStb
 #include <imstb_textedit.h>
 }
 
+#include "Core/Orca/Status.h"
+
 namespace Orca::UX::TextEntry
 {
 namespace
@@ -83,7 +85,9 @@ bool Capturing()
 
 void SetCapturing(bool capturing)
 {
-  s_capturing.store(capturing, std::memory_order_relaxed);
+  // The app forwards the keys typed in its window only between these lines (AppLine).
+  if (s_capturing.exchange(capturing, std::memory_order_relaxed) != capturing)
+    Status::Line(capturing ? TEXT_ON : TEXT_OFF);
   std::lock_guard lock(s_lock);
   WipeEvents(s_events);
   s_high_surrogate = 0;
@@ -154,6 +158,63 @@ void TypeUtf16(unsigned unit)
     s_high_surrogate = 0;
   }
   PushPoint(point);
+}
+
+bool AppLine(std::string_view line)
+{
+  constexpr std::string_view TEXT = "text ";
+  constexpr std::string_view KEY = "key ";
+  if (line.starts_with(TEXT))
+  {
+    const std::string_view hex = line.substr(TEXT.size());
+    if (!Capturing() || hex.empty() || hex.size() % 2 != 0 || hex.size() / 2 > MAX_APP_TEXT)
+      return true;
+    const auto nibble = [](char c) {
+      return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+    };
+    char bytes[MAX_APP_TEXT];
+    std::size_t n = 0;
+    bool ok = true;
+    for (std::size_t i = 0; i < hex.size() && ok; i += 2)
+    {
+      const int high = nibble(hex[i]), low = nibble(hex[i + 1]);
+      ok = high >= 0 && low >= 0;
+      if (ok)
+        bytes[n++] = static_cast<char>((high << 4) | low);
+    }
+    if (ok)
+      Type(std::string_view(bytes, n));
+    WipeBytes(bytes, sizeof(bytes));
+    return true;
+  }
+  if (line.starts_with(KEY))
+  {
+    std::string_view rest = line.substr(KEY.size());
+    bool shift = false;
+    if (const std::size_t space = rest.find(' '); space != std::string_view::npos)
+    {
+      if (rest.substr(space) != " shift")
+        return true;
+      shift = true;
+      rest = rest.substr(0, space);
+    }
+    static constexpr std::pair<std::string_view, Key> NAMES[] = {
+        {"tab", Key::Tab},   {"enter", Key::Enter}, {"escape", Key::Escape},
+        {"backspace", Key::Backspace}, {"delete", Key::Delete}, {"left", Key::Left},
+        {"right", Key::Right}, {"up", Key::Up}, {"down", Key::Down}, {"home", Key::Home},
+        {"end", Key::End},
+    };
+    for (const auto& [name, key] : NAMES)
+    {
+      if (rest == name)
+      {
+        Press(key, shift);
+        break;
+      }
+    }
+    return true;
+  }
+  return false;
 }
 
 Key KeyFromWin32(unsigned virtual_key)

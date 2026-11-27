@@ -24,6 +24,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/BootPhase.h"
 #include "Core/Orca/Bridge.h"
+#include "Core/Orca/UX/TextEntry.h"
 
 namespace Embed
 {
@@ -260,8 +261,21 @@ void StartReading()
       if (got <= 0)
         break;
       // Bridge lines are handled here, on this thread; the commands wait for the frame loop.
-      std::vector<std::string> lines =
-          Orca::Bridge::Route(splitter.Feed(std::string_view(buffer, static_cast<size_t>(got))));
+      std::vector<std::string> fed =
+          splitter.Feed(std::string_view(buffer, static_cast<size_t>(got)));
+      // What the app forwards from its keyboard (UX/TextEntry.h AppLine) goes to the screen from
+      // here, before any line is moved, and no copy of it stays: the read buffer and each such
+      // line are wiped where they are (LineSplitter leaves no copy of its own).
+      Orca::UX::TextEntry::WipeBytes(buffer, static_cast<size_t>(got));
+      std::vector<std::string> others;
+      for (std::string& line : fed)
+      {
+        if (Orca::UX::TextEntry::AppLine(line))
+          Orca::UX::TextEntry::WipeBytes(line.data(), line.capacity());
+        else
+          others.push_back(std::move(line));
+      }
+      std::vector<std::string> lines = Orca::Bridge::Route(std::move(others));
       if (splitter.Dropped() != dropped)
       {
         dropped = splitter.Dropped();

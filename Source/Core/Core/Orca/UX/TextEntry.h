@@ -66,6 +66,20 @@ void Type(std::string_view utf8);
 // Windows' WM_CHAR, one UTF-16 unit at a time (a surrogate pair arrives as two).
 void TypeUtf16(unsigned unit);
 
+// Under the desktop app Orca's window never holds the keyboard (the app's window does), so the
+// app forwards what is typed in its window while a screen captures. Orca prints TEXT_ON when a
+// screen takes the keyboard and TEXT_OFF when it lets go (SetCapturing); in between the app sends
+// its embed lines (DolphinNoGUI/Embed.h), never logged on either side:
+//   text <hex>          typed text (a paste included): the UTF-8 bytes as lowercase hex
+//   key <name>[ shift]  tab, enter, escape, backspace, delete, left, right, up, down, home, end
+inline constexpr std::string_view TEXT_ON = "orca text on";
+inline constexpr std::string_view TEXT_OFF = "orca text off";
+// The longest text line taken, in decoded bytes; a longer one is dropped whole.
+inline constexpr std::size_t MAX_APP_TEXT = 1024;
+// The stdin reader's thread: whether `line` is one of those two (then the caller wipes it and
+// passes it on to nothing). Acted on only while Capturing(); malformed ones are dropped.
+bool AppLine(std::string_view line);
+
 // The keys each platform's window loop reports, from its own key codes.
 Key KeyFromWin32(unsigned virtual_key);
 Key KeyFromMac(unsigned key_code);

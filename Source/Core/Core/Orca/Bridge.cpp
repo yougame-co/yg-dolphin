@@ -3,6 +3,7 @@
 
 #include "Core/Orca/Bridge.h"
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <map>
@@ -13,6 +14,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/SafeJson.h"
 #include "Core/Orca/UX/Controllers.h"
+#include "Core/Orca/UX/TextEntry.h"
 
 namespace Orca::Bridge
 {
@@ -161,7 +163,11 @@ bool AllowedRequest(std::string_view type)
 
 std::vector<std::string> LineSplitter::Feed(std::string_view bytes)
 {
+  // Lines can carry what the app forwards from its keyboard (UX/TextEntry.h AppLine), so none is
+  // copied on the way: the vector never grows once filling, the pending line grows by hand and
+  // wipes the buffer it leaves, and each line moved out wipes the bytes it left behind.
   std::vector<std::string> lines;
+  lines.reserve(static_cast<size_t>(std::count(bytes.begin(), bytes.end(), '\n')));
   while (!bytes.empty())
   {
     const size_t newline = bytes.find('\n');
@@ -172,12 +178,21 @@ std::vector<std::string> LineSplitter::Feed(std::string_view bytes)
     }
     else if (m_pending.size() + piece.size() > m_max)
     {
+      UX::TextEntry::WipeBytes(m_pending.data(), m_pending.capacity());
       m_pending.clear();
       m_skipping = true;
       ++m_dropped;
     }
     else
     {
+      if (m_pending.size() + piece.size() > m_pending.capacity())
+      {
+        std::string grown;
+        grown.reserve(std::max(m_pending.capacity() * 2, m_pending.size() + piece.size()));
+        grown.append(m_pending);
+        UX::TextEntry::WipeBytes(m_pending.data(), m_pending.capacity());
+        m_pending.swap(grown);
+      }
       m_pending.append(piece);
     }
     if (newline == std::string_view::npos)
@@ -191,6 +206,7 @@ std::vector<std::string> LineSplitter::Feed(std::string_view bytes)
     if (!m_pending.empty() && m_pending.back() == '\r')
       m_pending.pop_back();
     lines.push_back(std::exchange(m_pending, {}));
+    UX::TextEntry::WipeBytes(m_pending.data(), m_pending.capacity());
   }
   return lines;
 }

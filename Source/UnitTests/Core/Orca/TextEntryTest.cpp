@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -240,4 +241,90 @@ TEST(OrcaTextEntry, ForgetImGuiTextZeroesImGuisCopies)
   EXPECT_FALSE(Holds(g.InputTextState.TextA, "hunter"));
   EXPECT_EQ(ImGuiAssertFailures(), failures);
   ImGui::DestroyContext(context);
+}
+
+namespace
+{
+std::string Hex(std::string_view bytes)
+{
+  static constexpr char DIGITS[] = "0123456789abcdef";
+  std::string hex;
+  for (const char c : bytes)
+  {
+    const auto b = static_cast<unsigned char>(c);
+    hex += DIGITS[b >> 4];
+    hex += DIGITS[b & 15];
+  }
+  return hex;
+}
+
+std::vector<TE::Key> KeysOf(const TE::Drained& events)
+{
+  std::vector<TE::Key> keys;
+  for (const TE::Event& event : events)
+  {
+    if (event.key != TE::Key::NoKey)
+      keys.push_back(event.key);
+  }
+  return keys;
+}
+}  // namespace
+
+TEST(OrcaTextEntryApp, TextLinesTypeTheirUtf8)
+{
+  Capture capture;
+  EXPECT_TRUE(TE::AppLine("text " + Hex("hunter2")));
+  EXPECT_TRUE(TE::AppLine("text " + Hex("\xc3\xa9 \xf0\x9f\x98\x80")));  // a paste: spaces and any character
+  EXPECT_EQ(Typed(TE::Drain()), U"hunter2\u00e9 \U0001F600");
+}
+
+TEST(OrcaTextEntryApp, KeyLinesPressTheirKey)
+{
+  Capture capture;
+  for (const char* name : {"tab", "enter", "escape", "backspace", "delete", "left", "right", "up",
+                           "down", "home", "end"})
+    EXPECT_TRUE(TE::AppLine(std::string("key ") + name));
+  EXPECT_TRUE(TE::AppLine("key tab shift"));
+  const TE::Drained events = TE::Drain();
+  EXPECT_EQ(KeysOf(events),
+            (std::vector<TE::Key>{TE::Key::Tab, TE::Key::Enter, TE::Key::Escape,
+                                  TE::Key::Backspace, TE::Key::Delete, TE::Key::Left,
+                                  TE::Key::Right, TE::Key::Up, TE::Key::Down, TE::Key::Home,
+                                  TE::Key::End, TE::Key::Tab}));
+  ASSERT_EQ(events.size(), 12u);
+  EXPECT_FALSE(events[0].shift);
+  EXPECT_TRUE(events[11].shift);
+}
+
+TEST(OrcaTextEntryApp, MalformedLinesAreTakenAndDropped)
+{
+  Capture capture;
+  // Each is the app's (true: nobody else gets it), and none types or presses anything.
+  for (const std::string line :
+       {std::string("text "), std::string("text 6"), std::string("text 6G"),
+        std::string("text 4A"), std::string("text 61 62"),
+        "text " + std::string((TE::MAX_APP_TEXT + 1) * 2, 'a'), std::string("key "),
+        std::string("key f1"), std::string("key TAB"), std::string("key tab ctrl"),
+        std::string("key tab shift ")})
+    EXPECT_TRUE(TE::AppLine(line)) << line;
+  EXPECT_TRUE(TE::Drain().empty());
+  // The longest one taken still types.
+  EXPECT_TRUE(TE::AppLine("text " + std::string(TE::MAX_APP_TEXT * 2, '6')));
+  EXPECT_EQ(TE::Drain().size(), 256u);  // the queue's own limit
+}
+
+TEST(OrcaTextEntryApp, NothingIsTypedWithNoScreenOpen)
+{
+  TE::SetCapturing(false);
+  EXPECT_TRUE(TE::AppLine("text " + Hex("secret")));
+  EXPECT_TRUE(TE::AppLine("key enter"));
+  Capture capture;
+  EXPECT_TRUE(TE::Drain().empty());
+}
+
+TEST(OrcaTextEntryApp, OtherLinesAreNotTheirs)
+{
+  for (const char* line : {"show", "quit", "rect 1 2 3 4", "texts", "keys tab", "text", "key",
+                           "yg {\"push\":{}}", " text 61"})
+    EXPECT_FALSE(TE::AppLine(line)) << line;
 }
