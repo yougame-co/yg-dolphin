@@ -19,10 +19,11 @@ class SignInFlow;
 // "check your email, then press Continue" state. Every network call runs on a worker thread; the
 // video thread only draws and polls.
 //
-// Keyboard only: Tab or the arrows move between items, Enter presses the focused one (in a field,
-// the screen's main button), Escape cancels. While it is open the keyboard is captured
-// (UX/TextEntry.h): the game, Orca's shortcuts and its own keys see none of it, and every pad reads
-// neutral. So it never opens while online play runs (OnlineActive), and closes at the next frame if
+// Tab or the arrows move between items, Enter presses the focused one (in a field, the screen's
+// main button), Escape cancels. The app's pads do the same (UX/PadKeys.h): the D-pad or the stick
+// moves, A presses, B cancels; typing still needs the keyboard. While it is open the keyboard is
+// captured (UX/TextEntry.h): the game, Orca's shortcuts and its own keys see none of it, and every
+// pad reads neutral to the game. So it never opens while online play runs (OnlineActive), and closes at the next frame if
 // online play starts under it (a friend dropping in): neutral pads would reach the other players as
 // real input.
 // Host-only: nothing here reads or writes emulated state.

@@ -682,6 +682,8 @@ add_library(core
   Orca/UX/YgCard.h
   Orca/UX/OrbCombo.cpp
   Orca/UX/OrbCombo.h
+  Orca/UX/PadKeys.cpp
+  Orca/UX/PadKeys.h
   Orca/UX/OverlayKey.cpp
   Orca/UX/OverlayKey.h
   Orca/UX/YgOrb.cpp

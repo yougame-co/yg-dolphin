@@ -27,6 +27,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/UX/Controllers.h"
+#include "Core/Orca/UX/PadKeys.h"
 #include "Core/Orca/UX/TextEntry.h"
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/LocalInput.h"
@@ -579,6 +580,8 @@ constexpr int NO_DEVICE = -1;
 std::array<std::atomic<int>, MAX_LOCAL> s_local_devices{NO_DEVICE, NO_DEVICE};
 std::atomic<int> s_local_count{1};
 std::array<std::atomic<bool>, MAX_LOCAL> s_assignment_known{false, false};
+// Each local seat's pad on a screen that holds the keyboard. CPU thread only, like LocalPad.
+std::array<PadKeys, MAX_LOCAL> s_pad_keys;
 
 int PackDevice(PadSource source, int index)
 {
@@ -734,15 +737,28 @@ std::optional<GCPadStatus> LocalPad(int ordinal, bool for_frame)
     }
   }
   // A screen holding the keyboard: neutral whatever the gate, background input or
-  // ORCA_VIRTUAL_PAD_ONLY say. Read here because the gate moves only once per frame.
-  if (TextEntry::Capturing())
+  // ORCA_VIRTUAL_PAD_ONLY say. Read here because the gate moves only once per frame. The app's
+  // pad still reaches the screen as its keys (UX/PadKeys.h), once per frame.
+  const bool capturing = TextEntry::Capturing();
+  u16 hidden = s_pad_keys[ordinal].Hidden();
+  if (for_frame)
+  {
+    const PadKeys::Step step = s_pad_keys[ordinal].Next(choice ? choice->pad : NeutralPad(),
+                                                        capturing);
+    for (const TextEntry::Key key : step.keys)
+      TextEntry::Press(key, false);
+    hidden = step.hidden;
+  }
+  if (capturing)
     return NeutralPad();
   if (!choice)
     return s_local_count.load(std::memory_order_relaxed) > 1 ?
                std::optional<GCPadStatus>(NeutralPad()) : std::nullopt;
   if (!ControlReference::GetInputGate() && !InputCommon::VirtualPadOnly())
     return NeutralPad();
-  return choice->pad;
+  GCPadStatus pad = choice->pad;
+  pad.button &= static_cast<u16>(~hidden);
+  return pad;
 }
 
 std::optional<LocalDevice> LastLocalDevice()

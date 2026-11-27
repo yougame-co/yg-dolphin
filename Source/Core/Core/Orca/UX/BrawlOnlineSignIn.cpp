@@ -61,6 +61,9 @@ constexpr std::string_view NOTE = "Test build: nothing is sent to Brawl Online."
 constexpr std::string_view WORKING = "Working...";
 #endif
 
+// The keyboard's keys and the pad's (UX/PadKeys.h) do the same.
+constexpr std::string_view HINT = "A or Enter: choose    B or Esc: cancel    D-pad or Tab: move";
+
 // Sizes, in overlay units.
 constexpr float PANEL_MAX_WIDTH = 76;
 constexpr float PAD = 3;
@@ -439,12 +442,12 @@ float Layout(ImDrawList* dl, const std::shared_ptr<Session>& s, const View& view
     y += GAP * unit;
   }
 
-  // The main button on a row of its own, then the rest, side by side when they fit.
+  // The main button on a row of its own, then the rest, side by side when they fit. Every button
+  // can be pressed, so none is grey (the overlay's look for inactive); the focused one is gold.
   const auto button = [&](std::size_t i, ImVec2 pos) {
     const Item item = items[i];
     const bool focused = static_cast<int>(i) == s->focus;
-    const bool main = item == Item::Primary || item == Item::Continue;
-    const Kit::Tone tone = focused ? Kit::Tone::Gold : main ? Kit::Tone::Blue : Kit::Tone::Grey;
+    const Kit::Tone tone = focused ? Kit::Tone::Gold : Kit::Tone::Blue;
     const Kit::Box box = Kit::LabelPlate(dl, pos, unit, LabelOf(item, view.screen), BUTTON_SIZE,
                                          Kit::Align::Left, tone, alpha);
     if (focused)
@@ -497,6 +500,16 @@ float Layout(ImDrawList* dl, const std::shared_ptr<Session>& s, const View& view
         button(i, ImVec2(centre_x - size.x / 2, y));
       y += size.y + 0.6f * unit;
     }
+  }
+
+  // How to use it, keyboard and pad.
+  y += GAP * unit;
+  for (const std::string& part : Kit::Wrap(text, HINT, inner))
+  {
+    if (dl)
+      Kit::Label(dl, ImVec2(centre_x, y), unit, part, TEXT_SIZE, Kit::Align::Centre,
+                 IM_COL32(200, 202, 212, 255));
+    y += line;
   }
   return y + pad - top;
 }

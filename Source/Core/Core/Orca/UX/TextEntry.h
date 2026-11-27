@@ -17,7 +17,8 @@
 // or ORCA_VIRTUAL_PAD_ONLY say. Core::UpdateInputGate closes the input gate for every Dolphin device,
 // and the session's pad reads (the app's, UX/ControllerSource.h LocalPad, and Dolphin's own in
 // Rollback's local pad) check Capturing() themselves, so the first frame is neutral too, before the
-// gate next moves. Host-only: nothing here reads or writes emulated state.
+// gate next moves. The app's pads reach the screen as keys instead (UX/PadKeys.h, through Press).
+// Host-only: nothing here reads or writes emulated state.
 namespace Orca::UX::TextEntry
 {
 // The keys a screen acts on. Everything else typed arrives as text.
