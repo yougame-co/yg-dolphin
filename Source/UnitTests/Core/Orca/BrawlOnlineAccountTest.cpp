@@ -8,6 +8,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,6 +23,7 @@
 #include "Common/FileUtil.h"
 #include "Common/ScopeGuard.h"
 #include "Core/Orca/BrawlOnlineAccount.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/UX/BrawlOnlineSignIn.h"
 #include "Core/Orca/UX/TextEntry.h"
 
@@ -778,6 +780,61 @@ TEST(BrawlOnlineSignInScreen, NeverOpensWhileOnline)
   EXPECT_FALSE(Screen::IsOpen());
   EXPECT_FALSE(Orca::UX::TextEntry::Capturing());
   EXPECT_TRUE(log->sent.empty());
+}
+
+// Under the desktop app this game hosts a room of its own from boot. Alone in it, nobody else sees
+// its pads, so the sign-in screen may open; any sign of another player keeps it shut.
+TEST(BrawlOnlineSignInScreen, HostingAloneIsNotOnline)
+{
+  using Orca::Online::OthersInputs;
+  using Orca::Online::OthersPlaying;
+  OthersInputs alone;
+  alone.has_room = true;
+  alone.joining = false;
+  EXPECT_FALSE(OthersPlaying(alone));
+  EXPECT_FALSE(OthersPlaying(OthersInputs{}));
+
+  OthersInputs in = alone;
+  in.friends_in_game = true;
+  EXPECT_TRUE(OthersPlaying(in));
+  in = alone;
+  in.drop_in_pending = true;
+  EXPECT_TRUE(OthersPlaying(in));
+  in = alone;
+  in.match_live = true;
+  EXPECT_TRUE(OthersPlaying(in));
+  in = alone;
+  in.joining = true;
+  EXPECT_TRUE(OthersPlaying(in));
+  // Still connecting: the room hasn't said whether this game hosts or joins a friend's.
+  in = alone;
+  in.joining = std::nullopt;
+  EXPECT_TRUE(OthersPlaying(in));
+
+  // An ended room keeps nothing shut by itself; friends still in the game do.
+  in = alone;
+  in.room_ended = true;
+  in.joining = std::nullopt;
+  in.drop_in_pending = true;
+  EXPECT_FALSE(OthersPlaying(in));
+  in.friends_in_game = true;
+  EXPECT_TRUE(OthersPlaying(in));
+  // Solo play after leaving the room: only friends in the game count.
+  in = OthersInputs{};
+  in.friends_in_game = true;
+  EXPECT_TRUE(OthersPlaying(in));
+}
+
+// The real check: no room and nobody in the game is not online; friends in the game are.
+TEST(BrawlOnlineSignInScreen, FriendsInGameIsOnline)
+{
+  Screen::SetOnlineCheckForTest(nullptr);
+  Orca::Online::SetFriendsInGame(false);
+  EXPECT_FALSE(Screen::OnlineActive());
+  Orca::Online::SetFriendsInGame(true);
+  EXPECT_TRUE(Screen::OnlineActive());
+  Orca::Online::SetFriendsInGame(false);
+  EXPECT_FALSE(Screen::OnlineActive());
 }
 
 // A build without ORCA_BO_LIVE says on the screen, in one plain line, that nothing leaves it.

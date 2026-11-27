@@ -23,7 +23,8 @@ class SignInFlow;
 // the screen's main button), Escape cancels. While it is open the keyboard is captured
 // (UX/TextEntry.h): the game, Orca's shortcuts and its own keys see none of it, and every pad reads
 // neutral. So it never opens while online play runs (OnlineActive), and closes at the next frame if
-// online play starts under it: neutral pads would reach the other players as real input.
+// online play starts under it (a friend dropping in): neutral pads would reach the other players as
+// real input.
 // Host-only: nothing here reads or writes emulated state.
 namespace Orca::UX::BrawlOnlineSignIn
 {
@@ -50,8 +51,9 @@ void Draw();
 // build's and sends nothing to Brawl Online.
 std::string_view Note();
 
-// Whether online play runs or is starting: a YouGame room exists (connecting included) or Dolphin
-// netplay runs. Any thread.
+// Whether online play runs or is starting: another player is in this game or on the way in, a room
+// match is live, this game is joining someone's (Online::OthersPlaying), or Dolphin netplay runs. A
+// room this game hosts alone does not count. Any thread.
 bool OnlineActive();
 // Tests: replaces OnlineActive's answer with `check`'s (nullptr restores it).
 void SetOnlineCheckForTest(bool (*check)());

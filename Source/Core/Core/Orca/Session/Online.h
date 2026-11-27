@@ -187,6 +187,29 @@ bool DropInPending();
 // yet, while the room is up. Any thread.
 bool ArrivalPending();
 
+// Emulator thread, after each frame boundary: whether other players are in this game or on their
+// way into it (a session runs, a friend waits for a keyframe or is plugging in, or this game is
+// joining a friend's). False again once the match ends. Any thread reads it.
+void SetFriendsInGame(bool in);
+bool FriendsInGame();
+// What OthersPlaying decides from.
+struct OthersInputs
+{
+  bool has_room = false;
+  bool room_ended = false;
+  bool friends_in_game = false;
+  bool drop_in_pending = false;
+  bool match_live = false;
+  // Joining(): nullopt while the room hasn't said yet whether this game hosts.
+  std::optional<bool> joining;
+};
+// Whether another player's game sees, or is about to see, this game's pads: friends in the game, a
+// drop-in pending, a room match live, or this game joining someone's (or not yet known to host).
+// A room this game hosts alone, as it does under the desktop app, is not enough. Pure.
+bool OthersPlaying(const OthersInputs& in);
+// OthersPlaying for the current room and match. Any thread.
+bool OthersPlaying();
+
 // Latest round trip to the room server in ms (-1 before the first). `sequence`, if given, changes
 // with each new measurement: feed Session::OnRoundTrip only when it changed.
 int RoundTripMs(u32* sequence = nullptr);

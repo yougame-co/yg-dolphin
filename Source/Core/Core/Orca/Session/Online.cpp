@@ -813,6 +813,44 @@ bool ArrivalPending()
   return room && room->GetState() != Net::RoomState::Ended && room->ArrivalPending();
 }
 
+namespace
+{
+std::atomic<bool> s_friends_in_game{false};
+}  // namespace
+
+void SetFriendsInGame(bool in)
+{
+  s_friends_in_game.store(in, std::memory_order_relaxed);
+}
+
+bool FriendsInGame()
+{
+  return s_friends_in_game.load(std::memory_order_relaxed);
+}
+
+bool OthersPlaying(const OthersInputs& in)
+{
+  if (in.friends_in_game)
+    return true;
+  // An ended room only lingers until it is let go: nobody new can see this game through it.
+  if (!in.has_room || in.room_ended)
+    return false;
+  return in.drop_in_pending || in.match_live || in.joining.value_or(true);
+}
+
+bool OthersPlaying()
+{
+  const auto room = Room();
+  OthersInputs in;
+  in.has_room = room != nullptr;
+  in.room_ended = room && room->GetState() == Net::RoomState::Ended;
+  in.friends_in_game = FriendsInGame();
+  in.drop_in_pending = DropInPending();
+  in.match_live = room && room->MatchLive();
+  in.joining = room ? room->Joining() : std::nullopt;
+  return OthersPlaying(in);
+}
+
 int RoundTripMs(u32* sequence)
 {
   const auto room = Room();

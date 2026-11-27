@@ -74,7 +74,10 @@ void PageOpened()
     return;
   const std::string kept = BrawlOnlineSignIn::Open(PlayerId(), "");
   NOTICE_LOG_FMT(ROLLBACK, "Brawl Online page: {}",
-                 kept.empty() ? "sign-in screen" : "link kept on this PC");
+                 !kept.empty()                   ? "link kept on this PC" :
+                 BrawlOnlineSignIn::IsOpen()     ? "sign-in screen" :
+                 BrawlOnlineSignIn::OnlineActive() ? "no sign-in screen while playing online" :
+                                                     "sign-in screen did not open");
 }
 
 void SetRow(std::optional<OnlinePick> row)

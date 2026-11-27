@@ -606,8 +606,9 @@ bool OnlineActive()
   }
   if (check)
     return check();
-  // Any room counts, one still connecting included: neutral pads would reach it once it joins.
-  return Orca::Online::HasRoom() || NetPlay::IsNetPlayRunning();
+  // Not the room itself: under the desktop app this game always hosts one, alone until a friend
+  // drops in. What counts is another player's game seeing this one's pads, now or about to.
+  return Orca::Online::OthersPlaying() || NetPlay::IsNetPlayRunning();
 }
 
 void SetOnlineCheckForTest(bool (*check)())

@@ -447,6 +447,14 @@ bool SoloIdle(const Match& match)
          match.plugging.empty() && !match.port->CatchingUp();
 }
 
+// Other players are in this game or on their way into it (Online::SetFriendsInGame).
+bool FriendsIn(const Match& match)
+{
+  return match.started && !match.finished &&
+         (match.session || match.joining || !match.waiting.empty() || !match.menu_waiting.empty() ||
+          !match.plugging.empty());
+}
+
 // Emulation is stopping, or the host asked the CPU thread to pause and waits for it: a loop holding
 // the CPU thread must give up rather than deadlock.
 bool Stopping(Core::System& system)
@@ -4115,6 +4123,7 @@ std::optional<int> Boundary(Core::System& system,
       match.store->Cancel();
     match.session.reset();
     Orca::Online::SetSessionActive(false);
+    Orca::Online::SetFriendsInGame(false);
     match.port.reset();
     match.job.reset();
     match.download.reset();
@@ -5061,6 +5070,7 @@ std::optional<int> OnBoundary(Core::System& system,
   if (TheMatch().replaying || (was_replaying && !TheMatch().session))
   {
     s_solo_idle = SoloIdle(TheMatch());
+    Orca::Online::SetFriendsInGame(FriendsIn(TheMatch()));
     return rewound_to;
   }
   ConfirmResults(TheMatch());
@@ -5068,6 +5078,7 @@ std::optional<int> OnBoundary(Core::System& system,
   SetOverLeave(TheMatch());
   Orca::UX::Game().SetLocalPort(TheMatch().local_seat);
   s_solo_idle = SoloIdle(TheMatch());
+  Orca::Online::SetFriendsInGame(FriendsIn(TheMatch()));
   return rewound_to;
 }
 
@@ -5143,6 +5154,7 @@ void End(const char* reason)
   match.finished = true;
   Orca::UX::SetLocalPadCount(1);
   s_solo_idle = false;
+  Orca::Online::SetFriendsInGame(false);
   LogStats(fmt::format("ended ({})", reason).c_str());
   // Transfers in flight give up now; their threads are joined below.
   if (match.store)
