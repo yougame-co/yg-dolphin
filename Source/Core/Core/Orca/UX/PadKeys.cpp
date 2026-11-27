@@ -47,14 +47,21 @@ PadKeys::Step PadKeys::Next(const GCPadStatus& pad, bool capturing)
         step.keys.push_back(Key::Up);
       if ((pressed & (PAD_BUTTON_DOWN | PAD_BUTTON_RIGHT)) || (pushed & (DOWN | RIGHT)))
         step.keys.push_back(Key::Down);
+      m_pressed |= pressed;
     }
+    else
+    {
+      m_pressed = 0;
+    }
+    m_pressed &= buttons;
     m_hidden = 0;
   }
   else
   {
-    // Just closed: what is still down stays hidden until let go.
+    // Just closed: what was pressed on the screen and is still down stays hidden until let go.
     if (m_capturing)
-      m_hidden = buttons;
+      m_hidden = m_pressed;
+    m_pressed = 0;
     m_hidden &= buttons;
     step.hidden = m_hidden;
   }

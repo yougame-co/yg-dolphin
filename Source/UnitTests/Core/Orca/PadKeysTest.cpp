@@ -134,6 +134,26 @@ TEST(OrcaPadKeys, OnlyTheScreensButtonsAreHidden)
             PAD_BUTTON_A | PAD_BUTTON_UP);
 }
 
+TEST(OrcaPadKeys, ButtonsHeldFromBeforeItOpenedAreNotHidden)
+{
+  PadKeys keys;
+  keys.Next(Pad(PAD_BUTTON_A), false);
+  EXPECT_TRUE(keys.Next(Pad(PAD_BUTTON_A), true).keys.empty());
+  EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_A | PAD_BUTTON_B), true).keys, Keys{TE::Key::Escape});
+  // The A was down all along; only the B was pressed on the screen.
+  EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_A | PAD_BUTTON_B), false).hidden, PAD_BUTTON_B);
+  EXPECT_EQ(keys.Hidden(), PAD_BUTTON_B);
+}
+
+TEST(OrcaPadKeys, APressLetGoOnTheScreenIsNotHidden)
+{
+  PadKeys keys = Open();
+  EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_A), true).keys, Keys{TE::Key::Enter});
+  keys.Next(Pad(), true);
+  // Let go on the screen, then pressed as it closes: that press is the game's.
+  EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_A), false).hidden, 0);
+}
+
 TEST(OrcaPadKeys, ReopeningClearsWhatWasHidden)
 {
   PadKeys keys = Open();

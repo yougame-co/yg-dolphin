@@ -16,8 +16,9 @@
 // A press while the screen is open becomes one of the screen's keys: A is Enter, B is Escape, and
 // the D-pad or the main stick moves the focus (Up and Left to the previous item, Down and Right to
 // the next). Only presses made while it is open count: buttons already down when it opens wait for
-// a release first. Buttons still down when it closes stay hidden from the game until they are let
-// go, so the B that closed it does not also take the game back a page.
+// a release first. A button pressed while it is open and still down when it closes stays hidden from
+// the game until it is let go, so the B that closed it does not also take the game back a page.
+// Buttons held from before it opened are left alone.
 //
 // Host-only: the screen never opens during online play (BrawlOnlineSignIn::OnlineActive), and what
 // the game gets is the pad the session records, as always.
@@ -55,6 +56,7 @@ private:
   bool m_capturing = false;
   u16 m_buttons = 0;  // the last sample's
   u8 m_stick = 0;     // directions the stick held at the last sample
+  u16 m_pressed = 0;  // buttons pressed while the screen is open and not let go since
   u16 m_hidden = 0;
 };
 }  // namespace Orca::UX
