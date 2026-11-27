@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -200,6 +201,68 @@ private:
   std::chrono::steady_clock::time_point m_flushed{};
 };
 
+// A machine image packed for keeping in memory (zstd), and back. Unpack fails on anything Pack
+// did not write.
+std::vector<u8> PackImage(const MachineImage& image);
+bool UnpackImage(std::span<const u8> packed, MachineImage* image);
+
+// Seek points a product replay takes as it plays, every `spacing` frames past the origin, so a seek
+// restores the nearest point at or before its target instead of replaying from the origin. They
+// stay bounded: past `cap` points or `max_bytes`, every other point is dropped and the spacing
+// doubles.
+class SeekPoints
+{
+public:
+  struct Point
+  {
+    int frame = 0;
+    std::vector<u8> image;  // PackImage
+    std::shared_ptr<const std::vector<Orca::Net::NandEntry>> nand;
+  };
+  SeekPoints(int spacing, std::size_t cap, std::size_t max_bytes);
+  // Whether a point is due at `frame`, a replay from `origin`.
+  bool Due(int frame, int origin) const;
+  // Points are kept in frame order: one at or before the last point's frame is dropped.
+  void Add(Point point);
+  // The last point at or before `frame`, or null.
+  const Point* AtOrBefore(int frame) const;
+  // The newest point's NAND, to share with the next point when unchanged.
+  std::shared_ptr<const std::vector<Orca::Net::NandEntry>> LastNand() const;
+  int Spacing() const { return m_spacing; }
+  std::size_t Size() const { return m_points.size(); }
+  std::size_t Bytes() const { return m_bytes; }
+
+private:
+  int m_spacing;
+  std::size_t m_cap;
+  std::size_t m_max_bytes;
+  std::size_t m_bytes = 0;
+  std::vector<Point> m_points;
+};
+
+// Where a product seek to `target` starts, with `next` the frame about to run and `point` the frame
+// of the last seek point at or before the target: playing on from here (forward, with no point
+// past `next`), a seek point, or the origin.
+struct SeekStart
+{
+  enum class From
+  {
+    Here,
+    Point,
+    Origin,
+  };
+  From from = From::Here;
+  int frame = 0;
+  bool operator==(const SeekStart&) const = default;
+};
+SeekStart ChooseSeekStart(int target, int next, int origin, std::optional<int> point);
+
+// A saved replay runs its recorded menus flat out and unseen, and real time from the first fight
+// on. `in_fight` is nullopt for a game with no scenes: it plays in real time from the start. A
+// replay with no fight by MENU_SKIP_MAX_FRAMES past its origin stops skipping there.
+constexpr int MENU_SKIP_MAX_FRAMES = 10 * 60 * 60;
+bool StillSkippingMenus(std::optional<bool> in_fight, int frame, int origin);
+
 // What a player needs from the match it runs in: the restores it may do, and how it drives frames.
 struct PlayerHost
 {
@@ -213,6 +276,8 @@ struct PlayerHost
   std::function<void(bool catching_up)> set_catching_up;
   std::function<void(int frame, const Orca::Net::Pads& pads)> set_pads;
   std::function<bool()> stopping;
+  // Whether the game is in a fight (Brawl's scMelee scene); nullopt for a game with no scenes.
+  std::function<std::optional<bool>()> in_fight;
   // Ends the run, with a message for the player.
   std::function<void(const std::string& message)> stop;
 };
@@ -237,6 +302,7 @@ private:
   void WatchThread(std::string source);
   void Finish(const PlayerHost& host, bool ok, const std::string& why);
   void PrintTime(int frame, bool force = false);
+  void TakeSeekPoint(Core::System& system, const PlayerHost& host, int frame);
 
   std::string m_path;
   bool m_product = false;
@@ -285,5 +351,10 @@ private:
   std::vector<Orca::Net::NandEntry> m_seek_nand;
   bool m_seek_taken = false;
   bool m_seek_done = false;
+  // A saved replay's recorded menus, run flat out until the first fight (StillSkippingMenus).
+  bool m_skip_menus = false;
+  // Product seek points (SeekPoints), and the one being packed off the CPU thread.
+  std::unique_ptr<SeekPoints> m_points;
+  std::future<SeekPoints::Point> m_packing;
 };
 }  // namespace Rollback::ReplayStream

@@ -33,6 +33,7 @@
 #include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
 #include "Common/Timer.h"
+#include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/SystemTimers.h"
@@ -2873,6 +2874,16 @@ std::optional<int> StepReplayPlayer(Core::System& system, Match& match, const Fr
     match.port->SetPads(frame, pads);
   };
   host.stopping = [&system] { return Stopping(system); };
+  host.in_fight = [&system]() -> std::optional<bool> {
+    const SConfig& config = SConfig::GetInstance();
+    if (!Orca::UX::Game().ScenesReadable(config.GetGameID(), config.GetRevision()))
+      return std::nullopt;
+    const Core::CPUThreadGuard guard(system);
+    const std::string scene = Orca::UX::Game().SceneName(guard);
+    if (scene.empty())
+      return std::nullopt;
+    return scene == "scMelee";
+  };
   host.stop = [&system](const std::string& message) { StopEmulation(system, message); };
   const std::optional<int> rewound = match.replay_play->Step(
       system, host, &match.running, match.origin_hash, match.origin_frame, on_frame);

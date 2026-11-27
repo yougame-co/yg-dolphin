@@ -2187,3 +2187,123 @@ TEST(OrcaReplayStream, SeatLabelFlagIsOptionalAndTyped)
     }
   }
 }
+
+namespace
+{
+using Rollback::MachineImage;
+using Rollback::ReplayStream::SeekPoints;
+using Rollback::ReplayStream::SeekStart;
+
+SeekPoints::Point TestPoint(int frame, std::size_t bytes = 100)
+{
+  SeekPoints::Point point;
+  point.frame = frame;
+  point.image.assign(bytes, static_cast<u8>(frame));
+  point.nand = std::make_shared<const std::vector<NandEntry>>();
+  return point;
+}
+}  // namespace
+
+TEST(OrcaReplaySeekPoints, PackedImageRoundTripsAndRejectsDamage)
+{
+  MachineImage image;
+  image.state = {1, 2, 3};
+  image.mem1.assign(24 << 20, 0);
+  image.mem1[12345] = 7;
+  image.mem2.assign(4096, 9);
+  image.l1_cache = {5};
+  const std::vector<u8> packed = Rollback::ReplayStream::PackImage(image);
+  ASSERT_FALSE(packed.empty());
+  EXPECT_LT(packed.size(), image.mem1.size() / 100);
+  MachineImage back;
+  ASSERT_TRUE(Rollback::ReplayStream::UnpackImage(packed, &back));
+  EXPECT_EQ(back.state, image.state);
+  EXPECT_EQ(back.mem1, image.mem1);
+  EXPECT_EQ(back.mem2, image.mem2);
+  EXPECT_EQ(back.l1_cache, image.l1_cache);
+
+  MachineImage bad;
+  EXPECT_FALSE(Rollback::ReplayStream::UnpackImage({}, &bad));
+  EXPECT_FALSE(Rollback::ReplayStream::UnpackImage(
+      std::span<const u8>(packed.data(), packed.size() / 2), &bad));
+  auto wrong_magic = packed;
+  wrong_magic[0] ^= 1;
+  EXPECT_FALSE(Rollback::ReplayStream::UnpackImage(wrong_magic, &bad));
+  auto wrong_size = packed;
+  wrong_size[4 + 8] ^= 1;  // mem1's size
+  EXPECT_FALSE(Rollback::ReplayStream::UnpackImage(wrong_size, &bad));
+}
+
+TEST(OrcaReplaySeekPoints, DueEverySpacingAndNearestAtOrBefore)
+{
+  SeekPoints points(1800, 12, std::size_t{1} << 30);
+  EXPECT_FALSE(points.Due(1000 + 1799, 1000));
+  EXPECT_TRUE(points.Due(1000 + 1800, 1000));
+  EXPECT_EQ(points.AtOrBefore(5000), nullptr);
+  points.Add(TestPoint(2800));
+  points.Add(TestPoint(4600));
+  EXPECT_FALSE(points.Due(6399, 1000));
+  EXPECT_TRUE(points.Due(6400, 1000));
+  // Out of order or repeated (a seek back replays frames already covered): dropped.
+  points.Add(TestPoint(4600));
+  points.Add(TestPoint(3000));
+  EXPECT_EQ(points.Size(), 2u);
+  EXPECT_EQ(points.AtOrBefore(2799), nullptr);
+  ASSERT_NE(points.AtOrBefore(2800), nullptr);
+  EXPECT_EQ(points.AtOrBefore(2800)->frame, 2800);
+  EXPECT_EQ(points.AtOrBefore(4599)->frame, 2800);
+  EXPECT_EQ(points.AtOrBefore(100000)->frame, 4600);
+}
+
+TEST(OrcaReplaySeekPoints, StayBoundedByThinning)
+{
+  SeekPoints points(10, 4, std::size_t{1} << 30);
+  for (int i = 1; i <= 5; ++i)
+    points.Add(TestPoint(i * 10));
+  // Five points past a cap of four: the odd ones (20, 40) stay and the spacing doubles.
+  EXPECT_EQ(points.Size(), 2u);
+  EXPECT_EQ(points.Spacing(), 20);
+  EXPECT_EQ(points.AtOrBefore(39)->frame, 20);
+  EXPECT_EQ(points.AtOrBefore(40)->frame, 40);
+  EXPECT_TRUE(points.Due(60, 0));
+  EXPECT_FALSE(points.Due(59, 0));
+
+  SeekPoints by_bytes(10, 100, 350);
+  for (int i = 1; i <= 4; ++i)
+    by_bytes.Add(TestPoint(i * 10, 100));
+  EXPECT_EQ(by_bytes.Size(), 2u);
+  EXPECT_EQ(by_bytes.Bytes(), 200u);
+  EXPECT_EQ(by_bytes.Spacing(), 20);
+
+  SeekPoints empty_image(10, 4, 1000);
+  SeekPoints::Point no_image = TestPoint(10, 0);
+  empty_image.Add(std::move(no_image));
+  EXPECT_EQ(empty_image.Size(), 0u);
+}
+
+TEST(OrcaReplaySeekPoints, SeekStartsFromTheClosestPlace)
+{
+  using Rollback::ReplayStream::ChooseSeekStart;
+  using From = SeekStart::From;
+  // Forward with no point past here: play on.
+  EXPECT_EQ(ChooseSeekStart(5000, 3000, 100, 2800), (SeekStart{From::Here, 3000}));
+  EXPECT_EQ(ChooseSeekStart(5000, 3000, 100, std::nullopt), (SeekStart{From::Here, 3000}));
+  EXPECT_EQ(ChooseSeekStart(3000, 3000, 100, 2800), (SeekStart{From::Here, 3000}));
+  // Forward past a point already taken (after a seek back): jump to it.
+  EXPECT_EQ(ChooseSeekStart(9000, 3000, 100, 8200), (SeekStart{From::Point, 8200}));
+  // Back: the nearest point at or before the target, else the origin.
+  EXPECT_EQ(ChooseSeekStart(2900, 6000, 100, 2800), (SeekStart{From::Point, 2800}));
+  EXPECT_EQ(ChooseSeekStart(2000, 6000, 100, std::nullopt), (SeekStart{From::Origin, 100}));
+}
+
+TEST(OrcaReplaySeekPoints, MenusSkipUntilTheFirstFight)
+{
+  using Rollback::ReplayStream::MENU_SKIP_MAX_FRAMES;
+  using Rollback::ReplayStream::StillSkippingMenus;
+  EXPECT_TRUE(StillSkippingMenus(false, 500, 100));
+  EXPECT_FALSE(StillSkippingMenus(true, 500, 100));
+  // A game with no scenes plays in real time from the start.
+  EXPECT_FALSE(StillSkippingMenus(std::nullopt, 100, 100));
+  EXPECT_TRUE(StillSkippingMenus(false, 100 + MENU_SKIP_MAX_FRAMES - 1, 100));
+  EXPECT_FALSE(StillSkippingMenus(false, 100 + MENU_SKIP_MAX_FRAMES, 100));
+}

@@ -21,6 +21,7 @@
 
 #include <fmt/format.h>
 #include <picojson.h>
+#include <zstd.h>
 
 #include "Common/HttpRequest.h"
 #include "Common/IOFile.h"
@@ -961,6 +962,196 @@ void Player::WatchThread(std::string source)
   }
 }
 
+namespace
+{
+// Product seek points: every 30 seconds at first, at most 12 kept and 512 MiB packed.
+constexpr int SEEK_POINT_SPACING = 30 * 60;
+constexpr std::size_t SEEK_POINT_CAP = 12;
+constexpr std::size_t SEEK_POINT_BYTES = std::size_t{512} << 20;
+constexpr u32 PACKED_IMAGE_MAGIC = 0x4f534950;  // "PISO"
+constexpr std::size_t PACKED_IMAGE_HEADER = 4 + 4 * 8;
+constexpr u64 PACKED_IMAGE_MAX = u64{1} << 30;
+
+void PutU64(std::vector<u8>* out, std::size_t at, u64 v)
+{
+  for (int i = 0; i < 8; ++i)
+    (*out)[at + i] = static_cast<u8>(v >> (8 * i));
+}
+
+u64 GetU64(std::span<const u8> in, std::size_t at)
+{
+  u64 v = 0;
+  for (int i = 0; i < 8; ++i)
+    v |= u64{in[at + i]} << (8 * i);
+  return v;
+}
+
+bool SameNand(const std::vector<Orca::Net::NandEntry>& a, const std::vector<Orca::Net::NandEntry>& b)
+{
+  return std::ranges::equal(a, b, [](const auto& x, const auto& y) {
+    return x.path == y.path && x.directory == y.directory && x.data == y.data &&
+           x.reference == y.reference && x.hash == y.hash;
+  });
+}
+}  // namespace
+
+std::vector<u8> PackImage(const MachineImage& image)
+{
+  // Streamed part by part, so packing never holds a second unpacked copy of the image.
+  const std::vector<u8>* parts[] = {&image.state, &image.mem1, &image.mem2, &image.l1_cache};
+  std::size_t total = 0;
+  for (const auto* part : parts)
+    total += part->size();
+  std::vector<u8> out(PACKED_IMAGE_HEADER + ZSTD_compressBound(total));
+  for (int i = 0; i < 4; ++i)
+    out[i] = static_cast<u8>(PACKED_IMAGE_MAGIC >> (8 * i));
+  for (int i = 0; i < 4; ++i)
+    PutU64(&out, 4 + 8 * i, parts[i]->size());
+  ZSTD_CCtx* const cctx = ZSTD_createCCtx();
+  if (!cctx)
+    return {};
+  Common::ScopeGuard free_cctx([cctx] { ZSTD_freeCCtx(cctx); });
+  if (ZSTD_isError(ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 1)) ||
+      ZSTD_isError(ZSTD_CCtx_setPledgedSrcSize(cctx, total)))
+    return {};
+  ZSTD_outBuffer output{out.data() + PACKED_IMAGE_HEADER, out.size() - PACKED_IMAGE_HEADER, 0};
+  for (int i = 0; i < 4; ++i)
+  {
+    ZSTD_inBuffer input{parts[i]->data(), parts[i]->size(), 0};
+    const ZSTD_EndDirective mode = i == 3 ? ZSTD_e_end : ZSTD_e_continue;
+    for (;;)
+    {
+      const std::size_t left = ZSTD_compressStream2(cctx, &output, &input, mode);
+      if (ZSTD_isError(left))
+        return {};
+      if (mode == ZSTD_e_end ? left == 0 : input.pos == input.size)
+        break;
+      if (output.pos == output.size)
+        return {};
+    }
+  }
+  out.resize(PACKED_IMAGE_HEADER + output.pos);
+  out.shrink_to_fit();
+  return out;
+}
+
+bool UnpackImage(std::span<const u8> packed, MachineImage* image)
+{
+  if (packed.size() < PACKED_IMAGE_HEADER)
+    return false;
+  u32 magic = 0;
+  for (int i = 0; i < 4; ++i)
+    magic |= u32{packed[i]} << (8 * i);
+  if (magic != PACKED_IMAGE_MAGIC)
+    return false;
+  u64 sizes[4];
+  u64 total = 0;
+  for (int i = 0; i < 4; ++i)
+  {
+    sizes[i] = GetU64(packed, 4 + 8 * i);
+    if (sizes[i] > PACKED_IMAGE_MAX)
+      return false;
+    total += sizes[i];
+  }
+  if (total > PACKED_IMAGE_MAX)
+    return false;
+  const std::span<const u8> body = packed.subspan(PACKED_IMAGE_HEADER);
+  if (ZSTD_getFrameContentSize(body.data(), body.size()) != total)
+    return false;
+  ZSTD_DCtx* const dctx = ZSTD_createDCtx();
+  if (!dctx)
+    return false;
+  Common::ScopeGuard free_dctx([dctx] { ZSTD_freeDCtx(dctx); });
+  std::vector<u8>* parts[] = {&image->state, &image->mem1, &image->mem2, &image->l1_cache};
+  ZSTD_inBuffer input{body.data(), body.size(), 0};
+  std::size_t last = 1;
+  for (int i = 0; i < 4; ++i)
+  {
+    parts[i]->resize(sizes[i]);
+    ZSTD_outBuffer output{parts[i]->data(), parts[i]->size(), 0};
+    while (output.pos < output.size)
+    {
+      const std::size_t before_in = input.pos, before_out = output.pos;
+      last = ZSTD_decompressStream(dctx, &output, &input);
+      if (ZSTD_isError(last))
+        return false;
+      if (input.pos == before_in && output.pos == before_out)
+        return false;
+    }
+  }
+  // The frame must end exactly here, with nothing after it.
+  if (last != 0)
+  {
+    u8 extra = 0;
+    ZSTD_outBuffer output{&extra, 1, 0};
+    last = ZSTD_decompressStream(dctx, &output, &input);
+    if (ZSTD_isError(last) || last != 0 || output.pos != 0)
+      return false;
+  }
+  return input.pos == input.size;
+}
+
+SeekPoints::SeekPoints(int spacing, std::size_t cap, std::size_t max_bytes)
+    : m_spacing(std::max(spacing, 1)), m_cap(std::max<std::size_t>(cap, 1)), m_max_bytes(max_bytes)
+{
+}
+
+bool SeekPoints::Due(int frame, int origin) const
+{
+  return frame >= (m_points.empty() ? origin : m_points.back().frame) + m_spacing;
+}
+
+void SeekPoints::Add(Point point)
+{
+  if (point.image.empty() || !point.nand ||
+      (!m_points.empty() && point.frame <= m_points.back().frame))
+    return;
+  m_bytes += point.image.size();
+  m_points.push_back(std::move(point));
+  while (!m_points.empty() && (m_points.size() > m_cap || m_bytes > m_max_bytes))
+  {
+    // Keep the odd ones: with the spacing doubled, they still sit on its grid.
+    std::vector<Point> kept;
+    m_bytes = 0;
+    for (std::size_t i = 1; i < m_points.size(); i += 2)
+    {
+      m_bytes += m_points[i].image.size();
+      kept.push_back(std::move(m_points[i]));
+    }
+    m_points = std::move(kept);
+    m_spacing *= 2;
+  }
+}
+
+const SeekPoints::Point* SeekPoints::AtOrBefore(int frame) const
+{
+  const auto it = std::ranges::upper_bound(m_points, frame, {}, &Point::frame);
+  return it == m_points.begin() ? nullptr : &*std::prev(it);
+}
+
+std::shared_ptr<const std::vector<Orca::Net::NandEntry>> SeekPoints::LastNand() const
+{
+  return m_points.empty() ? nullptr : m_points.back().nand;
+}
+
+SeekStart ChooseSeekStart(int target, int next, int origin, std::optional<int> point)
+{
+  if (target >= next)
+  {
+    if (point && *point > next)
+      return {SeekStart::From::Point, *point};
+    return {SeekStart::From::Here, next};
+  }
+  if (point)
+    return {SeekStart::From::Point, *point};
+  return {SeekStart::From::Origin, origin};
+}
+
+bool StillSkippingMenus(std::optional<bool> in_fight, int frame, int origin)
+{
+  return in_fight.has_value() && !*in_fight && frame - origin < MENU_SKIP_MAX_FRAMES;
+}
+
 std::unique_ptr<Player> Player::FromEnv()
 {
   const bool product = ProductMode();
@@ -981,12 +1172,21 @@ std::unique_ptr<Player> Player::FromEnv()
       play->m_names = ParseNames(names).value_or(NameMap{});
     play->m_follow = play->m_path.starts_with("ws://") || play->m_path.starts_with("wss://");
     play->m_realtime = !play->m_follow;
+    play->m_skip_menus = !play->m_follow;
+    play->m_points =
+        std::make_unique<SeekPoints>(SEEK_POINT_SPACING, SEEK_POINT_CAP, SEEK_POINT_BYTES);
     play->m_started = Clock::now();
     play->m_last_data = play->m_started;
     return play;
   }
   play->m_follow = Orca::GetEnv("ORCA_TEST_REPLAY_FOLLOW") == "1";
   play->m_realtime = Orca::GetEnv("ORCA_TEST_REPLAY_REALTIME") == "1";
+  play->m_skip_menus = play->m_realtime && Orca::GetEnv("ORCA_TEST_REPLAY_SKIP_MENUS") == "1";
+  if (const std::string points = Orca::GetEnv("ORCA_TEST_REPLAY_SEEK_POINTS"); !points.empty())
+  {
+    play->m_points = std::make_unique<SeekPoints>(std::clamp(std::atoi(points.c_str()), 60, 36000),
+                                                  SEEK_POINT_CAP, SEEK_POINT_BYTES);
+  }
   if (const std::string delay = Orca::GetEnv("ORCA_TEST_REPLAY_DELAY"); !delay.empty())
     play->m_delay = std::clamp(std::atoi(delay.c_str()), 0, 600);
   if (const std::string seek = Orca::GetEnv("ORCA_TEST_REPLAY_SEEK"); !seek.empty())
@@ -1159,6 +1359,29 @@ void Player::Finish(const PlayerHost& host, bool ok, const std::string& why)
                  "The replay couldn't be played: " + why);
 }
 
+void Player::TakeSeekPoint(Core::System& system, const PlayerHost& host, int frame)
+{
+  const auto started = Clock::now();
+  auto nand = std::make_shared<std::vector<Orca::Net::NandEntry>>();
+  MachineImage image;
+  if (!host.read_nand(nand.get()) || !SnapshotRing::Capture(system, &image, false))
+  {
+    WARN_LOG_FMT(ROLLBACK, "Replay: couldn't take a seek point at frame {}; seeks start from the "
+                           "origin or an earlier point",
+                 frame);
+    m_points.reset();
+    return;
+  }
+  std::shared_ptr<const std::vector<Orca::Net::NandEntry>> keep = std::move(nand);
+  if (const auto last = m_points->LastNand(); last && SameNand(*last, *keep))
+    keep = last;
+  NOTICE_LOG_FMT(ROLLBACK, "Replay: seek point at frame {} took {:.1f} ms", frame, MsSince(started));
+  m_packing = std::async(std::launch::async,
+                         [frame, image = std::move(image), keep = std::move(keep)]() {
+                           return SeekPoints::Point{frame, PackImage(image), keep};
+                         });
+}
+
 std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, int* running,
                                 u64 origin_hash, int origin_frame,
                                 const OnlineMatch::FrameHook& on_frame)
@@ -1249,18 +1472,41 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
       }
       else
       {
-        if (!host.restore_origin())
+        // A point still being packed is wanted now: wait for it.
+        if (m_points && m_packing.valid())
+          m_points->Add(m_packing.get());
+        const int next = *running + 1;
+        const SeekPoints::Point* point = m_points ? m_points->AtOrBefore(*seek) : nullptr;
+        const SeekStart start = ChooseSeekStart(
+            *seek, next, origin_frame, point ? std::optional<int>(point->frame) : std::nullopt);
+        bool restored = true;
+        if (start.from == SeekStart::From::Origin)
+        {
+          restored = host.restore_origin();
+        }
+        else if (start.from == SeekStart::From::Point)
+        {
+          MachineImage image;
+          restored = UnpackImage(point->image, &image) &&
+                     host.restore(std::move(image), *point->nand, point->frame);
+        }
+        if (!restored)
         {
           Finish(host, false, "couldn't seek in the replay");
           return false;
         }
-        Orca::Status::Line(fmt::format("orca replay seek {} -> {}", *running + 1, *seek));
-        *running = origin_frame - 1;
-        m_position = origin_frame;
-        rewound = origin_frame;
+        Orca::Status::Line(fmt::format("orca replay seek {} -> {}", next, *seek));
+        if (start.from != SeekStart::From::Here)
+        {
+          *running = start.frame - 1;
+          m_position = start.frame;
+          rewound = start.frame;
+        }
         m_seek_target = *seek;
         m_catching = true;
         host.set_catching_up(true);
+        // A seek ends the menu skip: the target plays in real time, whatever scene it is.
+        m_skip_menus = false;
       }
     }
     return true;
@@ -1376,7 +1622,13 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
   // Render the requested frame before a paused seek waits at the next boundary. Earlier seek
   // frames are hidden and unthrottled, as the canonical boot is.
   const bool seeking = m_seek_target.has_value();
-  bool catching = seeking ? frame < *m_seek_target : !m_realtime;
+  if (m_skip_menus && !StillSkippingMenus(host.in_fight ? host.in_fight() : std::nullopt, frame,
+                                          origin_frame))
+  {
+    m_skip_menus = false;
+    NOTICE_LOG_FMT(ROLLBACK, "Replay: menus run flat out up to frame {}, real time from there", frame);
+  }
+  bool catching = seeking ? frame < *m_seek_target : (!m_realtime || m_skip_menus);
   if (m_follow && !m_realtime && !seeking)
     catching = m_catching ? behind > m_delay + 2 : behind > m_delay + 30;
   if (m_paused && !seeking)
@@ -1404,6 +1656,15 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
         host.read_nand(&m_seek_nand) && SnapshotRing::Capture(system, &m_seek_image, false);
     Orca::Status::Line(fmt::format("orca replay seek-point {} {}", frame,
                                    m_seek_taken ? "taken" : "failed"));
+  }
+  // A product seek point, taken where the test one is; packed off the CPU thread.
+  if (m_points)
+  {
+    using namespace std::chrono_literals;
+    if (m_packing.valid() && m_packing.wait_for(0s) == std::future_status::ready)
+      m_points->Add(m_packing.get());
+    if (!m_packing.valid() && m_points->Due(frame, origin_frame))
+      TakeSeekPoint(system, host, frame);
   }
   Orca::Net::ReplayFrame* const record = archive.At(frame);
   if (!record)
