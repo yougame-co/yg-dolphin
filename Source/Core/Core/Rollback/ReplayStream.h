@@ -353,6 +353,10 @@ private:
   bool m_seek_done = false;
   // A saved replay's recorded menus, run flat out until the first fight (StillSkippingMenus).
   bool m_skip_menus = false;
+  // Product status: whether the last frame was drawn ("orca replay live" when drawing starts), and
+  // when the last "orca replay catchup" line went out.
+  bool m_drawing = false;
+  std::chrono::steady_clock::time_point m_catchup_printed{};
   // Product seek points (SeekPoints), and the one being packed off the CPU thread.
   std::unique_ptr<SeekPoints> m_points;
   std::future<SeekPoints::Point> m_packing;

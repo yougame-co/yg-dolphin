@@ -1640,6 +1640,29 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
     if (!catching && m_caught_up_ms < 0)
       m_caught_up_ms = MsSince(m_started);
   }
+  if (m_product)
+  {
+    // The app hides the window while nothing is drawn: progress toward a known target (a watcher
+    // reaching live, a seek), then one line as drawing starts again.
+    if (rewound)
+      m_drawing = false;
+    if (catching)
+    {
+      const std::optional<int> target = seeking ? m_seek_target :
+                                        m_follow ? std::optional<int>(archive.EndFrame() - m_delay) :
+                                                   std::nullopt;
+      if (target && Clock::now() - m_catchup_printed >= std::chrono::milliseconds(250))
+      {
+        m_catchup_printed = Clock::now();
+        Orca::Status::Line(fmt::format("orca replay catchup {} {}", frame, *target));
+      }
+    }
+    else if (!m_drawing)
+    {
+      Orca::Status::Line(fmt::format("orca replay live {}", frame));
+    }
+    m_drawing = !catching;
+  }
   if (m_follow && !catching)
   {
     const int behind_live = std::max(behind, m_reader->LiveFrame() - frame);
