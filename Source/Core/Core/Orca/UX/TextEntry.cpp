@@ -26,6 +26,7 @@ namespace
 constexpr std::size_t MAX_QUEUED = 256;
 
 std::atomic<bool> s_capturing = false;
+std::atomic<bool> s_keyboard = false;
 std::mutex s_lock;
 std::vector<Event> s_events;   // guarded by s_lock
 char16_t s_high_surrogate = 0;  // guarded by s_lock
@@ -72,6 +73,8 @@ void PushPoint(char32_t point)
 {
   if (!Printable(point))
     return;
+  if (s_capturing.load(std::memory_order_relaxed))
+    s_keyboard.store(true, std::memory_order_relaxed);
   Event event;
   event.point = point;
   Push(event);
@@ -97,10 +100,31 @@ void Press(Key key, bool shift)
 {
   if (key == Key::NoKey)
     return;
+  if (s_capturing.load(std::memory_order_relaxed))
+    s_keyboard.store(true, std::memory_order_relaxed);
   Event event;
   event.key = key;
   event.shift = shift;
   Push(event);
+}
+
+void PressFromPad(Key key)
+{
+  if (key == Key::NoKey)
+    return;
+  Event event;
+  event.key = key;
+  Push(event);
+}
+
+bool KeyboardSeen()
+{
+  return s_keyboard.load(std::memory_order_relaxed);
+}
+
+void ForgetKeyboardForTest()
+{
+  s_keyboard.store(false, std::memory_order_relaxed);
 }
 
 void Type(std::string_view utf8)

@@ -14,8 +14,7 @@
 // on a pad could not leave the screen: every pad reads neutral while it is open.
 //
 // A press while the screen is open becomes one of the screen's keys: A is Enter, B is Escape, and
-// the D-pad or the main stick moves the focus (Up and Left to the previous item, Down and Right to
-// the next). Only presses made while it is open count: buttons already down when it opens wait for
+// the D-pad or the main stick are the arrow keys (Up, Down, Left, Right), which move the focus. Only presses made while it is open count: buttons already down when it opens wait for
 // a release first. A button pressed while it is open and still down when it closes stays hidden from
 // the game until it is let go, so the B that closed it does not also take the game back a page.
 // Buttons held from before it opened are left alone.

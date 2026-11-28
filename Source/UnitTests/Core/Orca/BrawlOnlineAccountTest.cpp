@@ -847,6 +847,67 @@ TEST(BrawlOnlineSignInScreen, TestBuildLineShows)
 #endif
 }
 
+// The hint names the pad's buttons first, and the keyboard's keys only once a keyboard typed.
+TEST(BrawlOnlineSignInScreen, HintNamesKeysOnlyOnceAKeyboardTyped)
+{
+  EXPECT_EQ(Screen::Hint(false), "A: choose · B: cancel · D-pad: move");
+  EXPECT_EQ(Screen::Hint(false).find("Enter"), std::string_view::npos);
+  EXPECT_EQ(Screen::Hint(true).find("A or Enter: choose"), 0u);
+  EXPECT_NE(Screen::Hint(true).find("B or Esc: cancel"), std::string_view::npos);
+  EXPECT_NE(Screen::Hint(true).find("Tab"), std::string_view::npos);
+}
+
+// Up and Down follow the rows as drawn, so Up from Cancel reaches Sign in, not the button beside it.
+TEST(BrawlOnlineSignInScreen, UpAndDownFollowTheRows)
+{
+  using Screen::Move;
+  // Email, Password, Sign in, then Create account and Cancel side by side.
+  const std::vector<int> rows{0, 1, 2, 3, 3};
+  EXPECT_EQ(Screen::MoveFocus(rows, 4, Move::Up), 2);
+  EXPECT_EQ(Screen::MoveFocus(rows, 3, Move::Up), 2);
+  EXPECT_EQ(Screen::MoveFocus(rows, 2, Move::Down), 3);
+  EXPECT_EQ(Screen::MoveFocus(rows, 2, Move::Up), 1);
+  EXPECT_EQ(Screen::MoveFocus(rows, 0, Move::Down), 1);
+  // Wrapping: Down from the last row to the first; Up from the first to the last row's first item.
+  EXPECT_EQ(Screen::MoveFocus(rows, 4, Move::Down), 0);
+  EXPECT_EQ(Screen::MoveFocus(rows, 3, Move::Down), 0);
+  EXPECT_EQ(Screen::MoveFocus(rows, 0, Move::Up), 3);
+  // Left and Right along the row, stopping at its ends.
+  EXPECT_EQ(Screen::MoveFocus(rows, 3, Move::Right), 4);
+  EXPECT_EQ(Screen::MoveFocus(rows, 4, Move::Right), 4);
+  EXPECT_EQ(Screen::MoveFocus(rows, 4, Move::Left), 3);
+  EXPECT_EQ(Screen::MoveFocus(rows, 3, Move::Left), 3);
+  EXPECT_EQ(Screen::MoveFocus(rows, 2, Move::Left), 2);
+  // Buttons one per row (a narrow display): plain up and down.
+  const std::vector<int> stacked{0, 1, 2, 3, 4};
+  EXPECT_EQ(Screen::MoveFocus(stacked, 4, Move::Up), 3);
+  EXPECT_EQ(Screen::MoveFocus(stacked, 3, Move::Down), 4);
+  EXPECT_EQ(Screen::MoveFocus({}, 3, Move::Down), 0);
+}
+
+// A pad's keys never count as a keyboard; a key or a character typed while a screen captures does.
+TEST(BrawlOnlineSignInScreen, OnlyAKeyboardCountsAsSeen)
+{
+  namespace TE = Orca::UX::TextEntry;
+  TE::ForgetKeyboardForTest();
+  Common::ScopeGuard restore([] {
+    TE::SetCapturing(false);
+    TE::ForgetKeyboardForTest();
+  });
+  TE::Press(TE::Key::Tab, false);  // not capturing
+  TE::Type("a");
+  EXPECT_FALSE(TE::KeyboardSeen());
+  TE::SetCapturing(true);
+  TE::PressFromPad(TE::Key::Down);
+  EXPECT_FALSE(TE::KeyboardSeen());
+  EXPECT_EQ(TE::Drain().size(), 1u);
+  TE::Type("a");
+  EXPECT_TRUE(TE::KeyboardSeen());
+  TE::ForgetKeyboardForTest();
+  EXPECT_TRUE(TE::AppLine("key tab"));
+  EXPECT_TRUE(TE::KeyboardSeen());
+}
+
 // Online play that starts under an open screen closes it at the next frame, keyboard released.
 TEST(BrawlOnlineSignInScreen, ClosesWhenOnlineStarts)
 {

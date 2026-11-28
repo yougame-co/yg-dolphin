@@ -60,6 +60,16 @@ void SetCapturing(bool capturing);
 // Window loop: a key went down (repeats included; key-ups are not needed). The loop sends no text
 // for a press with Ctrl, or Cmd on macOS, held. Ignored unless Capturing().
 void Press(Key key, bool shift);
+// A pad's press turned into a key (UX/PadKeys.h): the same as Press, except that it does not count
+// as a keyboard for KeyboardSeen.
+void PressFromPad(Key key);
+// Whether a keyboard pressed a key or typed text into a screen since the program started (Press,
+// Type, TypeUtf16, and the app's key and text lines). A screen names keyboard keys only then: under
+// the app, Orca's window never holds the keyboard, and the app forwards it only once it supports
+// that. Any thread.
+bool KeyboardSeen();
+// Tests: forget that a keyboard was seen.
+void ForgetKeyboardForTest();
 // Window loop: typed text, UTF-8. Control characters, invalid UTF-8 and macOS's function-key
 // characters (U+F700-U+F8FF) are dropped. Ignored unless Capturing().
 void Type(std::string_view utf8);

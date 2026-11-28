@@ -61,8 +61,11 @@ constexpr std::string_view NOTE = "Test build: nothing is sent to Brawl Online."
 constexpr std::string_view WORKING = "Working...";
 #endif
 
-// The keyboard's keys and the pad's (UX/PadKeys.h) do the same.
-constexpr std::string_view HINT = "A or Enter: choose    B or Esc: cancel    D-pad or Tab: move";
+// The keyboard's keys and the pad's (UX/PadKeys.h) do the same; the keys are named only once a
+// keyboard reaches the screen.
+constexpr std::string_view HINT_PAD = "A: choose · B: cancel · D-pad: move";
+constexpr std::string_view HINT_KEYBOARD =
+    "A or Enter: choose · B or Esc: cancel · D-pad, arrows or Tab: move";
 
 // Sizes, in overlay units.
 constexpr float PANEL_MAX_WIDTH = 76;
@@ -106,6 +109,25 @@ std::vector<Item> ItemsOf(Screen screen)
     return {Item::Email, Item::Password, Item::Primary, Item::Switch, Item::Cancel};
 #endif
   }
+}
+
+// Each item's row as Layout draws it: a field each, the main button alone, then the other buttons
+// on one row when they fit side by side, else one each.
+std::vector<int> RowsOf(const std::vector<Item>& items, bool buttons_in_row)
+{
+  std::vector<int> rows;
+  int row = -1;
+  bool in_shared_row = false;
+  for (const Item item : items)
+  {
+    const bool shared = buttons_in_row && !IsField(item) && item != Item::Primary &&
+                        item != Item::Continue;
+    if (!(shared && in_shared_row))
+      ++row;
+    in_shared_row = shared;
+    rows.push_back(row);
+  }
+  return rows;
 }
 
 std::string_view LabelOf(Item item, Screen screen)
@@ -159,6 +181,8 @@ struct Session
   Screen shown = Screen::SignIn;  // the screen `focus` indexes
   int focus = 0;
   bool focus_changed = true;
+  // Whether the last layout drew the buttons after the main one side by side (else one per row).
+  bool buttons_in_row = true;
   std::string note;  // a line of the screen's own, after Forgot password?
 
   ~Session() { WipeTyped(); }
@@ -480,6 +504,7 @@ float Layout(ImDrawList* dl, const std::shared_ptr<Session>& s, const View& view
     row_w += size.x + (row_w > 0 ? GAP * unit : 0);
     row_h = std::max(row_h, size.y);
   }
+  s->buttons_in_row = row_w <= inner;
   if (row_w <= inner)
   {
     float x = centre_x - row_w / 2;
@@ -504,7 +529,7 @@ float Layout(ImDrawList* dl, const std::shared_ptr<Session>& s, const View& view
 
   // How to use it, keyboard and pad.
   y += GAP * unit;
-  for (const std::string& part : Kit::Wrap(text, HINT, inner))
+  for (const std::string& part : Kit::Wrap(text, Hint(TextEntry::KeyboardSeen()), inner))
   {
     if (dl)
       Kit::Label(dl, ImVec2(centre_x, y), unit, part, TEXT_SIZE, Kit::Align::Centre,
@@ -608,6 +633,49 @@ void OpenPreview()
 std::string_view Note()
 {
   return NOTE;
+}
+
+std::string_view Hint(bool keyboard)
+{
+  return keyboard ? HINT_KEYBOARD : HINT_PAD;
+}
+
+int MoveFocus(const std::vector<int>& row_of, int focus, Move move)
+{
+  const int n = static_cast<int>(row_of.size());
+  if (n == 0)
+    return 0;
+  focus = std::clamp(focus, 0, n - 1);
+  const int row = row_of[focus];
+  switch (move)
+  {
+  case Move::Left:
+    return focus > 0 && row_of[focus - 1] == row ? focus - 1 : focus;
+  case Move::Right:
+    return focus + 1 < n && row_of[focus + 1] == row ? focus + 1 : focus;
+  case Move::Down:
+  {
+    for (int i = focus + 1; i < n; ++i)
+    {
+      if (row_of[i] != row)
+        return i;
+    }
+    return 0;
+  }
+  case Move::Up:
+  {
+    // The first item of the row above, or of the last row from the top one.
+    int i = focus;
+    while (i > 0 && row_of[i - 1] == row)
+      --i;
+    const int above = i > 0 ? row_of[i - 1] : row_of[n - 1];
+    int first = i > 0 ? i - 1 : n - 1;
+    while (first > 0 && row_of[first - 1] == above)
+      --first;
+    return first;
+  }
+  }
+  return focus;
 }
 
 bool OnlineActive()
@@ -740,21 +808,25 @@ void Draw()
     if (busy)
       continue;
     const int n = static_cast<int>(items.size());
-    const auto move = [&](int by) {
-      s->focus = (s->focus + by + n) % n;
-      s->focus_changed = true;
+    const auto focus_on = [&](int to) {
+      if (to != s->focus)
+        s->focus_changed = true;
+      s->focus = to;
     };
+    const bool on_button = !IsField(items[s->focus]);
     if (event.key == Key::Tab)
     {
-      move(event.shift ? -1 : 1);
+      focus_on((s->focus + (event.shift ? -1 : 1) + n) % n);
     }
-    else if (event.key == Key::Down)
+    else if (event.key == Key::Down || event.key == Key::Up)
     {
-      move(1);
+      focus_on(MoveFocus(RowsOf(items, s->buttons_in_row), s->focus,
+                         event.key == Key::Down ? Move::Down : Move::Up));
     }
-    else if (event.key == Key::Up)
+    else if ((event.key == Key::Left || event.key == Key::Right) && on_button)
     {
-      move(-1);
+      focus_on(MoveFocus(RowsOf(items, s->buttons_in_row), s->focus,
+                         event.key == Key::Right ? Move::Right : Move::Left));
     }
     else if (event.key == Key::Enter)
     {

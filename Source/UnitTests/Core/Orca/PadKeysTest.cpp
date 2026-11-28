@@ -52,9 +52,9 @@ TEST(OrcaPadKeys, ButtonsBecomeTheScreensKeys)
   EXPECT_TRUE(keys.Next(Pad(), true).keys.empty());
   EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_A), true).keys, Keys{TE::Key::Enter});
   EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_UP), true).keys, Keys{TE::Key::Up});
-  EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_LEFT), true).keys, Keys{TE::Key::Up});
+  EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_LEFT), true).keys, Keys{TE::Key::Left});
   EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_DOWN), true).keys, Keys{TE::Key::Down});
-  EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_RIGHT), true).keys, Keys{TE::Key::Down});
+  EXPECT_EQ(keys.Next(Pad(PAD_BUTTON_RIGHT), true).keys, Keys{TE::Key::Right});
   // Buttons the screen has no use for do nothing.
   EXPECT_TRUE(keys.Next(Pad(PAD_BUTTON_X | PAD_BUTTON_START), true).keys.empty());
 }
@@ -92,9 +92,9 @@ TEST(OrcaPadKeys, TheStickMovesOncePerPush)
   EXPECT_TRUE(keys.Next(Pad(), true).keys.empty());
   EXPECT_EQ(keys.Next(Pad(0, 0, -PadKeys::STICK_ON), true).keys, Keys{TE::Key::Down});
   EXPECT_TRUE(keys.Next(Pad(), true).keys.empty());
-  EXPECT_EQ(keys.Next(Pad(0, -PadKeys::STICK_ON, 0), true).keys, Keys{TE::Key::Up});
+  EXPECT_EQ(keys.Next(Pad(0, -PadKeys::STICK_ON, 0), true).keys, Keys{TE::Key::Left});
   EXPECT_TRUE(keys.Next(Pad(), true).keys.empty());
-  EXPECT_EQ(keys.Next(Pad(0, PadKeys::STICK_ON, 0), true).keys, Keys{TE::Key::Down});
+  EXPECT_EQ(keys.Next(Pad(0, PadKeys::STICK_ON, 0), true).keys, Keys{TE::Key::Right});
 }
 
 TEST(OrcaPadKeys, AStickPushedAsItOpensWaits)
@@ -172,7 +172,7 @@ TEST(OrcaPadKeys, ThePadsKeysReachTheScreen)
                             u16(PAD_BUTTON_B)})
   {
     for (const TE::Key key : keys.Next(Pad(buttons), TE::Capturing()).keys)
-      TE::Press(key, false);
+      TE::PressFromPad(key);
   }
   Keys drained;
   for (const TE::Event& event : TE::Drain())

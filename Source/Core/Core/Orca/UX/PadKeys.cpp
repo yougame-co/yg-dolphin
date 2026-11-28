@@ -43,10 +43,14 @@ PadKeys::Step PadKeys::Next(const GCPadStatus& pad, bool capturing)
         step.keys.push_back(Key::Escape);
       if (pressed & PAD_BUTTON_A)
         step.keys.push_back(Key::Enter);
-      if ((pressed & (PAD_BUTTON_UP | PAD_BUTTON_LEFT)) || (pushed & (UP | LEFT)))
+      if ((pressed & PAD_BUTTON_UP) || (pushed & UP))
         step.keys.push_back(Key::Up);
-      if ((pressed & (PAD_BUTTON_DOWN | PAD_BUTTON_RIGHT)) || (pushed & (DOWN | RIGHT)))
+      if ((pressed & PAD_BUTTON_DOWN) || (pushed & DOWN))
         step.keys.push_back(Key::Down);
+      if ((pressed & PAD_BUTTON_LEFT) || (pushed & LEFT))
+        step.keys.push_back(Key::Left);
+      if ((pressed & PAD_BUTTON_RIGHT) || (pushed & RIGHT))
+        step.keys.push_back(Key::Right);
       m_pressed |= pressed;
     }
     else

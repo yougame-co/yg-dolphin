@@ -746,7 +746,7 @@ std::optional<GCPadStatus> LocalPad(int ordinal, bool for_frame)
     const PadKeys::Step step = s_pad_keys[ordinal].Next(choice ? choice->pad : NeutralPad(),
                                                         capturing);
     for (const TextEntry::Key key : step.keys)
-      TextEntry::Press(key, false);
+      TextEntry::PressFromPad(key);
     hidden = step.hidden;
   }
   if (capturing)
