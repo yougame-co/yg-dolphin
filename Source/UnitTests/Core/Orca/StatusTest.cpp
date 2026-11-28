@@ -46,9 +46,9 @@ TEST(OrcaStatus, ShortcutsRequiresFrontendHandlersAndKeepsChatMeaning)
   Orca::Status::SetShortcutsAvailable(true);
   Common::ScopeGuard reset([] { Orca::Status::SetShortcutsAvailable(false); });
   EXPECT_EQ(Orca::Status::OfferedCaps(), before + " shortcuts");
-  // In a session "escfree" still comes after "shortcuts", the last word.
+  // In a session "escfree" still comes after "shortcuts"; a live session then adds "broadcast".
   SetEnv("ORCA_SESSION", "1");
-  EXPECT_TRUE(Orca::Status::OfferedCaps().ends_with(" shortcuts escfree"));
+  EXPECT_TRUE(Orca::Status::OfferedCaps().ends_with(" shortcuts escfree broadcast"));
   Orca::Status::SetAppCaps("chat");
   EXPECT_TRUE(Orca::Status::Cap("chat"));
   EXPECT_FALSE(Orca::Status::Cap("shortcuts"));
@@ -232,11 +232,13 @@ TEST(OrcaStatus, CoSeatsCapsAreAppendOnlyAndFitLegacyReaders)
         before += " replay broadcast";
       }
       before += " record hostui";
+      // A live session's feed (stdin "broadcast on|off") is offered after escfree.
+      const std::string tail = product ? "" : " broadcast";
       SetEnv("ORCA_COSEATS", "0");
-      EXPECT_EQ(Orca::Status::OfferedCaps(), before + " qdoubles rdoubles escfree");
+      EXPECT_EQ(Orca::Status::OfferedCaps(), before + " qdoubles rdoubles escfree" + tail);
       SetEnv("ORCA_COSEATS", "1");
       const auto after = Orca::Status::OfferedCaps();
-      EXPECT_EQ(after, before + " coseats qdoubles rdoubles escfree");
+      EXPECT_EQ(after, before + " coseats qdoubles rdoubles escfree" + tail);
       EXPECT_EQ(after.find("pick-doubles"), std::string::npos);
       std::FILE* output = std::tmpfile();
       ASSERT_NE(output, nullptr);
@@ -245,18 +247,19 @@ TEST(OrcaStatus, CoSeatsCapsAreAppendOnlyAndFitLegacyReaders)
       std::rewind(output);
       char buffer[1024]{};
       ASSERT_NE(std::fgets(buffer, sizeof(buffer), output), nullptr);
-      EXPECT_EQ(std::string(buffer), "orca caps " + before + " coseats qdoubles rdoubles escfree\n");
+      EXPECT_EQ(std::string(buffer),
+                "orca caps " + before + " coseats qdoubles rdoubles escfree" + tail + "\n");
       Orca::Status::SetOutput(nullptr);
       std::fclose(output);
       std::istringstream words(after);
       unsigned count = 0;
       for (std::string word; words >> word;)
         ++count;
-      // Everything before "escfree" still fits the 24 words older apps read; "escfree" is the
-      // one word past it, within the desktop's ORCA_CAPS_MAX (32).
-      const unsigned expected = product ? 24 : 25;
+      // Everything before "escfree" still fits the 24 words older apps read; "escfree" (and a
+      // live session's "broadcast") come past it, within the desktop's ORCA_CAPS_MAX (32).
+      const unsigned expected = product ? 24 : 26;
       EXPECT_EQ(count, expected);
-      EXPECT_LE(count - 1, 24u);
+      EXPECT_LE(count - (product ? 1 : 2), 24u);
       EXPECT_LE(count, 32u);
       Orca::Status::SetAppCaps("join");
       EXPECT_FALSE(Orca::Status::Cap("coseats"));
@@ -279,7 +282,8 @@ TEST(OrcaStatus, CoSeatsCapsAreAppendOnlyAndFitLegacyReaders)
 
 // "escfree" tells the page plain Escape is never the game's, so it may leave full screen with it.
 // The page's native caps grammar is [a-z]{1,16} (a hyphen drops the whole line), and the word is
-// offered last, in sessions only, so older apps that read fewer words drop it first.
+// offered last, in sessions only, so older apps that read fewer words drop it first. The one word
+// after it is a live session's "broadcast", which such apps cannot use anyway.
 TEST(OrcaStatus, EscFreeIsOfferedLastInEverySession)
 {
   const auto old_session = Orca::GetEnv("ORCA_SESSION");
@@ -304,8 +308,9 @@ TEST(OrcaStatus, EscFreeIsOfferedLastInEverySession)
     SCOPED_TRACE(product ? "product" : "session");
     SetEnv("ORCA_REPLAY_SOURCE", product ? "fixture-replay.orca" : "");
     const std::string offered = Orca::Status::OfferedCaps();
-    EXPECT_TRUE(offered.ends_with(" escfree")) << offered;
-    EXPECT_EQ(offered.find("escfree"), offered.size() - name.size());
+    const std::string last = product ? " escfree" : " escfree broadcast";
+    EXPECT_TRUE(offered.ends_with(last)) << offered;
+    EXPECT_EQ(offered.find("escfree"), offered.size() - last.size() + 1);
   }
   // Informational: on only when the app lists it too, as every cap.
   Orca::Status::SetAppCaps("join");

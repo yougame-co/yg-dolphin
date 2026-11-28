@@ -14,6 +14,7 @@
 #include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
+#include "Core/BroadcastSink.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/HW/ProcessorInterface.h"
@@ -296,7 +297,29 @@ void Platform::ProcessEmbedCommands()
       // Stop at once, session or not: the app is closing the player or has died. Before the first
       // frame that is a stop, not a boot that failed (a Stop while shaders compile).
       Orca::Status::Stopping();
+      Broadcast::StopLive();
       Stop();
+    }
+    else if (cmd == "broadcast")
+    {
+      // A live session's feed to the app's broadcast file (BroadcastSink.h), only while someone
+      // watches. Each word is answered with the feed's state; a sink that cannot be opened prints
+      // "orca error broadcast_sink" instead.
+      std::string word, more;
+      in >> word;
+      if ((word == "on" || word == "off") && !(in >> more))
+      {
+        const Broadcast::LiveResult result =
+            word == "on" ? Broadcast::StartLive() : Broadcast::StopLive();
+        if (result == Broadcast::LiveResult::NoSink)
+          Orca::Status::Line("orca error broadcast_sink No broadcast file was given");
+        else if (result != Broadcast::LiveResult::Failed)
+          Orca::Status::Line(Broadcast::Active() ? "orca broadcast on" : "orca broadcast off");
+      }
+      else
+      {
+        fmt::print(stderr, "Orca: malformed broadcast command; expected broadcast on|off\n");
+      }
     }
     else if (cmd == "embed")
     {

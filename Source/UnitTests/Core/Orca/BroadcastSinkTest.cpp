@@ -162,6 +162,65 @@ void CheckNoSink()
   EXPECT_EQ(Broadcast::Load(memory, 68), 0u);
 }
 
+// A live session: no replay source, the app switches the feed with stdin "broadcast on|off".
+void CheckLiveOnOff()
+{
+  SinkFixture fixture;
+  SetEnv("ORCA_REPLAY_SOURCE", "");
+  // Replay start never opens the sink outside product playback.
+  Broadcast::StartReplay();
+  EXPECT_FALSE(Broadcast::Active());
+  EXPECT_EQ(Broadcast::Load(fixture.Read(), 80), 0u);
+  EXPECT_EQ(Broadcast::StopLive(), Broadcast::LiveResult::Off);
+  EXPECT_EQ(Broadcast::Load(fixture.Read(), 80), 0u);
+  const auto mixer = std::make_unique<Mixer>(Broadcast::RATE);
+  std::array<s16, Broadcast::AUDIO_FRAMES * Broadcast::CHANNELS> samples{};
+  for (int round = 1; round <= 2; ++round)
+  {
+    SCOPED_TRACE(round);
+    EXPECT_EQ(Broadcast::StartLive(), Broadcast::LiveResult::On);
+    EXPECT_TRUE(Broadcast::Active());
+    // A second "on" is answered the same and changes nothing.
+    EXPECT_EQ(Broadcast::StartLive(), Broadcast::LiveResult::On);
+    EXPECT_EQ(Broadcast::Load(fixture.Read(), 80), 1u);
+    EXPECT_EQ(mixer->Mix(samples.data(), Broadcast::AUDIO_FRAMES), Broadcast::AUDIO_FRAMES);
+    EXPECT_EQ(Broadcast::Load(fixture.Read(), 68), static_cast<u32>(round));
+    EXPECT_EQ(Broadcast::StopLive(), Broadcast::LiveResult::Off);
+    EXPECT_FALSE(Broadcast::Active());
+    EXPECT_EQ(Broadcast::Load(fixture.Read(), 80), 2u);
+    // Off: the mixer writes nothing.
+    std::this_thread::sleep_for(300ms);
+    EXPECT_EQ(mixer->Mix(samples.data(), Broadcast::AUDIO_FRAMES), Broadcast::AUDIO_FRAMES);
+    EXPECT_EQ(Broadcast::Load(fixture.Read(), 68), static_cast<u32>(round));
+  }
+}
+
+void CheckLiveWithoutSink()
+{
+  SinkFixture fixture;
+  SetEnv("ORCA_REPLAY_SOURCE", "");
+  SetEnv("ORCA_BROADCAST_SINK", "");
+  EXPECT_EQ(Broadcast::StartLive(), Broadcast::LiveResult::NoSink);
+  EXPECT_FALSE(Broadcast::Active());
+  SetEnv("ORCA_BROADCAST_SINK", "missing-broadcast-file.bin");
+  EXPECT_EQ(Broadcast::StartLive(), Broadcast::LiveResult::Failed);
+  EXPECT_FALSE(Broadcast::Active());
+  EXPECT_EQ(Broadcast::Load(fixture.Read(), 80), 0u);
+}
+
+// Product playback owns the sink: the live words neither start nor stop it.
+void CheckLiveInsideReplay()
+{
+  SinkFixture fixture;
+  EXPECT_EQ(Broadcast::StartLive(), Broadcast::LiveResult::Replay);
+  EXPECT_FALSE(Broadcast::Active());
+  Broadcast::StartReplay();
+  EXPECT_TRUE(Broadcast::Active());
+  EXPECT_EQ(Broadcast::StopLive(), Broadcast::LiveResult::Replay);
+  EXPECT_TRUE(Broadcast::Active());
+  Broadcast::StopReplay();
+}
+
 void CheckAudioShutdown()
 {
   SinkFixture fixture;
@@ -204,6 +263,24 @@ TEST(BroadcastSinkDeathTest, MixerCallbacksKeepTheirExistingAudioProducer)
 TEST(BroadcastSinkDeathTest, NoSinkNeverStartsAClock)
 {
   ASSERT_EXIT({ CheckNoSink(); std::_Exit(::testing::Test::HasFailure() ? 1 : 0); },
+              ::testing::ExitedWithCode(0), "");
+}
+
+TEST(BroadcastSinkDeathTest, LiveFeedSwitchesOnAndOffWithoutReopening)
+{
+  ASSERT_EXIT({ CheckLiveOnOff(); std::_Exit(::testing::Test::HasFailure() ? 1 : 0); },
+              ::testing::ExitedWithCode(0), "");
+}
+
+TEST(BroadcastSinkDeathTest, LiveFeedNeedsAnOpenableSink)
+{
+  ASSERT_EXIT({ CheckLiveWithoutSink(); std::_Exit(::testing::Test::HasFailure() ? 1 : 0); },
+              ::testing::ExitedWithCode(0), "");
+}
+
+TEST(BroadcastSinkDeathTest, LiveWordsLeaveAReplaysSinkAlone)
+{
+  ASSERT_EXIT({ CheckLiveInsideReplay(); std::_Exit(::testing::Test::HasFailure() ? 1 : 0); },
               ::testing::ExitedWithCode(0), "");
 }
 

@@ -153,33 +153,72 @@ u64 NowMicros()
   return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count());
 }
+namespace
+{
+// Under s_control_mutex. Opens ORCA_BROADCAST_SINK the first time; the mapping is then kept for the
+// process, so a live session can turn the feed on and off without reopening it.
+bool OpenSink()
+{
+  if (s_mapping)
+    return true;
+  const std::string path = Orca::GetEnv("ORCA_BROADCAST_SINK");
+  if (path.empty())
+    return false;
+  auto mapping = std::make_unique<Mapping>(path);
+  if (!Valid(mapping->Memory()))
+  {
+    Orca::Status::Line("orca error broadcast_sink The broadcast file could not be opened");
+    return false;
+  }
+  s_mapping = mapping.release();
+  return true;
+}
+// Under s_control_mutex, with the sink open.
+void Enable(bool enabled)
+{
+  s_enabled.store(enabled, std::memory_order_release);
+  UpdateSilentAudio();
+  if (s_mapping)
+    Store(s_mapping->Memory(), 80, enabled ? 1 : 2);
+}
+}  // namespace
+
 void StartReplay()
 {
   std::lock_guard lock(s_control_mutex);
   if (s_attempted || !Rollback::ReplayStream::ProductMode())
     return;
   s_attempted = true;
-  const std::string path = Orca::GetEnv("ORCA_BROADCAST_SINK");
-  if (path.empty())
-    return;
-  auto mapping = std::make_unique<Mapping>(path);
-  if (!Valid(mapping->Memory()))
-  {
-    Orca::Status::Line("orca error broadcast_sink The broadcast file could not be opened");
-    return;
-  }
-  s_mapping = mapping.release();
-  Store(s_mapping->Memory(), 80, 1);
-  s_enabled.store(true, std::memory_order_release);
-  UpdateSilentAudio();
+  if (OpenSink())
+    Enable(true);
 }
 void StopReplay()
 {
   std::lock_guard lock(s_control_mutex);
-  s_enabled.store(false, std::memory_order_release);
-  UpdateSilentAudio();
-  if (s_mapping)
-    Store(s_mapping->Memory(), 80, 2);
+  Enable(false);
+}
+LiveResult StartLive()
+{
+  std::lock_guard lock(s_control_mutex);
+  // A product replay owns the sink for its whole lifetime.
+  if (Rollback::ReplayStream::ProductMode())
+    return LiveResult::Replay;
+  if (Orca::GetEnv("ORCA_BROADCAST_SINK").empty())
+    return LiveResult::NoSink;
+  if (!OpenSink())
+    return LiveResult::Failed;
+  if (!Active())
+    Enable(true);
+  return LiveResult::On;
+}
+LiveResult StopLive()
+{
+  std::lock_guard lock(s_control_mutex);
+  if (Rollback::ReplayStream::ProductMode())
+    return LiveResult::Replay;
+  if (Active())
+    Enable(false);
+  return LiveResult::Off;
 }
 void SetSilentAudio(bool enabled)
 {

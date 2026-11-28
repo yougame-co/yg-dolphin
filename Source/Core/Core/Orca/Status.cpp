@@ -226,6 +226,11 @@ std::string OfferedCaps()
   // Last: the page may take plain Escape to leave full screen (Status.h ESCFREE_CAP).
   if (SessionActive())
     caps += fmt::format(" {}", ESCFREE_CAP);
+#ifdef HAVE_BROADCAST_SINK
+  // Live sessions: after escfree so every older word keeps its place (Status.h).
+  if (SessionActive() && !Rollback::ReplayStream::ProductMode())
+    caps += " broadcast";
+#endif
   return caps;
 }
 

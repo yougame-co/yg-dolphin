@@ -19,7 +19,8 @@
 // launch; Dolphin maps the existing file RW, never creates/resizes it. All offsets are bytes.
 // Header (256): u32 magic/version/width/height/fps/rate/channels/video_slots/audio_slots/
 // video_bytes/audio_frames/size at 0..44; video_latest/audio_latest/video_drops/audio_drops/state
-// at 64/68/72/76/80. State: 0 waiting, 1 replay sink active, 2 stopped. Remaining words are zero.
+// at 64/68/72/76/80. State: 0 waiting, 1 sink active, 2 stopped. Remaining words are zero.
+// A replay sets 1 for its lifetime; a live session sets 1 on "broadcast on", 2 on "off".
 // Video: 3 slots at 256, each 64 + 1280*720*4 bytes, RGBA8, top row first.
 // Audio: 64 slots after video, each 64 + 480*2*2 bytes, interleaved LE s16 L/R, 48 kHz.
 // Slot prefix: u32 guard/bytes/timestamp_us_low/timestamp_us_high/count at 0/4/8/12/16.

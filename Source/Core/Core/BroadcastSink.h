@@ -12,6 +12,20 @@ namespace Broadcast
 // Only the product replay player's lifetime enables media. An env variable alone never does.
 void StartReplay();
 void StopReplay();
+// A live session's feed, switched by the app's stdin "broadcast on" / "broadcast off" so frames are
+// read back only while someone watches. The first "on" opens ORCA_BROADCAST_SINK and keeps it
+// mapped; "off" stops every readback and marks the ring stopped. Inert in product playback, whose
+// replay lifetime owns the sink.
+enum class LiveResult
+{
+  On,
+  Off,
+  NoSink,
+  Failed,
+  Replay,
+};
+LiveResult StartLive();
+LiveResult StopLive();
 // Audio backend lifetime: zero output rate means no mixer callbacks.
 void SetSilentAudio(bool enabled);
 bool SilentAudioRunning();

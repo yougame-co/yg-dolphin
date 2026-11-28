@@ -133,7 +133,9 @@ inline constexpr const char* ESCFREE_CAP = "escfree";
 // "broadcast" in product playback on builds with the sink, then "record" and "hostui" in every
 // mode, followed by "coseats" unless ORCA_COSEATS=0, then "qdoubles" and "rdoubles". A frontend
 // with the own-window shortcut handlers appends "shortcuts", preserving older readers' cap
-// order, and every session ends with "escfree". rdoubles is the ranked doubles result contract.
+// order, and every session ends with "escfree". A live session on a build with the sink then
+// appends "broadcast" (stdin "broadcast on|off", BroadcastSink.h StartLive), the only word after
+// escfree. rdoubles is the ranked doubles result contract.
 // qdoubles means this
 // engine plays casual queue doubles rooms; it does not offer a Doubles menu pick. It remains
 // available with co-seats off for one seat per computer. Co-seats need the app's explicit agreement
