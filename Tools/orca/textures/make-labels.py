@@ -61,18 +61,19 @@ LABELS = [
          style="pplus"),
     dict(name="tex1_160x80_5b8f52ac0127b2a8_5", lines=["RANKED"], box=(24, 14, 136, 66),
          style="pplus"),
-    # The ONLINE page's Options button, which Orca shows as Brawl Online (MenMainWifi05 in Brawl,
-    # Project+'s own art): one texture used only on that page.
-    dict(name="tex1_128x32_7fcf56f65c20d5c9_2", lines=["Brawl Online"], box=(4, 3, 123, 28),
+    # The ONLINE page's Options button, which Orca shows as the entry to Brawl Online's servers
+    # (MenMainWifi05 in Brawl, Project+'s own art): one texture used only on that page. Those
+    # servers play Project+, so the entry reads P+ in both games.
+    dict(name="tex1_128x32_7fcf56f65c20d5c9_2", lines=["P+ Online"], box=(4, 3, 123, 28),
          style="brawl"),
-    dict(name="tex1_128x32_e98c94392863af40_5", lines=["BRAWL ONLINE"], box=(11, 1, 117, 31),
+    dict(name="tex1_128x32_e98c94392863af40_5", lines=["P+ ONLINE"], box=(11, 1, 117, 31),
          style="pplus"),
     # With Anyone's page reached through Brawl Online: Orca marks its title (MenMainTtlJ.12, "WITH
     # ANYONE") and its Team Battle button (MenMainWifi23, Ranked above) so they hash apart from the
     # game's own, and shows them as Brawl Online's page and its With Friends row.
-    dict(name="tex1_120x16_ce1165a6aae76af8_0", lines=["BRAWL ONLINE"], box=(3, 1, 117, 14),
+    dict(name="tex1_120x16_ce1165a6aae76af8_0", lines=["P+ ONLINE"], box=(3, 1, 117, 14),
          style="title"),
-    dict(name="tex1_120x16_eabdfcb4ab0870d6_0", lines=["BRAWL ONLINE"], box=(2, 1, 118, 15),
+    dict(name="tex1_120x16_eabdfcb4ab0870d6_0", lines=["P+ ONLINE"], box=(2, 1, 118, 15),
          style="title"),
     dict(name="tex1_160x80_d9929bbfe9631656_2", lines=["With", "Friends"], box=(7, 18, 140, 62),
          style="brawl"),

@@ -13,8 +13,8 @@ textures as `RSBE01`; their labels hash differently, so one folder serves both.
 | `tex1_160x80_e364b4db513567ba_2.png` | With Anyone's "TEAM BATTLE" (MenMainWifi23): RANKED                                             | Brawl    |
 | `tex1_144x88_ecd09d11be34045f_5.png` | With Anyone's "BASIC VERSUS" (MenMainWifi22): CASUAL                                            | Project+ |
 | `tex1_160x80_5b8f52ac0127b2a8_5.png` | With Anyone's "TEAM BATTLE" (MenMainWifi23): RANKED                                             | Project+ |
-| `tex1_120x16_ce1165a6aae76af8_0.png` | "WITH ANYONE" (MenMainTtlJ.12) marked for Brawl Online: BRAWL ONLINE | Brawl |
-| `tex1_120x16_eabdfcb4ab0870d6_0.png` | "WITH ANYONE" (MenMainTtlJ.12) marked for Brawl Online: BRAWL ONLINE | Project+ |
+| `tex1_120x16_ce1165a6aae76af8_0.png` | "WITH ANYONE" (MenMainTtlJ.12) marked for Brawl Online: P+ ONLINE | Brawl |
+| `tex1_120x16_eabdfcb4ab0870d6_0.png` | "WITH ANYONE" (MenMainTtlJ.12) marked for Brawl Online: P+ ONLINE | Project+ |
 | `tex1_160x80_d9929bbfe9631656_2.png` | "TEAM BATTLE" (MenMainWifi23) marked for Brawl Online: WITH FRIENDS | Brawl |
 | `tex1_160x80_8e17a2813c4f2379_5.png` | "TEAM BATTLE" (MenMainWifi23) marked for Brawl Online: WITH FRIENDS | Project+ |
 | `tex1_132x48_44a1dd712ec999f0_159b390ed5eec04d_9.png` | the character select's BRAWL logo (MenSelchrPanelRule3.1) marked casual: CASUAL | Brawl |

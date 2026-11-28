@@ -1196,9 +1196,9 @@ TEST(OrcaOnlineMenuReader, TheBrawlOnlinePageNeverOpensForAGameThatIsNotAlone)
 
 TEST(OrcaOnlineMenuReader, BrawlOnlineRowsShowTheirPanel)
 {
-  EXPECT_EQ(BrawlOnlineEntry::RowTitle(OnlinePick::BrawlOnlineCasual), "Brawl Online: Casual");
+  EXPECT_EQ(BrawlOnlineEntry::RowTitle(OnlinePick::BrawlOnlineCasual), "P+ Online: Casual");
   EXPECT_EQ(BrawlOnlineEntry::RowTitle(OnlinePick::BrawlOnlineFriends),
-            "Brawl Online: With Friends");
+            "P+ Online: With Friends");
   for (const OnlinePick other : {OnlinePick::Casual, OnlinePick::Ranked, OnlinePick::Friends,
                                  OnlinePick::BrawlOnline})
   {
@@ -1379,7 +1379,7 @@ TEST(OrcaOnlineMenuText, TheThirdButtonSaysBrawlOnlineNotOptions)
                                  });
     ASSERT_NE(it, MenuTextEdits().end());
     EXPECT_EQ(it->original, std::string(colour) + "About Spectator Mode & the Smash Service.\x13");
-    EXPECT_EQ(it->text, std::string(colour) + "Play on Brawl Online's servers.\x13");
+    EXPECT_EQ(it->text, std::string(colour) + "Play P+ on Brawl Online's servers.\x13");
     EXPECT_TRUE(it->brawl_online.empty());
   }
 }

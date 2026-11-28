@@ -99,9 +99,9 @@ std::string_view RowTitle(OnlinePick row)
   switch (row)
   {
   case OnlinePick::BrawlOnlineCasual:
-    return "Brawl Online: Casual";
+    return "P+ Online: Casual";
   case OnlinePick::BrawlOnlineFriends:
-    return "Brawl Online: With Friends";
+    return "P+ Online: With Friends";
   default:
     return {};
   }

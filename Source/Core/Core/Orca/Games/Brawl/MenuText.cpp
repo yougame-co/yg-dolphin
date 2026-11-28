@@ -45,25 +45,26 @@ constexpr std::array<MenuTextEdit, 21> EDITS{{
     // With Anyone (Project+ only).
     {5, 19, PPLUS "Play against random people! (Project M not compatible!)" END ""sv,
      PPLUS "Play against random people!" END ""sv},
-    // The third button, once Options and now Brawl Online.
+    // The third button, once Options and now the entry to Brawl Online's servers, which play
+    // Project+: the entry reads P+ in both games.
     {5, 20, BRAWL "About Spectator Mode & the Smash Service." END ""sv,
-     BRAWL "Play on Brawl Online's servers." END ""sv},
+     BRAWL "Play P+ on Brawl Online's servers." END ""sv},
     {5, 20, PPLUS "About Spectator Mode & the Smash Service." END ""sv,
-     PPLUS "Play on Brawl Online's servers." END ""sv},
+     PPLUS "Play P+ on Brawl Online's servers." END ""sv},
     // With Anyone's first button, now Casual (through Brawl Online, its Casual).
     {5, 51, BRAWL "Go online for a quick brawl with someone, somewhere. (No names)" END ""sv,
      BRAWL "Go online for a quick brawl with someone, somewhere." END ""sv,
-     BRAWL "A quick brawl on Brawl Online." END ""sv},
+     BRAWL "A quick P+ match on Brawl Online." END ""sv},
     {5, 51, PPLUS "Go online for a quick fight with someone, somewhere. (No names)" END ""sv,
      PPLUS "Go online for a quick fight with someone, somewhere." END ""sv,
-     PPLUS "A quick fight on Brawl Online." END ""sv},
+     PPLUS "A quick P+ match on Brawl Online." END ""sv},
     // With Anyone's second button, now Ranked; through Brawl Online, With Friends.
     {5, 52, BRAWL "Form a team with someone, somewhere for a 2-on-2 battle!" END ""sv,
      BRAWL "Brawl someone at your level for a higher rank!" END ""sv,
-     BRAWL "Play friends on Brawl Online." END ""sv},
+     BRAWL "Play P+ with friends on Brawl Online." END ""sv},
     {5, 52, PPLUS "Form a team with someone, somewhere for a 2-on-2 battle!" END ""sv,
      PPLUS "Fight someone at your level for a higher rank!" END ""sv,
-     PPLUS "Play friends on Brawl Online." END ""sv},
+     PPLUS "Play P+ with friends on Brawl Online." END ""sv},
     // The With Friends page's buttons. The page is no longer reachable, but every button would
     // lead to the Versus character select, so none may promise another mode or a roster.
     // Friend Roster.
