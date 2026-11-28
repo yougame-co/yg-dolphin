@@ -70,6 +70,25 @@ void PressFromPad(Key key);
 bool KeyboardSeen();
 // Tests: forget that a keyboard was seen.
 void ForgetKeyboardForTest();
+
+// The mouse on a screen. DolphinNoGUI feeds the overlay's ImGui no mouse either, so while a screen
+// captures, each platform's window loop hands it the pointer here; the screen hit-tests its own
+// buttons and ImGui its fields. Positions are the window's client pixels, which are the overlay's.
+//
+// Window loop, on every poll or mouse message: the pointer at (x, y), or (-1, -1) outside the
+// window, and the buttons held (bit 0 left, 1 right, 2 middle). Passed on only while Capturing();
+// once capturing ends, one release at (-1, -1) is passed so no button stays held.
+void Mouse(float x, float y, unsigned buttons);
+// Window loop: a mouse button went down or up in Orca's window. Logs which button and which way,
+// never where, whatever is open (a click that reached Orca shows in its log).
+void LogMouseButton(int button, bool down);
+// Video thread: the open screen's panel, in the overlay's pixels; cleared when capturing ends.
+void SetFormRect(float x0, float y0, float x1, float y1);
+// Whether (x, y) lies on the open screen's panel. macOS takes clicks there instead of letting them
+// through to the app's page. Any thread.
+bool OverForm(float x, float y);
+// Tests: where Mouse sends what it passes on (nullptr: the overlay).
+void SetMouseSinkForTest(void (*sink)(float x, float y, unsigned buttons));
 // Window loop: typed text, UTF-8. Control characters, invalid UTF-8 and macOS's function-key
 // characters (U+F700-U+F8FF) are dropped. Ignored unless Capturing().
 void Type(std::string_view utf8);

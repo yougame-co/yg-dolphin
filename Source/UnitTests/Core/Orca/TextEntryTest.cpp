@@ -328,3 +328,70 @@ TEST(OrcaTextEntryApp, OtherLinesAreNotTheirs)
                            "yg {\"push\":{}}", " text 61"})
     EXPECT_FALSE(TE::AppLine(line)) << line;
 }
+
+namespace
+{
+struct Fed
+{
+  float x, y;
+  unsigned buttons;
+};
+std::vector<Fed> s_fed;
+void Sink(float x, float y, unsigned buttons)
+{
+  s_fed.push_back({x, y, buttons});
+}
+struct MouseSink
+{
+  MouseSink()
+  {
+    s_fed.clear();
+    TE::SetMouseSinkForTest(Sink);
+  }
+  ~MouseSink() { TE::SetMouseSinkForTest(nullptr); }
+};
+}  // namespace
+
+// The window's mouse reaches the overlay only while a screen captures, and is let go once after.
+TEST(OrcaTextEntry, TheMouseReachesTheOverlayOnlyWhileCapturing)
+{
+  MouseSink sink;
+  TE::Mouse(10, 20, 1);
+  EXPECT_TRUE(s_fed.empty());
+  {
+    Capture capture;
+    TE::Mouse(10, 20, 1);
+    TE::Mouse(11, 21, 0);
+  }
+  TE::Mouse(12, 22, 1);
+  TE::Mouse(13, 23, 1);
+  ASSERT_EQ(s_fed.size(), 3u);
+  EXPECT_EQ(s_fed[0].x, 10);
+  EXPECT_EQ(s_fed[0].y, 20);
+  EXPECT_EQ(s_fed[0].buttons, 1u);
+  EXPECT_EQ(s_fed[1].buttons, 0u);
+  // The release after capturing ended: off the window, nothing held.
+  EXPECT_EQ(s_fed[2].x, -1);
+  EXPECT_EQ(s_fed[2].y, -1);
+  EXPECT_EQ(s_fed[2].buttons, 0u);
+}
+
+// The panel counts as a hit only while a screen captures, and is forgotten when it stops.
+TEST(OrcaTextEntry, TheFormIsAHitOnlyWhileCapturing)
+{
+  {
+    Capture capture;
+    EXPECT_FALSE(TE::OverForm(50, 50));
+    TE::SetFormRect(40, 30, 160, 130);
+    EXPECT_TRUE(TE::OverForm(50, 50));
+    EXPECT_TRUE(TE::OverForm(40, 30));
+    EXPECT_FALSE(TE::OverForm(160, 50));
+    EXPECT_FALSE(TE::OverForm(50, 130));
+    EXPECT_FALSE(TE::OverForm(10, 50));
+  }
+  EXPECT_FALSE(TE::OverForm(50, 50));
+  {
+    Capture capture;
+    EXPECT_FALSE(TE::OverForm(50, 50));
+  }
+}

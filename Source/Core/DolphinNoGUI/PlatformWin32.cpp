@@ -415,11 +415,19 @@ void PlatformWin32::ProcessEvents()
 {
   POINT point;
   const bool down = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
-  if (GetCursorPos(&point) && WindowFromPoint(point) == m_hwnd && ScreenToClient(m_hwnd, &point))
+  const bool inside =
+      GetCursorPos(&point) && WindowFromPoint(point) == m_hwnd && ScreenToClient(m_hwnd, &point);
+  if (inside)
     Orca::UX::YgOrb::UpdateControlsPointer(static_cast<float>(point.x), static_cast<float>(point.y),
                                            down);
   else
     Orca::UX::YgOrb::UpdateControlsPointer(-1, -1, down);
+  // An Orca screen that holds the keyboard takes the mouse too (UX/TextEntry.h); Mouse passes
+  // nothing on otherwise.
+  const unsigned buttons = (down ? 1u : 0u) | ((GetKeyState(VK_RBUTTON) & 0x8000) ? 2u : 0u) |
+                           ((GetKeyState(VK_MBUTTON) & 0x8000) ? 4u : 0u);
+  Orca::UX::TextEntry::Mouse(inside ? static_cast<float>(point.x) : -1,
+                             inside ? static_cast<float>(point.y) : -1, buttons);
   MSG msg;
   while (PeekMessage(&msg, m_hwnd, 0, 0, PM_REMOVE))
   {
@@ -436,6 +444,24 @@ void PlatformWin32::ProcessEvents()
   VideoCommon::Presenter::SetSurfaceVisible(visible);
   InputCommon::Shortcuts::Get().SetFocus(IsWindowFocused() && visible);
 }
+
+namespace
+{
+// A mouse button message: logged (which button, which way), and the press handed to an Orca screen
+// that holds the keyboard, so a click between two polls still lands.
+void MouseButtonMessage(UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  const int button = msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ? 0 :
+                     msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ? 1 :
+                                                                    2;
+  const bool down = msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN;
+  Orca::UX::TextEntry::LogMouseButton(button, down);
+  const unsigned buttons = ((wParam & MK_LBUTTON) ? 1u : 0u) | ((wParam & MK_RBUTTON) ? 2u : 0u) |
+                           ((wParam & MK_MBUTTON) ? 4u : 0u);
+  Orca::UX::TextEntry::Mouse(static_cast<float>(GET_X_LPARAM(lParam)),
+                             static_cast<float>(GET_Y_LPARAM(lParam)), buttons);
+}
+}  // namespace
 
 LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wParam,
                                const LPARAM lParam)
@@ -639,13 +665,18 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
   // (UX/YgOrb.h) is reported as "orca orb". No CS_DBLCLKS, so a double click arrives as two
   // presses.
   case WM_LBUTTONUP:
-    Orca::UX::YgOrb::UpdateControlsPointer(static_cast<float>(GET_X_LPARAM(lParam)),
-                                           static_cast<float>(GET_Y_LPARAM(lParam)), false);
+  case WM_RBUTTONUP:
+  case WM_MBUTTONUP:
+    MouseButtonMessage(msg, wParam, lParam);
+    if (msg == WM_LBUTTONUP)
+      Orca::UX::YgOrb::UpdateControlsPointer(static_cast<float>(GET_X_LPARAM(lParam)),
+                                             static_cast<float>(GET_Y_LPARAM(lParam)), false);
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
   case WM_LBUTTONDOWN:
   case WM_RBUTTONDOWN:
   case WM_MBUTTONDOWN:
+    MouseButtonMessage(msg, wParam, lParam);
     if (msg == WM_LBUTTONDOWN)
       Orca::UX::YgOrb::UpdateControlsPointer(static_cast<float>(GET_X_LPARAM(lParam)),
                                              static_cast<float>(GET_Y_LPARAM(lParam)), true);

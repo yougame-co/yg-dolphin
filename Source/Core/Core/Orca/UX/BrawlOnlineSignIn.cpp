@@ -183,6 +183,8 @@ struct Session
   bool focus_changed = true;
   // Whether the last layout drew the buttons after the main one side by side (else one per row).
   bool buttons_in_row = true;
+  // The item a left click landed on in the last drawn frame, or -1.
+  int clicked = -1;
   std::string note;  // a line of the screen's own, after Forgot password?
 
   ~Session() { WipeTyped(); }
@@ -442,6 +444,8 @@ float Layout(ImDrawList* dl, const std::shared_ptr<Session>& s, const View& view
                                            item == Item::Password,
                                            focused && s->focus_changed && !busy);
       ImGui::PopFont();
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseHoveringRect(min, max))
+        s->clicked = static_cast<int>(i);
       // The field lost the keyboard (a click elsewhere): ask again next frame.
       if (focused && !active && !busy)
         s->focus_changed = true;
@@ -474,6 +478,8 @@ float Layout(ImDrawList* dl, const std::shared_ptr<Session>& s, const View& view
     const Kit::Tone tone = focused ? Kit::Tone::Gold : Kit::Tone::Blue;
     const Kit::Box box = Kit::LabelPlate(dl, pos, unit, LabelOf(item, view.screen), BUTTON_SIZE,
                                          Kit::Align::Left, tone, alpha);
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseHoveringRect(box.min, box.max))
+      s->clicked = static_cast<int>(i);
     if (focused)
       dl->AddRect(ImVec2(box.min.x - 0.4f * unit, box.min.y - 0.4f * unit),
                   ImVec2(box.max.x + 0.4f * unit, box.max.y + 0.4f * unit), accent, unit, 0,
@@ -883,8 +889,21 @@ void Draw()
     dl->AddRectFilled(ImVec2(0, 0), display, IM_COL32(0, 0, 0, 150));
     Kit::Plate(dl, ImVec2(centre_x - width / 2, top), ImVec2(centre_x + width / 2, top + height),
                unit, Kit::Tone::Panel);
+    s->clicked = -1;
     Layout(dl, s, view, busy, items, unit, centre_x, top, width);
   }
   ImGui::End();
+  TextEntry::SetFormRect(centre_x - width / 2, top, centre_x + width / 2, top + height);
+
+  // A click (the window loop hands the overlay the mouse while the screen captures, TextEntry.h)
+  // focuses a field, or presses a button as Enter on it would.
+  const int clicked = std::exchange(s->clicked, -1);
+  if (clicked < 0 || clicked >= static_cast<int>(items.size()) || busy)
+    return;
+  if (clicked != s->focus)
+    s->focus_changed = true;
+  s->focus = clicked;
+  if (!IsField(items[clicked]))
+    Activate(s, items[clicked], view.screen);
 }
 }  // namespace Orca::UX::BrawlOnlineSignIn

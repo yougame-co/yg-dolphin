@@ -23,7 +23,8 @@ class SignInFlow;
 // Up and Down move between the panel's rows as drawn, Left and Right along a row of buttons, Tab
 // through every item in order; Enter presses the focused one (in a field, the screen's main button),
 // Escape cancels. The app's pads do the same (UX/PadKeys.h): the D-pad or the stick moves, A
-// presses, B cancels; typing still needs the keyboard. While it is open the keyboard is
+// presses, B cancels; typing still needs the keyboard. A click focuses a field or presses a button
+// (the window loops hand the mouse over while it captures, UX/TextEntry.h; not yet on Linux). While it is open the keyboard is
 // captured (UX/TextEntry.h): the game, Orca's shortcuts and its own keys see none of it, and every
 // pad reads neutral to the game. So it never opens while online play runs (OnlineActive), and closes at the next frame if
 // online play starts under it (a friend dropping in): neutral pads would reach the other players as

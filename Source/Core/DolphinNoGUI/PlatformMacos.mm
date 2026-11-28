@@ -852,7 +852,14 @@ void PlatformMacOS::ProcessEvents()
       const NSPoint pixel = [view convertPointToBacking:point];
       const NSRect bounds = [view convertRectToBacking:[view bounds]];
       Orca::UX::YgOrb::UpdateControlsPointer(pixel.x, bounds.size.height - pixel.y, m_left_down);
-      const bool hit = Orca::UX::YgOrb::HitControls(pixel.x, bounds.size.height - pixel.y);
+      // An Orca screen that holds the keyboard takes the mouse over its panel (UX/TextEntry.h);
+      // clicks elsewhere still pass through to the app's page.
+      const bool inside = point.x >= 0 && point.y >= 0 && point.x < [view bounds].size.width &&
+                          point.y < [view bounds].size.height;
+      Orca::UX::TextEntry::Mouse(inside ? pixel.x : -1, inside ? bounds.size.height - pixel.y : -1,
+                                 m_left_down ? 1u : 0u);
+      const bool hit = Orca::UX::YgOrb::HitControls(pixel.x, bounds.size.height - pixel.y) ||
+                       Orca::UX::TextEntry::OverForm(pixel.x, bounds.size.height - pixel.y);
       if (IsEmbedded() && hit != m_embed_controls_hit)
       {
         m_embed_controls_hit = hit;
@@ -915,10 +922,13 @@ void PlatformMacOS::ProcessEvents()
         const NSRect bounds = [view convertRectToBacking:[view bounds]];
         const bool down = [event type] == NSEventTypeLeftMouseDown;
         m_left_down = down;
+        Orca::UX::TextEntry::LogMouseButton(0, down);
+        Orca::UX::TextEntry::Mouse(pixel.x, bounds.size.height - pixel.y, down ? 1u : 0u);
         Orb::UpdateControlsPointer(pixel.x, bounds.size.height - pixel.y, down);
         handled = down ? Orb::ClickControls(pixel.x, bounds.size.height - pixel.y,
                                             IsEmbedded() ? OutKey : nullptr) :
                          Orb::HitControls(pixel.x, bounds.size.height - pixel.y);
+        handled = handled || Orca::UX::TextEntry::OverForm(pixel.x, bounds.size.height - pixel.y);
       }
       // The embedded app owns keyboard focus and relays feedback / host-menu on stdin.
       else if (!handled && !IsEmbedded() && [event type] == NSEventTypeKeyDown &&

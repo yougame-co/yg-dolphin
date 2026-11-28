@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <mutex>
 #include <utility>
 
@@ -16,7 +17,9 @@ namespace ImStb
 #include <imstb_textedit.h>
 }
 
+#include "Common/Logging/Log.h"
 #include "Core/Orca/Status.h"
+#include "VideoCommon/Present.h"
 
 namespace Orca::UX::TextEntry
 {
@@ -27,6 +30,11 @@ constexpr std::size_t MAX_QUEUED = 256;
 
 std::atomic<bool> s_capturing = false;
 std::atomic<bool> s_keyboard = false;
+// The window loop's (Mouse): whether it passed the mouse on last time.
+bool s_mouse_fed = false;
+void (*s_mouse_sink)(float, float, unsigned) = nullptr;
+std::mutex s_form_lock;
+float s_form[4] = {};  // x0, y0, x1, y1; empty while x1 <= x0. Guarded by s_form_lock.
 std::mutex s_lock;
 std::vector<Event> s_events;   // guarded by s_lock
 char16_t s_high_surrogate = 0;  // guarded by s_lock
@@ -88,6 +96,8 @@ bool Capturing()
 
 void SetCapturing(bool capturing)
 {
+  if (!capturing)
+    SetFormRect(0, 0, 0, 0);
   // The app forwards the keys typed in its window only between these lines (AppLine).
   if (s_capturing.exchange(capturing, std::memory_order_relaxed) != capturing)
     Status::Line(capturing ? TEXT_ON : TEXT_OFF);
@@ -125,6 +135,64 @@ bool KeyboardSeen()
 void ForgetKeyboardForTest()
 {
   s_keyboard.store(false, std::memory_order_relaxed);
+}
+
+void Mouse(float x, float y, unsigned buttons)
+{
+  const bool feed = Capturing();
+  if (!feed && !s_mouse_fed)
+    return;
+  if (!feed)
+  {
+    x = -1;
+    y = -1;
+    buttons = 0;
+  }
+  s_mouse_fed = feed;
+  if (s_mouse_sink)
+  {
+    s_mouse_sink(x, y, buttons);
+    return;
+  }
+  if (!g_presenter)
+    return;
+  // ImGui reads a position off the window as "no mouse".
+  if (x < 0 || y < 0)
+    g_presenter->SetMousePos(-FLT_MAX, -FLT_MAX);
+  else
+    g_presenter->SetMousePos(x, y);
+  g_presenter->SetMousePress(buttons);
+}
+
+void LogMouseButton(int button, bool down)
+{
+  static constexpr const char* NAMES[] = {"left", "right", "middle"};
+  NOTICE_LOG_FMT(ROLLBACK, "Orca window: {} button {}",
+                 button >= 0 && button < 3 ? NAMES[button] : "other", down ? "down" : "up");
+}
+
+void SetFormRect(float x0, float y0, float x1, float y1)
+{
+  std::lock_guard lock(s_form_lock);
+  s_form[0] = x0;
+  s_form[1] = y0;
+  s_form[2] = x1;
+  s_form[3] = y1;
+}
+
+bool OverForm(float x, float y)
+{
+  if (!Capturing())
+    return false;
+  std::lock_guard lock(s_form_lock);
+  return s_form[2] > s_form[0] && x >= s_form[0] && x < s_form[2] && y >= s_form[1] &&
+         y < s_form[3];
+}
+
+void SetMouseSinkForTest(void (*sink)(float x, float y, unsigned buttons))
+{
+  s_mouse_sink = sink;
+  s_mouse_fed = false;
 }
 
 void Type(std::string_view utf8)
