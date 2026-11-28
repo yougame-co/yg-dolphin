@@ -4802,7 +4802,9 @@ TEST_F(OrcaUXHostUI, WithoutAgreementTheOrbAndShortcutKeepTheirLegacyPaths)
 {
   using namespace YgOrb;
   ASSERT_TRUE(Orca::Bridge::Ready());
-  EXPECT_TRUE(Orca::Status::OfferedCaps().ends_with(" record hostui coseats qdoubles rdoubles escfree"));
+  // A live session offers "broadcast" after "escfree".
+  EXPECT_TRUE(Orca::Status::OfferedCaps().ends_with(
+      " record hostui coseats qdoubles rdoubles escfree broadcast"));
   for (const char* caps : {"", "yougame", "yougame talk"})
   {
     SCOPED_TRACE(caps);
